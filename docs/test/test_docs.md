@@ -9,9 +9,11 @@
 ## 安装依赖
 
 ```bash
-cd D:\code\msagent
+cd <项目根目录>
 pip install -r docs/requirements.txt
 ```
+
+> 示例：如果项目位于 `D:\code\msagent`，则执行 `cd D:\code\msagent`
 
 ## 本地构建
 
@@ -28,17 +30,22 @@ make -C docs html
 构建完成后，在浏览器中打开：
 
 ```
-D:\code\msagent\docs\_build\html\index.html
+<项目根目录>/docs/_build/html/index.html
 ```
 
 或者在终端中运行（需要安装 Python 3 的 http 模块）：
 
 ```bash
+# 进入构建目录
+cd docs/_build/html/
+
 # Python 3
-python -m http.server 8000 --directory docs/_build/html/
+python -m http.server 8000
 
 # 然后访问 http://localhost:8000/
 ```
+
+> 示例：如果项目位于 `D:\code\msagent`，则打开 `D:\code\msagent\docs\_build\html\index.html`
 
 ## 常见问题
 
@@ -70,18 +77,9 @@ rm -rf docs/_build
 
 ## 推送到 ReadTheDocs
 
-本地验证通过后，推送代码到远程仓库：
-
-```bash
-git add .
-git commit -m "docs: update documentation"
-git push origin master
-```
-
-ReadTheDocs 会自动检测代码更新并重新构建文档。
+本地验证通过后，推送代码到远程仓库，ReadTheDocs 会自动检测代码更新并重新构建文档。
 
 ## 参考链接
 
 - [ReadTheDocs 配置文档](https://docs.readthedocs.io/en/stable/config-file/v2.html)
 - [Sphinx 文档](https://www.sphinx-doc.org/)
-- [MyST Parser 文档](https://myst-parser.readthedocs.io/)

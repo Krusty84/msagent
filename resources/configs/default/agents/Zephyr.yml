@@ -6,7 +6,7 @@ prompt:
   - prompts/suffixes/environments.md
 llm: default
 checkpointer: sqlite
-default: true
+default: false
 subagents:
   - explorer
   - general-purpose

@@ -153,3 +153,7 @@ Roofline 图分析要点：
 
 - [上板调优深度指南](references/device-tuning-guide.md) - 上板调优完整流程、各视图详解、芯片差异、高级用法
 - [仿真调优深度指南](references/simulator-tuning-guide.md) - 仿真调优完整流程、指令流水图、代码热点图、带宽波形图详解
+
+## 经验沉淀
+
+- [仿真模式必须使用 sim 编译的可执行文件](experiences/simulator-needs-sim-build.md) - 仿真拉起报 `signal 6 / Bad address` 的根因与解决方案

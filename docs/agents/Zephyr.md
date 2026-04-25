@@ -1,4 +1,7 @@
 # Zephyr
+<p align="center">
+  <img src="../images/Zephyr.jpg" alt="Hermes" width="220">
+</p>
 
 <p align="center">
   <img src="../images/Zephyr.png" alt="Zephyr" width="220">

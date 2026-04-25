@@ -1,7 +1,7 @@
 # Zephyr
 
 <p align="center">
-  <img src="../images/Zephyr.png" alt="Zephyr" width="220">
+  <img src="../images/Zephyr.jpg" alt="Zephyr" width="220">
 </p>
 
 `Zephyr` 是面向 msModelSlim 模型分析与适配场景的 Agent，负责协助用户完成接入量化/压缩流程前的可行性评估、实现来源与结构性风险排查，并在分析通过后按约定完成模型适配器（Model Adapter）的开发与验证。

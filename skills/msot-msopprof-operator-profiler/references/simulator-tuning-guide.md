@@ -1,207 +1,307 @@
 # 仿真调优深度指南
 
-## 完整调优流程
+本文件聚焦 **`msprof op simulator`**。它适合没有真实设备、或需要更细粒度指令级分析的场景。
 
-### 1. 编译准备
+## 1. 适用范围与模式边界
 
-- 常规算子：正常编译（添加 `-g` 可查看代码行映射）
-- catlass 模板库算子：编译脚本需增加 `--simulator` 选项
+### 更适合 simulator 的问题
+
+- 指令流水是否存在 bubble？
+- MTE 与 VECTOR/CUBE 是否充分并行？
+- SET_FLAG / WAIT_FLAG 是否造成等待？
+- 哪些代码行、哪些指令最耗时？
+- 是否需要每核热点图、每核 `trace.json`、吞吐率波形图？
+
+### 不要混淆的边界
+
+- simulator 的 `--aic-metrics` 只有：
+  - `PipeUtilization`
+  - `ResourceConflictRatio`
+  - `PMSampling`
+- `TimelineDetail` 是 **device 模式能力**，不是 simulator 参数。
+- simulator 下的 `trace.json` 是 **指令流水图**；device 下的 `trace.json` 更多是通算/通信相关流水图。
+
+## 2. 启动前先确认三件事
+
+### 2.1 仿真器类型怎么指定
+
+有两种方式：
+
+1. `--soc-version=Ascendxxxyy`
+2. `LD_LIBRARY_PATH=${INSTALL_DIR}/tools/simulator/Ascendxxxyy/lib:$LD_LIBRARY_PATH`
+
+但要注意：
+
+- `application` / `export`：两种方式都可用。
+- `config`：应使用 `LD_LIBRARY_PATH`；`--soc-version` 在该场景不生效。
+
+### 2.2 是否需要 `-g`
+
+如果用户要看 **代码行映射 / 调用栈 / 更完整热点图**，建议编译时带 `-g`。
+
+### 2.3 构建产物是否仿真兼容
+
+不是所有工程都能直接拿“设备侧可执行文件”拉起仿真：
+
+- 某些官方示例或工程产物可同时运行在设备和仿真器上；
+- 某些模板库或工程构建链则需要显式启用 simulator 构建。
+
+如果用户遇到 `signal 6`、`Bad address`、`std::__ios_failure` 等拉起错误，先看 `experiences/simulator-needs-sim-build.md`。
+
+## 3. 数据采集路径
+
+### 3.1 application 场景
 
 ```bash
-bash scripts/build.sh --simulator 00_basic_matmul
-```
-
-### 2. 数据采集
-
-#### 基本用法
-
-```bash
-# 指定芯片型号 + 可执行文件
+# 方式 1：显式指定仿真器
 msprof op simulator --soc-version=Ascend910B4 --output=./output_sim ./execute_add_op
 
-# 指定芯片型号 + .o 文件（需设置 LD_LIBRARY_PATH）
+# 方式 2：通过环境变量指定仿真器
+export LD_LIBRARY_PATH=${INSTALL_DIR}/tools/simulator/Ascend910B4/lib:$LD_LIBRARY_PATH
+msprof op simulator --output=./output_sim ./execute_add_op
+```
+
+### 3.2 config 场景
+
+```bash
 export LD_LIBRARY_PATH=${INSTALL_DIR}/tools/simulator/Ascend910B4/lib:$LD_LIBRARY_PATH
 msprof op simulator --config=./add_test.json --output=./output_sim
 ```
 
-#### --soc-version 取值
+要点：
 
-参考 `${INSTALL_DIR}/tools/simulator/` 路径下的仿真器目录名，例如：
-- `Ascend910B1`、`Ascend910B4`（A2 系列）
-- `Ascend910_9391`（A3 系列）
-- `Ascend310B4`（310B 系列）
-- `Ascend950`（A5 / Atlas 350 加速卡）
+- `--config` 下不要再带 `--soc-version`。
+- `--kernel-name` 对 `--config` 不生效。
 
-也可通过设置 `LD_LIBRARY_PATH` 替代 `--soc-version`。
-
-#### 超时控制
-
-对于数据量大、计算重复的算子，完整仿真耗时很长。可设置超时只获取部分数据：
-
-```bash
-# 最多仿真 1 分钟
-msprof op simulator --soc-version=Ascend910B4 --timeout=1 --output=./output_sim ./app
-```
-
-超时后工具会自动终止仿真进程并进入解析。取值范围 1-2880 分钟。
-
-#### 解析已有 dump 数据
+### 3.3 export 场景（只解析已有 dump）
 
 ```bash
 msprof op simulator --soc-version=Ascend910B4 --export=./dump_dir --output=./output_sim
 ```
 
-**注意**：
-- `--export` 指定的文件夹只允许存放多核数据及 `aicore_binary.o`
-- 需将 .o 文件手动重命名为 `aicore_binary.o`
-- 仅提供 dump 文件时，无法生成代码行映射
+`--export` 目录要求：
 
-#### 核选择
+- 目录中应是 dump 数据和相关核函数文件。
+- 若需要代码行映射，应包含名为 `aicore_binary.o` 的算子核函数文件。
+- 若只是纯 dump，没有 `aicore_binary.o`，仍可做流水解析，但无法完整做代码行映射。
+
+## 4. 仿真专用参数怎么用
+
+### `--soc-version`
+
+参考 `${INSTALL_DIR}/tools/simulator/` 下的目录名，例如：
+
+- `Ascend910B4`
+- `Ascend910_9391`
+- `Ascend310B4`
+- `Ascend950`
+
+### `--timeout`
+
+适合“大算子、长仿真”场景：
 
 ```bash
-# 只解析 0 号和 31 号核
+msprof op simulator --soc-version=Ascend910B4 --timeout=5 --output=./output_sim ./app
+```
+
+说明：
+
+- 单位是分钟，范围 `[1,2880]`。
+- 超时后工具会杀掉仿真进程并直接进入解析。
+
+### `--core-id`
+
+只解析指定核，适合算子分布均匀、只想深挖个别核时使用：
+
+```bash
 msprof op simulator --soc-version=Ascend910B4 --core-id="0|31" --output=./output_sim ./app
 ```
 
-适用于算子分布均匀的场景，减少解析耗时。取值范围 [0,49]。
+说明：
 
-### 3. 结果查看
+- 范围 `[0,49]`
+- 只影响部分核解析
+- **对 `PMSampling` 不生效**
 
-仿真输出目录结构：
-
-```
-OPPROF_{timestamp}_XXX/
-├── core0/
-│   ├── tracing.json            # 0 号核的指令流水图
-│   └── ...
-├── core1/
-│   └── ...
-├── visualize_data.bin          # 汇总的可视化数据
-├── code_exe.csv                # 代码执行情况（按核分）
-├── instr_exe.csv               # 指令执行情况（按核分）
-└── dump/                       # 原始仿真数据
-```
-
-## 功能视图详解
-
-### 指令流水图
-
-通过 MindStudio Insight 或 Chrome `chrome://tracing` 查看。
-
-展示算子在仿真器中各流水线单元的指令执行时序：
-- **SCALAR**：标量指令
-- **VECTOR**：向量计算指令
-- **CUBE**：矩阵乘指令
-- **MTE**：数据搬运指令
-- **FIXP**：定点指令
-- **FLOWCTRL**：流控指令
-
-**关键分析点**：
-- 各 Pipe 之间是否存在长时间空闲（bubble）
-- 搬运指令（MTE）和计算指令（VECTOR/CUBE）是否充分并行
-- SET_FLAG/WAIT_FLAG 同步指令是否造成不必要等待
-
-**--aic-metrics 对流水图的影响**：
-- `PipeUtilization`：只显示指令流水，不含同步事件
-- `ResourceConflictRatio`：显示指令流水 + SET/WAIT FLAG 同步指令细节
-- 默认同时开启两者
-
-### 算子代码热点图
-
-比上板热点图提供更丰富的指令级分析：
-
-| 功能 | 说明 |
-|------|------|
-| 源码与指令映射 | 算子源码与 PC 指令集的对应关系 |
-| GPR Count | 寄存器使用数量（A5 支持） |
-| GPR Status | 寄存器读写状态（A5 支持） |
-| UB Conflict Read/Write | UB Bank 上读写冲突 |
-| Vector 利用率 | Vector 计算单元利用率 |
-| Process Bytes | 与 GM 有关的数据搬运量 |
-| 执行次数 | 每个指令/代码行的执行次数 |
-| Cycles | 每个指令/代码行的耗时周期 |
-
-### 内存通路吞吐率波形图
-
-通过 `--aic-metrics=PMSampling` 开启。展示以下通路的带宽波形：
-
-| 通路 | 说明 |
-|------|------|
-| GM <-> L1 | Global Memory 与 L1 之间 |
-| GM <-> UB | Global Memory 与 Unified Buffer 之间 |
-| GM <-> other | Global Memory 与其他存储之间 |
-
-以 1us 为时间间隔，计算搬运数据量除以时间得到带宽值，共 6 张带宽图（读/写各 3 张）。
-
-> **注意**：PMSampling 解析全部核，`--core-id` 对其不生效。
-
-## 仿真特有技巧
-
-### 1. 分核分析
-
-对于多核算子，先全核采集确认哪些核有问题，再用 `--core-id` 只解析目标核：
+### `--dump`
 
 ```bash
-# 先全核快速确认
+msprof op simulator --soc-version=Ascend910B4 --dump=on --output=./output_sim ./app
+```
+
+说明：
+
+- 默认 `off`
+- A2/A3 系列下可用于控制是否保留 dump
+- 对部分 Atlas 推理系列产品，文档说明该参数不生效，dump 会按正常流程落盘
+- 仅适用于单进程场景
+
+## 5. 指标与视图
+
+### 默认指标
+
+simulator 默认会启用：
+
+- `PipeUtilization`
+- `ResourceConflictRatio`
+
+这意味着：
+
+- 即使用户没显式传 `--aic-metrics`，通常也能直接看到基础流水图与同步事件细节。
+
+### `PipeUtilization`
+
+- 只显示指令流水。
+- 更适合先看整体执行时序。
+
+### `ResourceConflictRatio`
+
+- 在流水之外，提供 SET/WAIT FLAG 等同步事件细节。
+- 更适合分析同步等待或冲突问题。
+
+### `PMSampling`
+
+```bash
+msprof op simulator --soc-version=Ascend910B4 --aic-metrics=PMSampling --output=./output_sim ./app
+```
+
+用途：
+
+- 展示内存通路吞吐率波形图。
+- 重点看：
+  - `GM <-> L1`
+  - `GM <-> UB`
+  - `GM <-> other`
+
+注意：
+
+- 默认不开启。
+- 解析全部核，`--core-id` 对其无效。
+
+## 6. 真实输出结构
+
+### 单算子常见结构
+
+```text
+OPPROF_{timestamp}_XXX/
+├── dump/
+└── simulator/
+    ├── core0.veccore0/
+    │   ├── core0.veccore0_code_exe.csv
+    │   ├── core0.veccore0_instr_exe.csv
+    │   └── trace.json
+    ├── core0.veccore1/
+    │   ├── core0.veccore1_code_exe.csv
+    │   ├── core0.veccore1_instr_exe.csv
+    │   └── trace.json
+    ├── ...
+    ├── visualize_data.bin
+    └── trace.json
+```
+
+解释：
+
+- 每个 `core*.veccore*` / `core*.cubecore*` 子目录下都有该核的局部结果。
+- `simulator/trace.json` 是全核汇总流水图。
+- `visualize_data.bin` 是 Insight 使用的汇总可视化文件。
+
+### 多算子结构
+
+多算子时通常会变成：
+
+```text
+OPPROF_{timestamp}_XXX/
+└── OpName/
+    └── 0/
+        ├── dump/
+        └── simulator/
+```
+
+而 simulator 下的 CSV 常带时间戳后缀。
+
+## 7. 结果怎么看
+
+### 7.1 指令流水图
+
+用 Chrome `chrome://tracing` 或 MindStudio Insight 查看 `trace.json`。
+
+重点观察：
+
+- 各流水线是否长时间空闲
+- MTE 和 VECTOR/CUBE 是否并行
+- 同步指令是否造成明显停顿
+
+### 7.2 算子代码热点图
+
+simulator 的热点图比上板更“指令级”，常见信息包括：
+
+- 源码与指令映射
+- 执行次数
+- Cycles 耗时
+- UB Conflict
+- Process Bytes
+- 部分平台支持的寄存器相关信息
+
+### 7.3 `core*_code_exe.csv` / `core*_instr_exe.csv`
+
+- `core*_code_exe.csv`：更适合看“哪段代码最耗时”
+- `core*_instr_exe.csv`：更适合看“哪条指令最耗时 / 执行次数最高”
+
+## 8. 仿真特有技巧
+
+### 8.1 先全核，后定核
+
+```bash
+# 先快速跑一版
 msprof op simulator --soc-version=Ascend910B4 --timeout=1 --output=./quick ./app
 
-# 再指定核深度分析
+# 再深挖目标核
 msprof op simulator --soc-version=Ascend910B4 --core-id="0" --output=./detail ./app
 ```
 
-### 2. 超时截断
+### 8.2 先截断，再定位
 
-大算子完整仿真可能数小时，用 `--timeout` 截断获取部分流水即可定位大多数问题：
+大算子完整仿真可能非常慢，优先用 `--timeout` 拿到“足够诊断”的部分流水。
 
-```bash
-msprof op simulator --soc-version=Ascend910B4 --timeout=5 --output=./output ./big_op
-```
-
-### 3. dump 文件复用
-
-仿真 dump 文件可以反复解析，无需重新仿真：
+### 8.3 dump 复用
 
 ```bash
-# 第一次仿真（保留 dump）
+# 第一次仿真时保留 dump
 msprof op simulator --soc-version=Ascend910B4 --dump=on --output=./output ./app
 
-# 后续直接从 dump 解析
+# 后续仅从 dump 解析
 msprof op simulator --soc-version=Ascend910B4 --export=./output/dump --output=./output2
 ```
 
-## 仿真 vs 上板热点图差异
+## 9. 仿真 vs 上板热点图差异
 
 | 功能 | 上板 | 仿真 |
-|------|------|------|
-| GPR Count | 不支持 | 支持 |
-| L2Cache 命中率（代码行/指令维度） | 支持 | 不支持 |
-| Process Bytes | 支持 | 支持 |
-| UB Conflict | 不支持 | 支持 |
-| Vector 利用率 | 不支持 | 支持 |
-| Cycles 耗时 | 不支持 | 支持 |
-| 执行次数 | 支持 | 支持 |
-| Core 信息 | 不支持 | 支持 |
+|---|---|---|
+| 指令级 Cycles | 弱 / 不强调 | 强 |
+| 每核信息 | 弱 | 强 |
+| UB Conflict | 一般不主打 | 强 |
+| GPR 相关信息 | 受平台限制 | 某些平台更丰富 |
+| L2Cache 命中率按代码行/指令看 | 上板更强 | 通常不作为主特性 |
 
-## 常见问题
+## 10. 常见问题
 
-### 仿真器版本获取
+### 10.1 仿真时间太长
 
-```bash
-ls ${INSTALL_DIR}/tools/simulator/
-```
+- 用 `--timeout`
+- 用 `--core-id`
+- 减少非必要算子
+- 检查 block_dim 是否过大
 
-### 仿真运行时间过长
+### 10.2 代码行映射缺失
 
-- 使用 `--timeout` 截断
-- 使用 `--core-id` 只解析部分核
-- 检查算子 block_dim 是否过大
+- 确认编译带 `-g`
+- `--export` 时确认目录中有 `aicore_binary.o`
 
-### 代码行映射缺失
+### 10.3 `PMSampling` 没数据
 
-- 确认编译时添加了 `-g` 选项
-- 使用 `--export` 模式时，确认 dump 目录中有 `aicore_binary.o`
+- 它默认不开启，需显式加 `--aic-metrics=PMSampling`
+- 不要误以为 `--core-id` 会影响它
 
-### PMSampling 数据为空
+### 10.4 用户把 `TimelineDetail` 用到 simulator
 
-- PMSampling 默认不开启，需显式指定 `--aic-metrics=PMSampling`
-- PMSampling 解析全部核，`--core-id` 不影响
+- 直接指出：这是 device 模式能力，不是 simulator 参数。

@@ -1,179 +1,198 @@
 # 上板调优深度指南
 
-## 完整调优流程
+本文件聚焦 **`msprof op` 上板调优**。如果用户要看指令级流水、每核热点图或 dump 复用解析，请切换到 `simulator-tuning-guide.md`。
 
-### 1. 编译准备
+## 1. 适用范围与前置检查
 
-算子编译时添加 `-g` 选项以生成调试信息（代码热点图、Cache 热力图跳转必需）：
+### 适用范围
+
+- 有真实昇腾设备。
+- 目标是看真实硬件耗时、带宽、Cache、Roofline、核间负载、通算流水等。
+- 输入形态可以是：
+  - `application`：可执行文件
+  - `config`：JSON + `.o`
+
+### 开始前检查清单
+
+1. app 本身能够正常运行。
+2. 输出路径、配置路径不含不安全软链接，且父目录权限符合工具要求。
+3. 如果要看代码热点图 / 代码调用栈，算子编译时应带 `-g`。
+4. 若涉及 `range replay`，确认用户代码里已经有成对的 mstx 标记。
+
+## 2. 编译准备
+
+如果用户需要 **代码热点图 / Cache 热力图跳转 / 更完整的源码映射**，应在算子编译阶段加入调试信息：
 
 ```bash
-# 在 Kernel 侧 CMakeLists.txt 首行添加
+# 示例：在算子编译配置中添加 -g
 add_ops_compile_options(ALL OPTIONS -g)
-
-# 然后重新编译部署
-bash ./build.sh
-MY_OP_PKG=$(find ./build_out -maxdepth 1 -name "custom_opp_*.run" | head -1) && bash $MY_OP_PKG
 ```
 
-> **注意**：`-g` 会附带调试信息，需限制二进制文件访问权限。不支持 `-O0` 编译选项。
+然后重新编译、重新部署算子包。
 
-### 2. 数据采集
+> 注意：
+> - `-g` 会把调试信息带入二进制，需控制访问权限。
+> - 官方文档明确指出不支持 `-O0` 编译选项。
 
-#### 基本用法
+## 3. 采集路径选择
+
+### 3.1 application 场景
 
 ```bash
-# 单算子全量采集
+# 单算子默认采集
 msprof op --output=./output ./execute_add_op
 
-# 指定指标采集
-msprof op --aic-metrics=Roofline,Source,MemoryDetail,Default --output=./output ./execute_add_op
+# 全量基础指标 + Roofline
+msprof op --aic-metrics=Roofline,Default --output=./output ./execute_add_op
 ```
 
-#### 多算子场景
+### 3.2 多算子 application 场景
 
 ```bash
-# 采集前 10 个 Add 或 Sub 算子
+# 采集前 10 个匹配 Add/Sub 的算子
 msprof op --launch-count=10 --kernel-name="Add|Sub" --output=./output ./test
 
-# 跳过前 3 个算子，采集第 4 个开始的 5 个算子
+# 跳过前 3 个算子，从第 4 个开始采集 5 个
 msprof op --launch-skip-before-match=3 --launch-count=5 --output=./output ./test
 ```
 
-#### 基于 .o 文件（无需可执行程序）
+说明：
+
+- `--kernel-name` 只在 application 模式有效。
+- `--launch-skip-before-match` 计数时不要求先命中 `kernel-name`。
+
+### 3.3 config 场景
 
 ```bash
 msprof op --config=./add_test.json --aic-metrics=Default --output=./output
 ```
 
-JSON 配置文件格式参见 extended_functions.md。
+此模式常用于没有直接 app 拉起路径、但已经有 JSON + `.o` 配置的情况。
 
-#### 重放模式
+## 4. replay 模式选择
 
-| 模式 | 命令 | 特点 |
-|------|------|------|
-| `kernel`（默认） | `--replay-mode=kernel` | 单个算子核函数多次重放，需内存备份 + L2Cache 清理 |
-| `application` | `--replay-mode=application` | 保留 L2Cache 状态，多次启动进程采集 |
-| `range` | `--replay-mode=range --mstx=on` | 基于 mstxRangeStart/End 框定范围整体重放 |
+| 模式 | 用法 | 适合场景 | 注意事项 |
+|---|---|---|---|
+| `kernel` | `--replay-mode=kernel` | 默认模式；聚焦单个算子核函数 | 最稳妥 |
+| `application` | `--replay-mode=application` | 希望保留应用级上下文 / L2 状态 | 单独使能部分指标时，`visualize_data.bin` 可能缺部分数据 |
+| `range` | `--replay-mode=range --mstx=on` | 需要对指定多算子范围整体重放 | 限制最多，务必先检查兼容性 |
 
-**range 模式限制**：
-- 需配合 `--mstx=on`
-- 仅 A2/A3 系列
-- 不支持 MC2/LCCL 通算融合算子
-- 不支持与 `--kill=on`、`MemoryDetail`、`TimelineDetail`、`Source` 同时使能
+### `range` 模式重点限制
 
-### 3. 结果查看
+- 必须配合 `--mstx=on`。
+- 只支持特定芯片系列（仓内文档按 A2/A3 描述）。
+- 不支持与 `MemoryDetail`、`TimelineDetail`、`Source` 同时使能。
+- 不建议与 `--kill=on` 同时使用。
+- 对通算融合算子存在额外限制，具体以当前版本 user guide 和安装版本帮助信息为准。
 
-#### CSV 文件分析
+## 5. 按目标选指标
 
-| CSV 文件 | 关键字段 | 分析重点 |
-|----------|----------|----------|
-| OpBasicInfo.csv | 算子名称、block_dim、总耗时 | 整体耗时是否正常 |
-| PipeUtilization.csv | 各 pipe 耗时占比 | 计算 vs 搬运占比 |
-| ArithmeticUtilization.csv | Cube/Vector 指令耗时 | Cube 或 Vector 利用率 |
-| Memory.csv | UB/L1/L2/GM 读写带宽 | 带宽是否达到理论峰值 |
-| MemoryUB.csv | 按 block 分的 UB 带宽 | 核间负载是否均衡 |
-| L2Cache.csv | L2 Cache 命中率 | 命中率是否过低 |
-| ResourceConflictRatio.csv | Bank conflict 占比 | 资源冲突是否严重 |
+| 目标 | 推荐指标 | 主要看什么 |
+|---|---|---|
+| 先确认整体耗时是否异常 | `Default` | `OpBasicInfo.csv`、`PipeUtilization.csv` |
+| 判断是算力瓶颈还是带宽瓶颈 | `Roofline,Default` | `visualize_data.bin` 中的 Roofline 视图 |
+| 看核间是否负载不均 | `Occupancy,Default` | 各核耗时 / 吞吐 / Cache 命中率差异 |
+| 看源码热点 / 代码行热点 | `Source,Default` | `visualize_data.bin`，通常需 `-g` |
+| 看 L2 / 内存细节 | `MemoryDetail` | L2 命中率、GM 相关搬运量、MTE1/MTE2 活跃带宽 |
+| 看 TimelineDetail 上板指令相关视图 | `TimelineDetail,Default` | 仅 A2/A3 等特定场景支持，限制较多 |
+| 看 Pipe 流水图 | `PipeTimeline` | 仅 Atlas 350 加速卡 |
+| 只想要最轻量基础信息 | `BasicInfo` | 只生成 `OpBasicInfo.csv` |
 
-#### MindStudio Insight 图形化查看
+## 6. 结果查看
 
-1. 安装 MindStudio Insight
-2. 打开后点击 Import Data，导入 `visualize_data.bin`
-3. 在 Details 页面查看各类图表
+### 6.1 CSV 首轮分析
 
-## 功能视图详解
+| 文件 | 典型问题 | 快速判断方法 |
+|---|---|---|
+| `OpBasicInfo.csv` | 总耗时异常 | 先确认算子名、block dim、总耗时 |
+| `PipeUtilization.csv` | 计算/搬运不平衡 | 看各 pipe 耗时占比 |
+| `ArithmeticUtilization.csv` | 计算单元利用率低 | 看 Cube / Vector 指令耗时和占比 |
+| `Memory.csv` | 主通路带宽不足 | 看 UB/L1/L2/GM 读写带宽 |
+| `MemoryUB.csv` | 各 block 差异大 | 看是否存在核间不均衡 |
+| `L2Cache.csv` | 命中率低 | 看 L2 Hit/Miss 情况 |
+| `ResourceConflictRatio.csv` | 资源冲突高 | 看 bank conflict / 资源冲突占比 |
 
-### 计算内存热力图
+### 6.2 `visualize_data.bin`
 
-以资源维度展示：
-- **核间负载分析（Core Occupancy）**：各物理核的耗时、吞吐量、Cache 命中率对比。若最大/最小差距 > 10%，提示负载不均衡
-- **计算负载分析（Compute Workload）**：Cube/Vector 计算资源利用率
-- **内存负载分析（Memory Workload）**：MTE 各通路活跃带宽值
+导入 MindStudio Insight 后，通常会看到：
 
-### Roofline 瓶颈分析图
+- 计算内存热力图
+- Roofline 瓶颈分析图
+- Cache 热力图
+- 算子代码热点图
+- 通算相关可视化
 
-按算子类型（Vector/Cube/Mix）和芯片型号呈现不同视图：
+### 6.3 `trace.json`
 
-| 视图 | Vector | Cube | Mix |
-|------|--------|------|-----|
-| GM/L2 视图 | Y | Y | Y |
-| Vector 内存单元视图 | Y | - | Y |
-| Vector 内存通路视图 | Y | - | Y |
-| Vector Pipeline 视图 | Y | - | Y |
-| Cube 内存单元视图 | - | Y | Y |
-| Cube 内存通路视图 | - | Y | Y |
-| Cube Pipeline 视图 | - | Y | Y |
+在上板模式里，`trace.json` 主要用于 **通算/通信相关流水图**。  
+它的语义与 simulator 下的 `trace.json` 不同，不要混用解释。
 
-**分析要点**：
-- 横轴 = 算术强度（Ops/Byte），纵轴 = 计算性能（TOps/s）
-- 屋顶线 = 理论最大计算性能，带宽斜线 = 理论最大带宽
-- 实际点与屋顶线的距离 = 性能提升空间
+## 7. 关键视图怎么解读
 
-**瓶颈判定**：
-- 性能百分比 > 80% -> Compute Bound 或 Memory Bound
-- 性能百分比 < 80% -> Latency Bound（需区分 pipeline/memory/compute caused）
+### 7.1 计算内存热力图
 
-### Cache 热力图
+重点看三类信息：
 
-展示 L2 Cache 访问情况：
-- Hit/Miss 分布，可跳转至源码界面
-- 需开启 `--aic-metrics=Source` 并添加 `-g` 编译选项
-- 不适用于 Atlas 推理系列产品
-- MC2/LCCL 算子不支持
+1. **核间负载分析（Occupancy）**
+   - 若最大值和最小值差异显著（官方文档里给出 10% 量级经验阈值），通常说明负载不均。
+2. **计算负载分析**
+   - 看 Cube / Vector 利用是否偏低。
+3. **内存负载分析**
+   - 看 MTE 通路活跃带宽是否成为瓶颈。
 
-### 通算流水图
+### 7.2 Roofline
 
-适用于 MC2/LCCL/ASC 通算融合算子：
+可把它当成“瓶颈初判器”：
 
-| 字段 | 说明 |
-|------|------|
-| AI CORE | 算子在 AI Core 上的整体运行 |
-| AI CPU | 算子在 AI CPU 上的运行（仅 MC2） |
-| AIC BLOCK | Cube 核运行情况 |
-| AIV BLOCK | Vector 核运行情况 |
-| HCCL | 多卡集合通信流水（仅 MC2） |
-| AscendC API | 用户打点 API 在每个 block 上的耗时 |
+- 性能点靠近算力屋顶：更偏 **Compute Bound**
+- 性能点靠近带宽斜线：更偏 **Memory Bound**
+- 两边都没贴近：更可能是 **Latency Bound**，需结合 pipeline / memory / compute caused 再细看
 
-通过 `AscendC::PrintTimeStamp` API 可在算子 block 上标记耗时。
+### 7.3 Cache 热力图
 
-### Pipe 流水图
+适合回答：
 
-展示算子各 Pipe 的运行情况（仅 Atlas 350 加速卡）。
-支持通过 `AscendC::MarkStamp` 接口在任意代码处打点标识流水范围。
+- 哪些源码位置或指令片段 L2 Hit/Miss 异常？
+- 低命中率是否集中在某些热点区域？
 
-### 算子代码热点图
+前提通常是：
 
-左侧：源码维度 -> L2Cache 命中率、GM 搬运量、指令数
-右侧：指令维度 -> 具体指令的命中率、搬运量、执行次数
+- `Source` 已开启
+- 算子带 `-g`
+- 当前芯片 / 算子类型支持该视图
 
-**芯片差异**：
+### 7.4 算子代码热点图
 
-| 功能 | A2/A3 | Atlas 350 加速卡 |
-|------|-------|------------------|
-| 源码/PC/PIPE | 支持 | 支持 |
-| 执行次数 | 支持 | 支持 |
-| GPR Count | 不支持 | 支持 |
-| L2Cache 命中率 | 支持 | 不支持 |
-| Process Bytes | 支持 | 支持 |
-| Stall Sampling | 不支持 | 支持 |
+左侧通常偏源码维度，右侧偏指令维度。  
+它适合把“耗时高的代码行”和“具体耗时指令”对应起来。
 
-## 芯片型号对照
+### 7.5 通算流水图
 
-| 芯片系列 | 型号示例 | 说明 |
-|----------|----------|------|
-| Ascend910B (A2) | 910B1/B2/B3/B4/B2C/B4-1 | 训练/推理 |
-| Ascend910_93 (A3) | 9391/9392/9381/9382/9372/9362 | 训练/推理 |
-| Ascend310B | 310B1/B2/B3/B4 | 推理 |
-| Ascend310P | 310P1-P5/P7 | 推理 |
-| Ascend950 (A5) | - | Atlas 350 加速卡 |
+这里是仓内文档口径最容易混淆的点之一：
 
-## 调优策略建议
+- user guide 的摘要位置对支持范围写得更保守；
+- 通算流水图专章又给出更展开的 MC2/LCCL/ASC 描述。
 
-1. **先用 Default 采集全量 CSV**，从 OpBasicInfo 看总耗时
-2. **开启 Roofline**，判断瓶颈类型（Compute/Memory/Latency Bound）
-3. **如果是 Memory Bound** -> 分析 Memory.csv 各通路带宽，开启 MemoryDetail 看详情
-4. **如果是 Compute Bound** -> 分析 ArithmeticUtilization.csv，看 Cube/Vector 利用率
-5. **开启 Source 热点图**，定位具体瓶颈代码行
-6. **核间不均衡** -> 开启 Occupancy 对比各核数据
-7. **L2Cache 命中率低** -> 开启 MemoryDetail 看 Cache 热力图
-8. **通算融合算子** -> 查看 trace.json 分析通信与计算的耗时掩盖
+因此：
+
+- 若只是泛化说明，可说“适用于支持的通算融合算子场景”；
+- 若用户问“我这个算子类型到底支不支持”，应提示以 **当前安装版本帮助信息 + 当前版本专章限制** 为准。
+
+## 8. 常见误区
+
+1. **上来就开最重的指标**
+   - 正确做法：先用 `Default` 跑通，再定向加 `Roofline` / `Source` / `MemoryDetail`。
+2. **把 `TimelineDetail` 当成所有上板热点分析的默认入口**
+   - 实际上它限制较多，`Source` 往往更适合作为常规热点分析入口。
+3. **忽略权限问题**
+   - 输出目录、配置目录、导出目录权限不符合要求时，工具可能直接失败。
+4. **把通算 `trace.json` 当成 simulator 指令流水图**
+   - 两者同名，但语义不同。
+
+## 9. 推荐调优顺序
+
+1. `Default`：确认是否真的有性能问题。
+2. `Roofline`：定大方向（算力 / 带宽 / 延迟）。
+3. `MemoryDetail` 或 `Source`：做定向下钻。
+4. `Occupancy`：看核间不均衡。
+5. 通算或特定芯片能力：再看 `trace.json` / `PipeTimeline` / `PcSampling`。

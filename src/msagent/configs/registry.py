@@ -370,6 +370,17 @@ class ConfigRegistry:
         )
         self._agents = None  # Invalidate cache
 
+    async def add_agent_skill_pattern(self, agent_name: str, skill_pattern: str) -> bool:
+        """Append a skill pattern to an agent's config if it is not already present."""
+        changed = await BatchAgentConfig.add_agent_skill_pattern(
+            file_path=self.working_dir / CONFIG_AGENTS_FILE_NAME,
+            agent_name=agent_name,
+            skill_pattern=skill_pattern,
+            dir_path=self.working_dir / CONFIG_AGENTS_DIR,
+        )
+        self._agents = None  # Invalidate cache
+        return changed
+
     # === Cache management ===
 
     def invalidate_cache(self) -> None:

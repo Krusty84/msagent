@@ -1,6 +1,6 @@
 ---
 name: msot-msopprof-operator-profiler
-description: 当用户希望使用 msOpProf（`msprof op` / `msprof op simulator`）对昇腾 AI 算子做上板或仿真性能调优、解释 `aic-metrics`/`trace.json`/`visualize_data.bin`、选择 device vs simulator 路径、排查 `--soc-version`/`--export`/`signal 6`/`Bad address`/热点图或流水图相关问题时，使用本技能。它负责先判定模式、输入形态与芯片/能力边界，再给出正确命令、结果解读与高频踩坑规避；不要把经验案例当成通用规则。
+description: 当用户希望使用 msOpProf（`msprof op` / `msprof op simulator`）对昇腾 AI 算子做上板或仿真性能调优、解释 `aic-metrics`/`trace.json`/`visualize_data.bin`、选择 device vs simulator 路径、排查 `--soc-version`/`--export`/`signal 6`/`Bad address`/热点图或流水图相关问题，或要求生成固定分析报告模板（算子基本信息 / 关键数据 TOP5 / 核心瓶颈 TOP5 / 优化建议 TOP5）时，使用本技能。它负责先判定模式、输入形态与芯片/能力边界，再给出正确命令、结果解读、固定报告输出与高频踩坑规避；不要把经验案例当成通用规则。
 ---
 
 # msOpProf 算子性能调优
@@ -21,6 +21,7 @@ description: 当用户希望使用 msOpProf（`msprof op` / `msprof op simulator
   - `PMSampling`
 - 询问如何在 **device vs simulator** 之间选择
 - 询问 `application` / `config` / `export` 三种输入形态的差别
+- 询问如何生成 **固定报告 / 模板化结论 / Top 5 总结**
 - 遇到以下高频故障：
   - `signal 6`
   - `Bad address`
@@ -88,6 +89,10 @@ description: 当用户希望使用 msOpProf（`msprof op` / `msprof op simulator
 - 不要把 `--kernel-name` 说成对 `config` / `export` 也有效。
 - 不要把经验文件中的案例说成“所有工程都必须这样”。
 - 不要在没有说明前提的情况下，直接给出一个看似通用的命令。
+- 没有实际 profiling 数据时，不要强行输出 Top 5 固定报告。
+- 数据不足 5 项时按真实数量输出，不要补齐、不造数。
+- 不要把命令指导、环境准备或经验猜测伪装成“核心瓶颈”或“优化建议”。
+- 不要给出与当前模式明显不兼容的建议（例如把 simulator 参数建议给 device）。
 
 ## 快速决策树
 
@@ -105,7 +110,25 @@ description: 当用户希望使用 msOpProf（`msprof op` / `msprof op simulator
 
 ## 默认输出契约
 
-默认按下面结构回答，而不是平铺资料：
+默认按两条分支输出，不要混用：
+
+### 分支 A：结果分析 / 调优结论 / 报告化输出
+
+满足以下任一条件时，最终回复默认使用**固定四段报告模板**：
+
+- 用户已经给出 profiling 产物或结果现象，要求解释 / 总结 / 诊断 / 调优建议
+- 用户明确要求“报告”“模板化输出”“Top 5 结论”
+- 当前任务重点是解释 `csv` / `visualize_data.bin` / `trace.json` / 热点图 / 流水图，而不是教用户先跑命令
+
+### 分支 B：命令指导 / 模式选择 / 采集前排障
+
+满足以下场景时，不强制使用固定报告模板，继续使用 guidance-first 输出：
+
+- 用户还没有 profiling 数据，只是在问怎么采集
+- 用户重点是选 device / simulator / application / config / export
+- 用户处于启动失败、环境不通、参数不会配的阶段
+
+此时优先输出：
 
 1. **建议路径**
    - 先明确推荐 device 还是 simulator，以及原因
@@ -114,22 +137,101 @@ description: 当用户希望使用 msOpProf（`msprof op` / `msprof op simulator
 3. **关键限制**
    - 只列当前问题真正相关的 2~5 条限制
 4. **怎么看结果**
-   - 告诉用户看哪一个文件、用什么工具打开、重点看什么
+   - 告诉用户跑完后看哪一个文件、用什么工具打开、重点看什么
 5. **下一步**
    - 若这是首轮采集：告诉用户下一步该加什么指标
    - 若这是排障：告诉用户下一步该补什么信息或切哪条路径
 
-如果用户是在排障，优先输出：
+## 固定报告模板（默认用于结果分析）
 
-- 根因候选
-- 最小验证动作
-- 如果验证失败，再切哪条分支
+### 模板启用规则
 
-如果用户是在做“怎么调”，优先输出：
+- 默认 `TOPx = TOP5`
+- 如果用户明确指定别的 `x`，可覆盖默认值
+- 数据不足 5 项时按真实数量输出，不补齐
+- 每个 Top 条目都应尽量带 `数据来源`
+- 如果当前模式或数据集不支持某项，写 `N/A`、`未采集` 或 `不适用当前模式`
 
-- 先跑哪条命令
-- 先看哪个产物
-- 再根据结果如何下钻
+### 固定标题
+
+结果分析场景下，最终回复默认使用以下四段标题，不要自行改名：
+
+```markdown
+## 1. 算子基本信息
+## 2. 关键数据 TOP5
+## 3. 核心瓶颈 TOP5
+## 4. 优化建议 TOP5
+```
+
+### 1. 算子基本信息
+
+使用短表格或键值表，不使用 Top 5。默认字段：
+
+| 字段 | 内容 |
+|---|---|
+| 模式 | device / simulator |
+| 输入形态 | application / config / export |
+| 算子名 / 目标对象 | 当前分析对象 |
+| 芯片 / 仿真器 | 芯片型号或 simulator 类型 |
+| 采集指标 | 当前启用的 `aic-metrics` 或主要分析视图 |
+| 主要产物 | 当前引用的 CSV / bin / trace |
+| 数据来源 | 文件或产物类型 |
+
+缺字段时写 `未提供` / `未采集`，不要脑补。
+
+### 2. 关键数据 TOP5
+
+使用短表格，固定列：
+
+| 排名 | 指标/对象 | 数值/现象 | 意义 | 数据来源 |
+|---|---|---|---|---|
+
+填充规则：
+
+- 只放最值得看的关键数据，不要变成全量指标列表
+- device 场景优先来自：`OpBasicInfo.csv`、`PipeUtilization.csv`、`ArithmeticUtilization.csv`、`Memory.csv`、`L2Cache.csv`、`ResourceConflictRatio.csv`
+- simulator 场景优先来自：`trace.json`、`core*_code_exe.csv`、`core*_instr_exe.csv`、`PMSampling`
+
+### 3. 核心瓶颈 TOP5
+
+使用短表格，固定列：
+
+| 排名 | 瓶颈结论 | 判断依据 | 影响 | 数据来源 |
+|---|---|---|---|---|
+
+填充规则：
+
+- 必须把“结论”和“依据”分开
+- 没有足够证据时写 `待确认`，不要把猜测写成确定事实
+- 不要直接复述经验案例；只有当前现象匹配时，才能把经验作为辅助说明
+
+### 4. 优化建议 TOP5
+
+使用短表格，固定列：
+
+| 排名 | 建议 | 对应瓶颈 | 预期收益/目的 | 前提/来源 |
+|---|---|---|---|---|
+
+填充规则：
+
+- 建议必须与“核心瓶颈 TOP5”逐项关联
+- 不要给与当前模式不兼容的建议
+- 纯命令指导、环境准备或尚未验证的假设，不应冒充优化建议
+
+## 报告模板的模式差异处理
+
+固定模板只有一套，但字段解释按 mode 变化：
+
+- simulator 的 `trace.json` = 指令流水图依据
+- device 的 `trace.json` = 通算 / 通信相关流水图依据
+- `PMSampling` 只应出现在支持的 simulator 场景
+- `TimelineDetail` 只应出现在支持的 device 场景
+
+统一原则：
+
+- 标题和表格列固定
+- 数据来源允许按 mode 变化
+- 不适用项明确写 `N/A` 或 `不适用当前模式`
 
 ## 高频踩坑（优先提醒用户）
 

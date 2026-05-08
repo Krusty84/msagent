@@ -23,6 +23,43 @@ Phase 5: 性能 — 优化前后性能对比
 - 用户希望自动完成编译、运行、msprof op 性能采集、分析、优化、对比的全流程
 - 用户已有算子代码，需要系统性提升算子性能
 
+## 触发词（召回增强）
+
+当用户问题包含以下词或近义表达时，优先触发本技能：
+
+- `ascendc-operator-performance-optim` 
+- `端到端优化` / `端到端调优` / `算子代码优化` / `msopprof 端到端调优`
+
+
+当用户问题包含以下词或近义表达时，优先触发 **`msot-msopprof-operator-profiler`**，不使用 **`ascendc-operator-performance-optim`** ：
+
+- 明确提到 `msprof op`、`msprof op simulator`、`msOpProf`
+- 询问如何做 **算子性能调优 / 上板调优 / 仿真调优**
+- 询问如何查看或解释：
+  - `visualize_data.bin`
+  - `trace.json`
+  - `OpBasicInfo.csv`
+  - `PipeUtilization.csv`
+  - `MemoryDetail`
+  - `Roofline`
+  - `PMSampling`
+- 询问如何在 **device vs simulator** 之间选择
+- 询问 `application` / `config` / `export` 三种输入形态的差别
+- 询问如何生成 **固定报告 / 模板化结论 / Top 5 总结**
+- 遇到以下高频故障：
+  - `signal 6`
+  - `Bad address`
+  - `--soc-version` 不生效
+  - `--kernel-name` 不生效
+  - `--export` 目录如何组织
+  - `TimelineDetail` / `PMSampling` / `--core-id` 为什么行为不符合预期
+
+## 不要在这些场景误用本技能
+
+- 用户只是想要输出性能报告，不需要做代码优化
+- 用户只想分析性能数据，问一些解释咨询类的
+- 用户给出性能数据目录，只要分析场景
+
 
 ---
 

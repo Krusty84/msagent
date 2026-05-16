@@ -54,6 +54,7 @@ CONFIG_CHECKPOINTERS_FILE_NAME = Path(f"{CONFIG_DIR_NAME}/config.checkpointers.y
 CONFIG_AGENTS_FILE_NAME = Path(f"{CONFIG_DIR_NAME}/config.agents.yml")
 CONFIG_SUBAGENTS_FILE_NAME = Path(f"{CONFIG_DIR_NAME}/config.subagents.yml")
 CONFIG_CHECKPOINTS_URL_FILE_NAME = Path(f"{CONFIG_DIR_NAME}/config.checkpoints.db")
+CONFIG_SCHEDULES_DB_FILE_NAME = Path(f"{CONFIG_DIR_NAME}/scheduled_tasks.db")
 CONFIG_HISTORY_FILE_NAME = Path(f"{CONFIG_DIR_NAME}/.history")
 CONFIG_MEMORY_FILE_NAME = Path(f"{CONFIG_DIR_NAME}/memory.md")
 CONFIG_MEMORY_FILE = "memory.md"  # Short name for compatibility

@@ -6,6 +6,7 @@ from msagent.cli.handlers.compress import CompressionHandler
 from msagent.cli.handlers.interrupts import InterruptHandler
 from msagent.cli.handlers.mcp import MCPHandler
 from msagent.cli.handlers.models import ModelHandler
+from msagent.cli.handlers.schedule import ScheduleHandler
 from msagent.cli.handlers.skills import SkillsHandler
 from msagent.cli.handlers.tool_outputs import ToolOutputHandler
 from msagent.cli.handlers.threads import ThreadsHandler
@@ -18,6 +19,7 @@ __all__ = [
     "InterruptHandler",
     "MCPHandler",
     "ModelHandler",
+    "ScheduleHandler",
     "SkillsHandler",
     "ToolOutputHandler",
     "ThreadsHandler",

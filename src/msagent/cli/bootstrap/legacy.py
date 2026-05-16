@@ -10,6 +10,7 @@ import yaml
 from rich.table import Table
 
 from msagent.cli.bootstrap.chat import handle_chat_command
+from msagent.cli.bootstrap.schedule import handle_schedule_command
 from msagent.cli.bootstrap.web import handle_web_command
 from msagent.cli.bootstrap.initializer import initializer
 from msagent.cli.theme import console
@@ -31,7 +32,7 @@ DEFAULT_API_ENV_MAP = {
 }
 
 DEFAULT_SESSION_COMMAND = "__session__"
-PUBLIC_COMMANDS = {"config", "web"}
+PUBLIC_COMMANDS = {"config", "schedule", "web"}
 ROOT_ONLY_FLAGS = {"-h", "--help", "--version"}
 
 
@@ -55,7 +56,7 @@ def create_legacy_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Show version information and exit",
     )
-    subparsers = parser.add_subparsers(dest="cli_command", metavar="{config,web}")
+    subparsers = parser.add_subparsers(dest="cli_command", metavar="{config,schedule,web}")
 
     config_parser = subparsers.add_parser("config", help="Configure msAgent")
     config_parser.add_argument(
@@ -138,6 +139,62 @@ def create_legacy_parser() -> argparse.ArgumentParser:
     web_parser.add_argument("-a", "--agent", default=None, help="Agent name")
     web_parser.add_argument("-m", "--model", default=None, help="LLM model alias")
 
+    schedule_parser = subparsers.add_parser("schedule", help="Manage scheduled tasks")
+    schedule_subparsers = schedule_parser.add_subparsers(
+        dest="schedule_command",
+        metavar="{add,list,cancel,run-due,worker}",
+    )
+
+    schedule_add_parser = schedule_subparsers.add_parser("add", help="Create a scheduled task")
+    schedule_add_parser.add_argument("--at", required=True, help="Run time, e.g. '2026-05-15 23:00'")
+    schedule_add_parser.add_argument("prompt", nargs="+", help="Prompt to run when the task is due")
+    schedule_add_parser.add_argument(
+        "-w",
+        "--working-dir",
+        default=os.getcwd(),
+        help="Working directory for project-local .msagent config",
+    )
+    schedule_add_parser.add_argument("-a", "--agent", default="general", help="Agent name")
+    schedule_add_parser.add_argument("-m", "--model", default="default", help="LLM model alias")
+
+    schedule_list_parser = schedule_subparsers.add_parser("list", help="List scheduled tasks")
+    schedule_list_parser.add_argument("--all", action="store_true", help="Include finished tasks")
+    schedule_list_parser.add_argument("--limit", type=int, default=20, help="Max tasks to show")
+    schedule_list_parser.add_argument(
+        "-w",
+        "--working-dir",
+        default=os.getcwd(),
+        help="Working directory for project-local .msagent config",
+    )
+
+    schedule_cancel_parser = schedule_subparsers.add_parser("cancel", help="Cancel a pending scheduled task")
+    schedule_cancel_parser.add_argument("task_id", help="Task ID")
+    schedule_cancel_parser.add_argument(
+        "-w",
+        "--working-dir",
+        default=os.getcwd(),
+        help="Working directory for project-local .msagent config",
+    )
+
+    schedule_run_due_parser = schedule_subparsers.add_parser("run-due", help="Execute due scheduled tasks once")
+    schedule_run_due_parser.add_argument("--max-tasks", type=int, default=10, help="Max due tasks to process")
+    schedule_run_due_parser.add_argument(
+        "-w",
+        "--working-dir",
+        default=os.getcwd(),
+        help="Working directory for project-local .msagent config",
+    )
+
+    schedule_worker_parser = schedule_subparsers.add_parser("worker", help="Run the scheduled-task worker loop")
+    schedule_worker_parser.add_argument("--poll-interval", type=float, default=30.0, help="Polling interval seconds")
+    schedule_worker_parser.add_argument("--max-tasks", type=int, default=10, help="Max tasks per poll cycle")
+    schedule_worker_parser.add_argument(
+        "-w",
+        "--working-dir",
+        default=os.getcwd(),
+        help="Working directory for project-local .msagent config",
+    )
+
     return parser
 
 
@@ -209,6 +266,8 @@ async def dispatch_legacy_command(args: argparse.Namespace) -> int:
         return await _handle_chat(args)
     if command == "config":
         return await _handle_config(args)
+    if command == "schedule":
+        return await _handle_schedule(args)
     if command == "web":
         return await _handle_web(args)
 
@@ -307,6 +366,13 @@ async def _handle_web(args: argparse.Namespace) -> int:
         verbose=args.verbose,
     )
     return await handle_web_command(web_args)
+
+
+async def _handle_schedule(args: argparse.Namespace) -> int:
+    schedule_args = argparse.Namespace(**vars(args))
+    if hasattr(schedule_args, "working_dir"):
+        schedule_args.working_dir = Path(schedule_args.working_dir)
+    return await handle_schedule_command(schedule_args)
 
 
 async def _show_config(registry, working_dir: Path) -> int:

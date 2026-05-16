@@ -38,7 +38,16 @@ from msagent.agents.local_context import ensure_local_context_prompt
 from msagent.core.constants import CONFIG_CONVERSATION_HISTORY_DIR
 from msagent.llms.factory import LLMFactory
 from msagent.middlewares.tool_result_eviction import ToolResultEvictionMiddleware
-from msagent.tools.catalog import fetch_skills, fetch_tools, get_skill, get_tool, run_tool
+from msagent.tools.catalog import (
+    add_loop_task,
+    cancel_loop_task,
+    fetch_skills,
+    fetch_tools,
+    get_skill,
+    get_tool,
+    list_loop_tasks,
+    run_tool,
+)
 from msagent.tools.factory import ToolFactory
 from msagent.tools.web_search import web_search
 from msagent.utils.deepagents_compat import patch_deepagents_windows_absolute_paths
@@ -133,6 +142,9 @@ class AgentFactory:
             fetch_tools,
             get_tool,
             run_tool,
+            add_loop_task,
+            list_loop_tasks,
+            cancel_loop_task,
             fetch_skills,
             get_skill,
             web_search,

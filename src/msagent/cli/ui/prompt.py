@@ -143,6 +143,14 @@ class InteractivePrompt:
             buffer.text = "/tool-output"
             buffer.validate_and_handle()
 
+        @kb.add(Keys.Escape)
+        def _(event):
+            """Esc: Stop pending loop wakeups."""
+            if self.session is None:
+                return
+            event.current_buffer.text = "/loop stop"
+            event.current_buffer.validate_and_handle()
+
         @kb.add(Keys.Enter, filter=completion_is_selected)
         def _(event):
             """Enter when completion is selected: apply completion."""
@@ -183,6 +191,7 @@ class InteractivePrompt:
             self._format_key_name(Keys.ControlB): "Toggle bash mode",
             self._format_key_name(Keys.ControlK): "Show keyboard shortcuts",
             self._format_key_name(Keys.ControlO): "Expand/collapse latest tool output",
+            "Esc": "Stop pending loop wakeups",
             "Tab": "Apply first completion",
             "Enter": "Apply selected completion or submit",
         }
@@ -227,6 +236,14 @@ class InteractivePrompt:
 
         self._handle_ctrl_c(app, buffer)
         return True
+
+    def has_input_text(self) -> bool:
+        """Return True when the interactive input buffer has pending text."""
+        prompt_session = getattr(self, "prompt_session", None)
+        app = getattr(prompt_session, "app", None) if prompt_session is not None else None
+        buffer = getattr(app, "current_buffer", None) if app is not None else None
+        text = getattr(buffer, "text", "") if buffer is not None else ""
+        return bool(str(text).strip())
 
     def set_mode_change_callback(self, callback):
         """Set callback for mode change events."""

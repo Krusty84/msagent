@@ -11,6 +11,7 @@ from msagent.cli.handlers import (
     CompressionHandler,
     MCPHandler,
     ModelHandler,
+    ScheduleHandler,
     SkillsHandler,
     ToolOutputHandler,
     ThreadsHandler,
@@ -35,6 +36,7 @@ class CommandDispatcher:
         self.mcp_handler = MCPHandler(session)
         self.tools_handler = ToolsHandler(session)
         self.skills_handler = SkillsHandler(session)
+        self.schedule_handler = ScheduleHandler(session)
         self.threads_handler = ThreadsHandler(session)
         self.compression_handler = CompressionHandler(session)
         self.tool_output_handler = ToolOutputHandler(session)
@@ -50,6 +52,7 @@ class CommandDispatcher:
             "/tools": self.cmd_tools,
             "/skills": self.cmd_skills,
             "/add-skill": self.cmd_add_skill,
+            "/schedule": self.cmd_schedule,
             "/mcp": self.cmd_mcp,
             "/offload": self.cmd_offload,
             "/tool-output": self.cmd_tool_output,
@@ -124,6 +127,10 @@ class CommandDispatcher:
     async def cmd_add_skill(self, args: list[str]) -> None:
         """Install a custom skill from a local path via `/add-skill <path>`."""
         await self.add_skill_handler.handle(args)
+
+    async def cmd_schedule(self, args: list[str]) -> None:
+        """Create, inspect, or cancel scheduled tasks."""
+        await self.schedule_handler.handle(args)
 
     async def cmd_mcp(self, args: list[str]) -> None:
         """Handle MCP management command."""

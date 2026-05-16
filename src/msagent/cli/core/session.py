@@ -60,6 +60,7 @@ class Session:
         self._sigint_handler: SignalHandler = None
         self.tool_outputs: list[ToolOutputEntry] = []
         self.latest_tool_output: ToolOutputEntry | None = None
+        self._schedule_worker_task: asyncio.Task | None = None
 
     def _create_prompt_with_fallback(self) -> InteractivePrompt | SimpleNamespace:
         try:
@@ -113,6 +114,9 @@ class Session:
                     status.update(f"[{theme.spinner_color}]Cleaning...[/{theme.spinner_color}]")
         finally:
             self._restore_sigint()
+            if self._schedule_worker_task:
+                self._schedule_worker_task.cancel()
+                self._schedule_worker_task = None
 
     async def _main_loop(self) -> None:
         """Main interactive loop."""

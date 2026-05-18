@@ -37,7 +37,14 @@ _DEFAULT_TIMEOUT_SECONDS = 30.0
 _DEFAULT_RESULT_LIMIT = 5
 _MAX_RESULT_LIMIT = 10
 _USER_AGENT = "msagent/0.1 web-search"
+_BROWSER_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/126.0.0.0 Safari/537.36"
+)
 _TAVILY_API_KEY_ENV = "TAVILY_API_KEY"
+_MAX_FETCHED_CONTENT_CHARS = 4000
+_URL_PATTERN = re.compile(r"https?://[^\s|<>)\]}\"']+")
 
 
 class WebSearchInput(BaseModel):
@@ -119,6 +126,46 @@ class _DuckDuckGoHTMLParser(HTMLParser):
         self._in_title = False
 
 
+class _ReadableHTMLParser(HTMLParser):
+    _SKIP_TAGS = {"script", "style", "noscript", "svg", "canvas", "nav", "footer"}
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.title = ""
+        self.text_parts: list[str] = []
+        self._in_title = False
+        self._skip_depth = 0
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        del attrs
+        normalized = tag.lower()
+        if normalized == "title":
+            self._in_title = True
+            return
+        if normalized in self._SKIP_TAGS:
+            self._skip_depth += 1
+
+    def handle_data(self, data: str) -> None:
+        if self._in_title:
+            self.title += data
+            return
+        if self._skip_depth == 0:
+            cleaned = _clean_text(data)
+            if cleaned:
+                self.text_parts.append(cleaned)
+
+    def handle_endtag(self, tag: str) -> None:
+        normalized = tag.lower()
+        if normalized == "title":
+            self._in_title = False
+            return
+        if normalized in self._SKIP_TAGS and self._skip_depth:
+            self._skip_depth -= 1
+
+    def readable_text(self) -> str:
+        return _clean_text(" ".join(self.text_parts))
+
+
 @tool("web_search", args_schema=WebSearchInput)
 async def web_search(
     *,
@@ -140,6 +187,10 @@ async def web_search(
         )
     except ValueError as exc:
         raise ToolException(str(exc)) from exc
+
+    urls = _extract_urls(payload.query)
+    if urls:
+        return await _fetch_url_contents(urls[: payload.limit])
 
     allowed_domain_set = set(payload.allowed_domains)
     blocked_domain_set = set(payload.blocked_domains)
@@ -260,6 +311,119 @@ async def _fetch_duckduckgo_html(query: str) -> str:
     return response.text
 
 
+async def _fetch_url_content(url: str) -> str:
+    normalized_url = _normalize_url_query(url)
+    try:
+        async with httpx.AsyncClient(
+            timeout=_DEFAULT_TIMEOUT_SECONDS,
+            follow_redirects=True,
+            headers=_url_fetch_headers(normalized_url),
+        ) as client:
+            response = await client.get(normalized_url)
+            response.raise_for_status()
+    except httpx.HTTPError as exc:
+        raise ToolException(f"URL fetch request failed: {exc}") from exc
+
+    content_type = response.headers.get("content-type", "")
+    if "text/html" not in content_type and "application/xhtml" not in content_type:
+        text = _clean_text(response.text)
+        return _format_fetched_url_content(
+            url=str(response.url),
+            title="",
+            content=text,
+            status_code=response.status_code,
+            content_type=content_type,
+        )
+
+    parser = _ReadableHTMLParser()
+    parser.feed(response.text)
+    return _format_fetched_url_content(
+        url=str(response.url),
+        title=_clean_text(parser.title),
+        content=parser.readable_text(),
+        status_code=response.status_code,
+        content_type=content_type,
+    )
+
+
+async def _fetch_url_contents(urls: list[str]) -> str:
+    lines = ["Fetched URL contents by priority:"]
+    for index, url in enumerate(urls, start=1):
+        try:
+            content = await _fetch_url_content(url)
+        except ToolException as exc:
+            content = f"Fetch failed for: {url}\nError: {exc}"
+        lines.append(f"\nPriority {index}\n{content}")
+    return "\n".join(lines)
+
+
+def _format_fetched_url_content(
+    *,
+    url: str,
+    title: str,
+    content: str,
+    status_code: int,
+    content_type: str,
+) -> str:
+    trimmed = content[:_MAX_FETCHED_CONTENT_CHARS]
+    if len(content) > _MAX_FETCHED_CONTENT_CHARS:
+        trimmed = f"{trimmed}..."
+
+    lines = [
+        f"Fetched URL content for: {url}",
+        f"Status: {status_code}",
+        f"Content-Type: {content_type or 'unknown'}",
+    ]
+    if title:
+        lines.append(f"Title: {title}")
+    lines.append(f"Content:\n{trimmed or 'No readable text content found.'}")
+    return "\n".join(lines)
+
+
+def _url_fetch_headers(url: str) -> dict[str, str]:
+    parsed = urlparse(url)
+    origin = f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else ""
+    return {
+        "User-Agent": _BROWSER_USER_AGENT,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+        "Referer": origin,
+    }
+
+
+def _is_url_query(value: str) -> bool:
+    normalized = value.strip()
+    if " " in normalized or "\\" in normalized:
+        return False
+    parsed = urlparse(normalized if "://" in normalized else f"https://{normalized}")
+    return bool(parsed.scheme in {"http", "https"} and parsed.netloc and "." in parsed.netloc)
+
+
+def _extract_urls(value: str) -> list[str]:
+    urls: list[str] = []
+    seen: set[str] = set()
+    for match in _URL_PATTERN.finditer(value):
+        url = match.group(0).rstrip(".,;，。；")
+        if url not in seen:
+            seen.add(url)
+            urls.append(url)
+    if not urls and _is_url_query(value):
+        urls.append(_normalize_url_query(value))
+    return urls
+
+
+def _normalize_url_query(value: str) -> str:
+    normalized = value.strip()
+    if "://" not in normalized:
+        normalized = f"https://{normalized}"
+    parsed = urlparse(normalized)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ToolException(f"Invalid URL: {value}")
+    return normalized
+
+
 def _extract_results(html: str) -> list[dict[str, str]]:
     parser = _DuckDuckGoHTMLParser()
     parser.feed(html)
@@ -325,3 +489,5 @@ def _normalize_result_url(url: str) -> str:
 def _clean_text(value: str) -> str:
     normalized = re.sub(r"\s+", " ", unescape(value or "")).strip()
     return normalized
+
+

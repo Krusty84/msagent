@@ -239,8 +239,49 @@ class MessageDispatcher:
             user_memory=user_memory,
             tool_catalog=cast(list[BaseTool], initializer.cached_tools_in_catalog),
             skill_catalog=initializer.cached_agent_skills,
+            web_fetch_extractor=self._build_web_fetch_extractor(ctx),
             tool_output_max_tokens=ctx.tool_output_max_tokens,
         )
+
+    def _build_web_fetch_extractor(self, ctx) -> object:
+        async def _extract(*, prompt: str, markdown: str, url: str, title: str, max_chars: int) -> str:
+            llm_config = await initializer.load_llm_config(ctx.model, ctx.working_dir)
+            llm = initializer.llm_factory.create(llm_config)
+            response = await llm.ainvoke(
+                [
+                    HumanMessage(
+                        content=(
+                            "Extract only the information requested by the prompt from the Markdown page below. "
+                            "Return concise Markdown, preserve exact commands, parameters, versions, URLs, and "
+                            "source-specific facts. Do not add facts that are not present in the page. "
+                            f"Keep the result under {max_chars} characters.\n\n"
+                            f"URL: {url}\n"
+                            f"Title: {title or url}\n\n"
+                            f"Extraction prompt:\n{prompt}\n\n"
+                            f"Markdown page:\n{markdown}"
+                        )
+                    )
+                ]
+            )
+            return self._message_content_to_text(getattr(response, "content", response))
+
+        return _extract
+
+    @staticmethod
+    def _message_content_to_text(content: object) -> str:
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts: list[str] = []
+            for item in content:
+                if isinstance(item, dict):
+                    text = item.get("text") or item.get("content")
+                    if text:
+                        parts.append(str(text))
+                elif item is not None:
+                    parts.append(str(item))
+            return "\n".join(parts)
+        return str(content or "")
 
     async def _stream_response(
         self,

@@ -20,10 +20,13 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
+from datetime import datetime, timezone
 from html import unescape
 from html.parser import HTMLParser
+from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urljoin, urlparse
 
@@ -36,8 +39,10 @@ _TAVILY_SEARCH_URL = "https://api.tavily.com/search"
 _DEFAULT_TIMEOUT_SECONDS = 30.0
 _DEFAULT_RESULT_LIMIT = 5
 _MAX_RESULT_LIMIT = 10
+_MAX_CONTENT_CHARS = 1000
 _USER_AGENT = "msagent/0.1 web-search"
 _TAVILY_API_KEY_ENV = "TAVILY_API_KEY"
+_WEB_SEARCH_DEBUG_LOG_ENV = "WEB_SEARCH_DEBUG_LOG"
 
 
 class WebSearchInput(BaseModel):
@@ -131,6 +136,12 @@ async def web_search(
     """Search the web and return compact results with source URLs."""
     del runtime
 
+    debug_event: dict[str, Any] = {
+        "query": query,
+        "allowed_domains": allowed_domains,
+        "blocked_domains": blocked_domains,
+        "limit": limit,
+    }
     try:
         payload = WebSearchInput(
             query=query,
@@ -139,31 +150,47 @@ async def web_search(
             limit=limit,
         )
     except ValueError as exc:
+        debug_event["error"] = str(exc)
+        _write_web_search_debug_event(debug_event)
         raise ToolException(str(exc)) from exc
 
     allowed_domain_set = set(payload.allowed_domains)
     blocked_domain_set = set(payload.blocked_domains)
 
-    results, provider = await _search_results_with_provider(
-        query=payload.query,
-        allowed_domains=allowed_domain_set,
-        blocked_domains=blocked_domain_set,
-        limit=payload.limit,
-    )
+    try:
+        results, provider = await _search_results_with_provider(
+            query=payload.query,
+            allowed_domains=allowed_domain_set,
+            blocked_domains=blocked_domain_set,
+            limit=payload.limit,
+        )
+        debug_event["provider"] = provider
+        debug_event["result_count"] = len(results)
+        debug_event["results"] = results[: payload.limit]
 
-    if not results:
-        filters = []
-        if payload.allowed_domains:
-            filters.append(f"allowed={','.join(payload.allowed_domains)}")
-        if payload.blocked_domains:
-            filters.append(f"blocked={','.join(payload.blocked_domains)}")
-        suffix = f" ({'; '.join(filters)})" if filters else ""
-        return f"No web results found for query: {payload.query}{suffix}"
+        if not results:
+            filters = []
+            if payload.allowed_domains:
+                filters.append(f"allowed={','.join(payload.allowed_domains)}")
+            if payload.blocked_domains:
+                filters.append(f"blocked={','.join(payload.blocked_domains)}")
+            suffix = f" ({'; '.join(filters)})" if filters else ""
+            output = f"No web results found for query: {payload.query}{suffix}"
+        else:
+            lines = [f"Web search results for: {payload.query}", f"Provider: {provider}"]
+            for index, result in enumerate(results[: payload.limit], start=1):
+                lines.append(f"{index}. {result['title']}\n   URL: {result['url']}")
+                if result.get("content"):
+                    lines.append(f"   Summary: {result['content']}")
+            output = "\n".join(lines)
 
-    lines = [f"Web search results for: {payload.query}", f"Provider: {provider}"]
-    for index, result in enumerate(results[: payload.limit], start=1):
-        lines.append(f"{index}. {result['title']}\n   URL: {result['url']}")
-    return "\n".join(lines)
+        debug_event["output"] = output
+        return output
+    except Exception as exc:
+        debug_event["error"] = repr(exc)
+        raise
+    finally:
+        _write_web_search_debug_event(debug_event)
 
 
 async def _search_results_with_provider(
@@ -210,7 +237,7 @@ async def _search_with_tavily(
         "query": query,
         "max_results": limit,
         "search_depth": "advanced",
-        "include_answer": False,
+        "include_answer": True,
         "include_raw_content": False,
     }
     if allowed_domains:
@@ -242,7 +269,11 @@ async def _search_with_tavily(
         if not url or not title or url in seen_urls:
             continue
         seen_urls.add(url)
-        results.append({"title": title, "url": url})
+        result = {"title": title, "url": url}
+        content = _truncate_text(_clean_text(str(item.get("content") or "")), _MAX_CONTENT_CHARS)
+        if content:
+            result["content"] = content
+        results.append(result)
     return results
 
 
@@ -325,3 +356,27 @@ def _normalize_result_url(url: str) -> str:
 def _clean_text(value: str) -> str:
     normalized = re.sub(r"\s+", " ", unescape(value or "")).strip()
     return normalized
+
+
+def _truncate_text(value: str, max_chars: int) -> str:
+    if len(value) <= max_chars:
+        return value
+    return value[: max_chars - 3].rstrip() + "..."
+
+
+def _write_web_search_debug_event(event: dict[str, Any]) -> None:
+    log_path = os.getenv(_WEB_SEARCH_DEBUG_LOG_ENV, "").strip()
+    if not log_path:
+        return
+
+    payload = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        **event,
+    }
+    try:
+        path = Path(log_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as file:
+            file.write(json.dumps(payload, ensure_ascii=False, default=str) + "\n")
+    except OSError:
+        return

@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import json
 from unittest.mock import AsyncMock
 
 import httpx
@@ -103,18 +104,29 @@ async def test_fetch_duckduckgo_html_translates_http_errors(monkeypatch: pytest.
 
 @pytest.mark.asyncio
 async def test_search_with_tavily_formats_and_deduplicates_results(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured_payload = {}
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        nonlocal captured_payload
+        captured_payload = json.loads(request.content.decode("utf-8"))
+        return response
+
     response = httpx.Response(
         200,
         json={
             "results": [
-                {"title": "deepagents", "url": "https://github.com/langchain-ai/deepagents"},
+                {
+                    "title": "deepagents",
+                    "url": "https://github.com/langchain-ai/deepagents",
+                    "content": " Framework for deep agents. ",
+                },
                 {"title": "duplicate", "url": "https://github.com/langchain-ai/deepagents"},
                 {"title": "", "url": "https://docs.python.org/3/"},
             ]
         },
         request=httpx.Request("POST", "https://api.tavily.com/search"),
     )
-    transport = httpx.MockTransport(lambda request: response)
+    transport = httpx.MockTransport(_handler)
     original_async_client = web_search_module.httpx.AsyncClient
 
     def _client(*args, **kwargs):
@@ -131,9 +143,15 @@ async def test_search_with_tavily_formats_and_deduplicates_results(monkeypatch: 
     )
 
     assert results == [
-        {"title": "deepagents", "url": "https://github.com/langchain-ai/deepagents"},
+        {
+            "title": "deepagents",
+            "url": "https://github.com/langchain-ai/deepagents",
+            "content": "Framework for deep agents.",
+        },
         {"title": "https://docs.python.org/3/", "url": "https://docs.python.org/3/"},
     ]
+    assert captured_payload["include_answer"] is True
+    assert captured_payload["include_raw_content"] is False
 
 
 @pytest.mark.asyncio
@@ -215,7 +233,13 @@ async def test_web_search_formats_results(monkeypatch: pytest.MonkeyPatch) -> No
         "_search_results_with_provider",
         AsyncMock(
             return_value=(
-                [{"title": "deepagents", "url": "https://github.com/langchain-ai/deepagents"}],
+                [
+                    {
+                        "title": "deepagents",
+                        "url": "https://github.com/langchain-ai/deepagents",
+                        "content": "Framework for deep agents.",
+                    }
+                ],
                 "Tavily",
             )
         ),
@@ -227,6 +251,45 @@ async def test_web_search_formats_results(monkeypatch: pytest.MonkeyPatch) -> No
     assert "Provider: Tavily" in result
     assert "1. deepagents" in result
     assert "URL: https://github.com/langchain-ai/deepagents" in result
+    assert "Summary: Framework for deep agents." in result
+
+
+@pytest.mark.asyncio
+async def test_web_search_debug_log_includes_structured_results(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    log_path = tmp_path / "web_search.jsonl"
+    monkeypatch.setenv("WEB_SEARCH_DEBUG_LOG", str(log_path))
+    monkeypatch.setattr(
+        web_search_module,
+        "_search_results_with_provider",
+        AsyncMock(
+            return_value=(
+                [
+                    {
+                        "title": "deepagents",
+                        "url": "https://github.com/langchain-ai/deepagents",
+                        "content": "Framework for deep agents.",
+                    }
+                ],
+                "Tavily",
+            )
+        ),
+    )
+
+    await web_search.coroutine(query="deepagents")
+
+    payload = json.loads(log_path.read_text(encoding="utf-8").splitlines()[-1])
+    assert payload["provider"] == "Tavily"
+    assert payload["result_count"] == 1
+    assert payload["results"] == [
+        {
+            "title": "deepagents",
+            "url": "https://github.com/langchain-ai/deepagents",
+            "content": "Framework for deep agents.",
+        }
+    ]
 
 
 @pytest.mark.asyncio

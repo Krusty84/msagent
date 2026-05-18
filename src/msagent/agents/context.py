@@ -61,6 +61,7 @@ class AgentContext(BaseModel):
     user_memory: str = Field(default="")
     tool_catalog: list[BaseTool] = Field(default_factory=list, exclude=True)
     skill_catalog: list[Skill] = Field(default_factory=list, exclude=True)
+    web_fetch_extractor: Any = Field(default=None, exclude=True)
     tool_output_max_tokens: int | None = None
     retry_notice_handler: Callable[[RetryNotice], None | Awaitable[None]] | None = Field(default=None, exclude=True)
 

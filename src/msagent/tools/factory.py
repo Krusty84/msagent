@@ -57,6 +57,10 @@ class ToolFactory:
         ToolPreview("fetch_skills", "List available skills in the current runtime"),
         ToolPreview("get_skill", "Read skill instructions from SKILL.md"),
         ToolPreview("web_search", "Search the web and return results with source URLs"),
+        ToolPreview(
+            "web_fetch",
+            "Fetch a web page URL and return cleaned, length-limited page text",
+        ),
     )
 
     def get_impl_tools(self) -> list[ToolPreview]:

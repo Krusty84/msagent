@@ -84,7 +84,15 @@ async def test_agent_factory_create_populates_runtime_tools_without_name_error(
     assert hasattr(graph, "_tools_in_catalog")
     assert hasattr(graph, "_agent_backend")
     tool_names = {tool.name for tool in graph._llm_tools}
-    assert {"fetch_tools", "get_tool", "run_tool", "fetch_skills", "get_skill", "web_search"} <= tool_names
+    assert {
+        "fetch_tools",
+        "get_tool",
+        "run_tool",
+        "fetch_skills",
+        "get_skill",
+        "web_search",
+        "web_fetch",
+    } <= tool_names
     assert "write_todos" not in tool_names
 
 
@@ -221,7 +229,9 @@ async def test_agent_factory_create_supports_negative_tool_patterns(
 
 def test_agent_factory_filters_deepagents_default_tools_from_model_request() -> None:
     factory = AgentFactory(llm_factory=_DummyLLMFactory())
-    positive, negative = factory._compile_tool_patterns(["impl:deepagents:get_skill", "mcp:msprof-mcp:*"])
+    positive, negative = factory._compile_tool_patterns(
+        ["impl:deepagents:get_skill", "mcp:msprof-mcp:*"]
+    )
 
     tools = [
         SimpleNamespace(name="execute"),
@@ -297,7 +307,9 @@ async def test_agent_factory_maps_retry_config_to_deepagents_primitives(
 
     middleware = captured["middleware"]
     assert isinstance(middleware, list)
-    tool_retry = next(item for item in middleware if item.__class__.__name__ == "ToolRetryMiddleware")
+    tool_retry = next(
+        item for item in middleware if item.__class__.__name__ == "ToolRetryMiddleware"
+    )
     assert tool_retry.max_retries == 4
     assert tool_retry.tools == []
     assert tool_retry._tool_filter == ["alpha_ping"]
@@ -404,7 +416,9 @@ async def test_agent_factory_adds_tool_result_eviction_middleware_when_output_li
 
     middleware = captured["middleware"]
     assert isinstance(middleware, list)
-    assert any(item.__class__.__name__ == "ToolResultEvictionMiddleware" for item in middleware)
+    assert any(
+        item.__class__.__name__ == "ToolResultEvictionMiddleware" for item in middleware
+    )
 
 
 def test_build_composite_backend_persists_conversation_history_under_workdir(
@@ -433,7 +447,9 @@ def test_build_composite_backend_persists_conversation_history_under_workdir(
     backend = AgentFactory._build_composite_backend(tmp_path)
     conversation_history_backend = backend.routes["/conversation_history/"]
 
-    assert conversation_history_backend.root_dir == (tmp_path / factory_module.CONFIG_CONVERSATION_HISTORY_DIR)
+    assert conversation_history_backend.root_dir == (
+        tmp_path / factory_module.CONFIG_CONVERSATION_HISTORY_DIR
+    )
     assert conversation_history_backend.virtual_mode is True
 
 

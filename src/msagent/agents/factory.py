@@ -38,9 +38,15 @@ from msagent.agents.local_context import ensure_local_context_prompt
 from msagent.core.constants import CONFIG_CONVERSATION_HISTORY_DIR
 from msagent.llms.factory import LLMFactory
 from msagent.middlewares.tool_result_eviction import ToolResultEvictionMiddleware
-from msagent.tools.catalog import fetch_skills, fetch_tools, get_skill, get_tool, run_tool
+from msagent.tools.catalog import (
+    fetch_skills,
+    fetch_tools,
+    get_skill,
+    get_tool,
+    run_tool,
+)
 from msagent.tools.factory import ToolFactory
-from msagent.tools.web_search import web_search
+from msagent.tools.web_search import web_fetch, web_search
 from msagent.utils.deepagents_compat import patch_deepagents_windows_absolute_paths
 
 if TYPE_CHECKING:
@@ -105,17 +111,26 @@ class AgentFactory:
         working_dir = (working_dir or Path.cwd()).resolve()
         resolved_llm = llm_config or config.llm
         retry_cfg = getattr(config, "retry", None)
-        model_retry_cfg = getattr(retry_cfg, "model", None) if retry_cfg is not None else None
-        tool_retry_cfg = getattr(retry_cfg, "tool", None) if retry_cfg is not None else None
+        model_retry_cfg = (
+            getattr(retry_cfg, "model", None) if retry_cfg is not None else None
+        )
+        tool_retry_cfg = (
+            getattr(retry_cfg, "tool", None) if retry_cfg is not None else None
+        )
         llm_max_retries: int | None = None
         llm_timeout_seconds: float | None = None
         if retry_cfg is not None and retry_cfg.enabled:
-            model_enabled = getattr(model_retry_cfg, "enabled", True) if model_retry_cfg is not None else True
+            model_enabled = (
+                getattr(model_retry_cfg, "enabled", True)
+                if model_retry_cfg is not None
+                else True
+            )
             if model_enabled:
                 llm_max_retries = int(getattr(model_retry_cfg, "max_retries", 0))
                 llm_timeout_seconds = (
                     float(getattr(model_retry_cfg, "timeout"))
-                    if model_retry_cfg is not None and getattr(model_retry_cfg, "timeout", None) is not None
+                    if model_retry_cfg is not None
+                    and getattr(model_retry_cfg, "timeout", None) is not None
                     else None
                 )
             else:
@@ -136,6 +151,7 @@ class AgentFactory:
             fetch_skills,
             get_skill,
             web_search,
+            web_fetch,
         ]
         mcp_tools: list[BaseTool] = []
         mcp_module_map: dict[str, str] = {}
@@ -144,9 +160,13 @@ class AgentFactory:
             mcp_tools = list(loaded or [])
             mcp_module_map = dict(getattr(mcp_client, "module_map", {}) or {})
 
-        tool_patterns = list(config.tools.patterns or []) if config.tools is not None else []
+        tool_patterns = (
+            list(config.tools.patterns or []) if config.tools is not None else []
+        )
         mcp_servers = self._collect_mcp_servers(mcp_client, mcp_module_map)
-        positive_patterns, negative_patterns = self._compile_tool_patterns(tool_patterns)
+        positive_patterns, negative_patterns = self._compile_tool_patterns(
+            tool_patterns
+        )
 
         if config.tools is not None:
             runtime_tools, mcp_tools = self._filter_tools_by_patterns(
@@ -210,7 +230,8 @@ class AgentFactory:
             )
         tool_output_max_tokens = (
             int(getattr(config.tools, "output_max_tokens", 0))
-            if config.tools is not None and getattr(config.tools, "output_max_tokens", None) is not None
+            if config.tools is not None
+            and getattr(config.tools, "output_max_tokens", None) is not None
             else None
         )
         if tool_output_max_tokens is not None and tool_output_max_tokens > 0:
@@ -241,17 +262,23 @@ class AgentFactory:
         if (
             retry_cfg is not None
             and retry_cfg.enabled
-            and (getattr(tool_retry_cfg, "enabled", True) if tool_retry_cfg is not None else True)
+            and (
+                getattr(tool_retry_cfg, "enabled", True)
+                if tool_retry_cfg is not None
+                else True
+            )
             and int(getattr(tool_retry_cfg, "max_retries", 0)) > 0
         ):
             tool_names = (
                 list(getattr(tool_retry_cfg, "tools"))
-                if tool_retry_cfg is not None and getattr(tool_retry_cfg, "tools", None) is not None
+                if tool_retry_cfg is not None
+                and getattr(tool_retry_cfg, "tools", None) is not None
                 else None
             )
             retry_on = self._resolve_retry_on_exceptions(
                 list(getattr(tool_retry_cfg, "retry_on"))
-                if tool_retry_cfg is not None and getattr(tool_retry_cfg, "retry_on", None) is not None
+                if tool_retry_cfg is not None
+                and getattr(tool_retry_cfg, "retry_on", None) is not None
                 else []
             )
             tool_retry_kwargs: dict[str, Any] = {
@@ -267,7 +294,9 @@ class AgentFactory:
                 tool_retry_kwargs["retry_on"] = retry_on
             middleware.append(ToolRetryMiddleware(**tool_retry_kwargs))
 
-        middleware.append(_ToolPatternFilterMiddleware(filter_tools=_filter_request_tools))
+        middleware.append(
+            _ToolPatternFilterMiddleware(filter_tools=_filter_request_tools)
+        )
         if context_schema is not None:
             kwargs["context_schema"] = context_schema
 
@@ -484,7 +513,9 @@ class AgentFactory:
                 return False
             return any(fnmatch(name, name_p) for name in names)
 
-        return any(_match(p) for p in positive_patterns) and not any(_match(p) for p in negative_patterns)
+        return any(_match(p) for p in positive_patterns) and not any(
+            _match(p) for p in negative_patterns
+        )
 
     @staticmethod
     def _resolve_existing_paths(paths: Path | list[Path] | None) -> list[str]:
@@ -546,15 +577,21 @@ class AgentFactory:
             "Always call `get_skill(name, category)` before using a skill.",
         ]
         for skill in skills:
-            scripts: list[str] = getattr(skill, "get_script_relative_paths", lambda: [])()
-            scripts_text = f" (scripts: {', '.join(f'`{p}`' for p in scripts)})" if scripts else ""
+            scripts: list[str] = getattr(
+                skill, "get_script_relative_paths", lambda: []
+            )()
+            scripts_text = (
+                f" (scripts: {', '.join(f'`{p}`' for p in scripts)})" if scripts else ""
+            )
             lines.append(
                 f"- {getattr(skill, 'display_name', getattr(skill, 'name', 'unknown'))}: "
                 f"{getattr(skill, 'description', '')}{scripts_text}"
             )
 
         if not use_catalog:
-            lines.append("When scripts are present under `scripts/`, prefer running those scripts.")
+            lines.append(
+                "When scripts are present under `scripts/`, prefer running those scripts."
+            )
         return "\n".join(lines)
 
     @staticmethod

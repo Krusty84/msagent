@@ -57,6 +57,10 @@ class ToolFactory:
         ToolPreview("fetch_skills", "List available skills in the current runtime"),
         ToolPreview("get_skill", "Read skill instructions from SKILL.md"),
         ToolPreview("web_search", "Search the web and return results with source URLs"),
+        ToolPreview(
+            "web_fetch",
+            "Fetch a web page URL and return cleaned, length-limited page text",
+        ),
     )
 
     def get_impl_tools(self) -> list[ToolPreview]:
@@ -69,7 +73,11 @@ class ToolFactory:
         return list(self._BUILTIN_TOOL_PREVIEWS)
 
     def get_skill_catalog_tools(self) -> list[ToolPreview]:
-        return [preview for preview in self._BUILTIN_TOOL_PREVIEWS if "skill" in preview.name]
+        return [
+            preview
+            for preview in self._BUILTIN_TOOL_PREVIEWS
+            if "skill" in preview.name
+        ]
 
     def get_impl_module_map(self) -> dict[str, str]:
         return {preview.name: "deepagents" for preview in self._BUILTIN_TOOL_PREVIEWS}
@@ -86,7 +94,10 @@ class ToolFactory:
     ) -> list[BaseTool]:
         if timeout_seconds is None:
             return tools
-        return [self.wrap_tool_with_timeout(tool, timeout_seconds, source=source) for tool in tools]
+        return [
+            self.wrap_tool_with_timeout(tool, timeout_seconds, source=source)
+            for tool in tools
+        ]
 
     def wrap_tool_with_timeout(
         self,
@@ -130,7 +141,9 @@ class ToolFactory:
 
             # If we're already on an event loop, rely on async path upstream.
             if loop.is_running():
-                raise ToolException(f"Tool '{tool_name}' must run asynchronously in this context.")
+                raise ToolException(
+                    f"Tool '{tool_name}' must run asynchronously in this context."
+                )
             return tool.invoke(payload)
 
         wrapped_metadata = {

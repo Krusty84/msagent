@@ -24,7 +24,7 @@ import os
 import re
 from html import unescape
 from html.parser import HTMLParser
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import parse_qs, unquote, urljoin, urlparse
 
 import httpx
@@ -33,9 +33,12 @@ from pydantic import BaseModel, Field, field_validator
 
 _DUCKDUCKGO_SEARCH_URL = "https://html.duckduckgo.com/html/"
 _TAVILY_SEARCH_URL = "https://api.tavily.com/search"
+_TAVILY_EXTRACT_URL = "https://api.tavily.com/extract"
 _DEFAULT_TIMEOUT_SECONDS = 30.0
 _DEFAULT_RESULT_LIMIT = 5
 _MAX_RESULT_LIMIT = 10
+_DEFAULT_FETCH_MAX_CHARS = 8000
+_MAX_FETCH_CHARS = 20000
 _USER_AGENT = "msagent/0.1 web-search"
 _TAVILY_API_KEY_ENV = "TAVILY_API_KEY"
 
@@ -84,6 +87,41 @@ class WebSearchInput(BaseModel):
                 seen.add(domain)
                 normalized.append(domain)
         return normalized
+
+
+class WebFetchInput(BaseModel):
+    url: str = Field(description="HTTP or HTTPS URL to fetch")
+    extract_mode: Literal["auto", "text", "markdown"] = Field(
+        default="auto",
+        description="Extraction format: auto and markdown return Markdown, text returns plain text",
+    )
+    max_chars: int = Field(
+        default=_DEFAULT_FETCH_MAX_CHARS,
+        ge=1000,
+        le=_MAX_FETCH_CHARS,
+        description="Maximum number of extracted page text characters to return",
+    )
+    query: str | None = Field(
+        default=None,
+        description="Optional keyword query used by Tavily Extract to return the most relevant content chunks.",
+    )
+
+    @field_validator("url")
+    @classmethod
+    def _validate_url(cls, value: str) -> str:
+        normalized = value.strip()
+        parsed = urlparse(normalized)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("url must be an absolute HTTP or HTTPS URL")
+        return normalized
+
+    @field_validator("query")
+    @classmethod
+    def _normalize_optional_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
 
 
 class _DuckDuckGoHTMLParser(HTMLParser):
@@ -166,6 +204,41 @@ async def web_search(
     return "\n".join(lines)
 
 
+@tool("web_fetch", args_schema=WebFetchInput)
+async def web_fetch(
+    *,
+    url: str,
+    extract_mode: Literal["auto", "text", "markdown"] = "auto",
+    max_chars: int = _DEFAULT_FETCH_MAX_CHARS,
+    query: str | None = None,
+    runtime: Any = None,
+) -> str:
+    """Fetch a web page URL and return cleaned, length-limited page content."""
+    del runtime
+
+    try:
+        payload = WebFetchInput(
+            url=url,
+            extract_mode=extract_mode,
+            max_chars=max_chars,
+            query=query,
+        )
+    except ValueError as exc:
+        raise ToolException(str(exc)) from exc
+
+    title, content, truncated = await _fetch_page_text(
+        payload.url,
+        max_chars=payload.max_chars,
+        extract_mode=payload.extract_mode,
+        query=payload.query,
+    )
+
+    lines = [f"Web page content for: {title or payload.url}", f"URL: {payload.url}"]
+    lines.append(f"Content: (truncated to {payload.max_chars} chars)" if truncated else "Content:")
+    lines.append(content or "No readable page text found.")
+    return "\n".join(lines)
+
+
 async def _search_results_with_provider(
     *,
     query: str,
@@ -195,6 +268,72 @@ async def _search_results_with_provider(
         blocked_domains=blocked_domains,
     )
     return filtered, "DuckDuckGo HTML fallback"
+
+
+async def _fetch_page_text(
+    url: str,
+    max_chars: int,
+    extract_mode: Literal["auto", "text", "markdown"] = "auto",
+    query: str | None = None,
+) -> tuple[str, str, bool]:
+    tavily_api_key = os.getenv(_TAVILY_API_KEY_ENV, "").strip()
+    if not tavily_api_key:
+        raise ToolException(f"{_TAVILY_API_KEY_ENV} is required for web_fetch")
+
+    text = await _extract_with_tavily(
+        url=url,
+        api_key=tavily_api_key,
+        extract_mode=extract_mode,
+        query=query,
+    )
+    truncated = len(text) > max_chars
+    return "", _truncate_text(text, max_chars), truncated
+
+
+async def _extract_with_tavily(
+    *,
+    url: str,
+    api_key: str,
+    extract_mode: Literal["auto", "text", "markdown"],
+    query: str | None = None,
+) -> str:
+    payload: dict[str, Any] = {
+        "api_key": api_key,
+        "urls": [url],
+        "extract_depth": "advanced",
+        "format": "text" if extract_mode == "text" else "markdown",
+        "include_images": False,
+    }
+    if query:
+        payload["query"] = query
+        payload["chunks_per_source"] = 5
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=_DEFAULT_TIMEOUT_SECONDS,
+            follow_redirects=True,
+            headers={"Authorization": f"Bearer {api_key}", "User-Agent": _USER_AGENT},
+        ) as client:
+            response = await client.post(_TAVILY_EXTRACT_URL, json=payload)
+            response.raise_for_status()
+    except httpx.HTTPError as exc:
+        raise ToolException(f"Tavily web extract request failed: {exc}") from exc
+
+    try:
+        response_payload = response.json()
+    except ValueError as exc:
+        raise ToolException("Tavily web extract returned invalid JSON") from exc
+
+    results = response_payload.get("results") or []
+    if not results:
+        failed = response_payload.get("failed_results") or []
+        if failed:
+            error = failed[0].get("error") if isinstance(failed[0], dict) else None
+            raise ToolException(f"Tavily web extract returned no content: {error or 'unknown error'}")
+        return ""
+
+    raw_content = results[0].get("raw_content") if isinstance(results[0], dict) else None
+    return _clean_multiline_text(str(raw_content or ""))
 
 
 async def _search_with_tavily(
@@ -325,3 +464,16 @@ def _normalize_result_url(url: str) -> str:
 def _clean_text(value: str) -> str:
     normalized = re.sub(r"\s+", " ", unescape(value or "")).strip()
     return normalized
+
+
+def _clean_multiline_text(value: str) -> str:
+    text = unescape(value or "").replace("\r\n", "\n").replace("\r", "\n")
+    text = re.sub(r"[ \t\f\v]+", " ", text)
+    text = re.sub(r"\n\s*\n+", "\n\n", text)
+    return text.strip()
+
+
+def _truncate_text(value: str, max_chars: int) -> str:
+    if len(value) <= max_chars:
+        return value
+    return value[: max_chars - 3].rstrip() + "..."

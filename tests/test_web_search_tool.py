@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import json
 from unittest.mock import AsyncMock
 
 import httpx
@@ -28,11 +29,14 @@ import msagent.tools.web_search as web_search_module
 from msagent.tools.web_search import (
     WebSearchInput,
     _extract_results,
+    _extract_readable_text,
     _fetch_duckduckgo_html,
+    _fetch_page_text,
     _filter_results,
     _normalize_result_url,
     _search_results_with_provider,
     _search_with_tavily,
+    web_fetch,
     web_search,
 )
 
@@ -86,6 +90,29 @@ def test_normalize_result_url_decodes_duckduckgo_redirect() -> None:
     assert _normalize_result_url(url) == "https://github.com/langchain-ai/deepagents"
 
 
+def test_extract_readable_text_skips_scripts_and_styles() -> None:
+    html = """
+    <html>
+      <head><title> Example Page </title><style>.hidden { display: none; }</style></head>
+      <body>
+        <script>alert("ignore")</script>
+        <h1>Heading</h1>
+        <p> First paragraph. </p>
+        <p>Second paragraph.</p>
+      </body>
+    </html>
+    """
+
+    title, text = _extract_readable_text(html)
+
+    assert title == "Example Page"
+    assert "Heading" in text
+    assert "First paragraph." in text
+    assert "Second paragraph." in text
+    assert "alert" not in text
+    assert "display" not in text
+
+
 @pytest.mark.asyncio
 async def test_fetch_duckduckgo_html_translates_http_errors(monkeypatch: pytest.MonkeyPatch) -> None:
     response = httpx.Response(503, request=httpx.Request("GET", "https://html.duckduckgo.com/html/"))
@@ -102,19 +129,54 @@ async def test_fetch_duckduckgo_html_translates_http_errors(monkeypatch: pytest.
 
 
 @pytest.mark.asyncio
+async def test_fetch_page_text_extracts_and_truncates_html(monkeypatch: pytest.MonkeyPatch) -> None:
+    html = "<html><head><title>Docs</title></head><body><h1>Intro</h1><p>abcdefg</p></body></html>"
+    response = httpx.Response(
+        200,
+        text=html,
+        headers={"content-type": "text/html; charset=utf-8"},
+        request=httpx.Request("GET", "https://example.com/docs"),
+    )
+    transport = httpx.MockTransport(lambda request: response)
+    original_async_client = web_search_module.httpx.AsyncClient
+
+    def _client(*args, **kwargs):
+        return original_async_client(transport=transport)
+
+    monkeypatch.setattr(web_search_module.httpx, "AsyncClient", _client)
+
+    title, content, original_chars, truncated = await _fetch_page_text("https://example.com/docs", 5)
+
+    assert title == "Docs"
+    assert content == "In..."
+    assert original_chars > len(content)
+    assert truncated is True
+
+
+@pytest.mark.asyncio
 async def test_search_with_tavily_formats_and_deduplicates_results(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured_payload = {}
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        nonlocal captured_payload
+        captured_payload = json.loads(request.content.decode("utf-8"))
+        return response
+
     response = httpx.Response(
         200,
         json={
             "results": [
-                {"title": "deepagents", "url": "https://github.com/langchain-ai/deepagents"},
+                {
+                    "title": "deepagents",
+                    "url": "https://github.com/langchain-ai/deepagents",
+                },
                 {"title": "duplicate", "url": "https://github.com/langchain-ai/deepagents"},
                 {"title": "", "url": "https://docs.python.org/3/"},
             ]
         },
         request=httpx.Request("POST", "https://api.tavily.com/search"),
     )
-    transport = httpx.MockTransport(lambda request: response)
+    transport = httpx.MockTransport(_handler)
     original_async_client = web_search_module.httpx.AsyncClient
 
     def _client(*args, **kwargs):
@@ -134,6 +196,8 @@ async def test_search_with_tavily_formats_and_deduplicates_results(monkeypatch: 
         {"title": "deepagents", "url": "https://github.com/langchain-ai/deepagents"},
         {"title": "https://docs.python.org/3/", "url": "https://docs.python.org/3/"},
     ]
+    assert captured_payload["include_answer"] is False
+    assert captured_payload["include_raw_content"] is False
 
 
 @pytest.mark.asyncio
@@ -227,6 +291,58 @@ async def test_web_search_formats_results(monkeypatch: pytest.MonkeyPatch) -> No
     assert "Provider: Tavily" in result
     assert "1. deepagents" in result
     assert "URL: https://github.com/langchain-ai/deepagents" in result
+
+
+@pytest.mark.asyncio
+async def test_web_search_debug_log_includes_structured_results(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    log_path = tmp_path / "web_search.jsonl"
+    monkeypatch.setenv("WEB_SEARCH_DEBUG_LOG", str(log_path))
+    monkeypatch.setattr(
+        web_search_module,
+        "_search_results_with_provider",
+        AsyncMock(
+            return_value=(
+                [{"title": "deepagents", "url": "https://github.com/langchain-ai/deepagents"}],
+                "Tavily",
+            )
+        ),
+    )
+
+    await web_search.coroutine(query="deepagents")
+
+    payload = json.loads(log_path.read_text(encoding="utf-8").splitlines()[-1])
+    assert payload["provider"] == "Tavily"
+    assert payload["result_count"] == 1
+    assert payload["results"] == [{"title": "deepagents", "url": "https://github.com/langchain-ai/deepagents"}]
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_formats_page_content_and_writes_debug_log(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    log_path = tmp_path / "web_search.jsonl"
+    monkeypatch.setenv("WEB_SEARCH_DEBUG_LOG", str(log_path))
+    monkeypatch.setattr(
+        web_search_module,
+        "_fetch_page_text",
+        AsyncMock(return_value=("Docs", "Useful content.", 15, False)),
+    )
+
+    result = await web_fetch.coroutine(url="https://example.com/docs")
+
+    assert "Web page content for: Docs" in result
+    assert "URL: https://example.com/docs" in result
+    assert "Useful content." in result
+
+    payload = json.loads(log_path.read_text(encoding="utf-8").splitlines()[-1])
+    assert payload["tool"] == "web_fetch"
+    assert payload["url"] == "https://example.com/docs"
+    assert payload["title"] == "Docs"
+    assert payload["content"] == "Useful content."
 
 
 @pytest.mark.asyncio

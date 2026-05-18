@@ -20,10 +20,13 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
+from datetime import datetime, timezone
 from html import unescape
 from html.parser import HTMLParser
+from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urljoin, urlparse
 
@@ -36,8 +39,11 @@ _TAVILY_SEARCH_URL = "https://api.tavily.com/search"
 _DEFAULT_TIMEOUT_SECONDS = 30.0
 _DEFAULT_RESULT_LIMIT = 5
 _MAX_RESULT_LIMIT = 10
+_DEFAULT_FETCH_MAX_CHARS = 8000
+_MAX_FETCH_CHARS = 20000
 _USER_AGENT = "msagent/0.1 web-search"
 _TAVILY_API_KEY_ENV = "TAVILY_API_KEY"
+_WEB_SEARCH_DEBUG_LOG_ENV = "WEB_SEARCH_DEBUG_LOG"
 
 
 class WebSearchInput(BaseModel):
@@ -86,6 +92,25 @@ class WebSearchInput(BaseModel):
         return normalized
 
 
+class WebFetchInput(BaseModel):
+    url: str = Field(description="HTTP or HTTPS URL to fetch")
+    max_chars: int = Field(
+        default=_DEFAULT_FETCH_MAX_CHARS,
+        ge=1000,
+        le=_MAX_FETCH_CHARS,
+        description="Maximum number of extracted page text characters to return",
+    )
+
+    @field_validator("url")
+    @classmethod
+    def _validate_url(cls, value: str) -> str:
+        normalized = value.strip()
+        parsed = urlparse(normalized)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("url must be an absolute HTTP or HTTPS URL")
+        return normalized
+
+
 class _DuckDuckGoHTMLParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__()
@@ -119,6 +144,45 @@ class _DuckDuckGoHTMLParser(HTMLParser):
         self._in_title = False
 
 
+class _ReadableHTMLParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.title = ""
+        self.text_parts: list[str] = []
+        self._skip_depth = 0
+        self._in_title = False
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        del attrs
+        tag_name = tag.lower()
+        if tag_name in {"script", "style", "noscript", "svg"}:
+            self._skip_depth += 1
+        elif tag_name == "title":
+            self._in_title = True
+        elif tag_name in {"p", "br", "div", "section", "article", "li", "tr", "h1", "h2", "h3", "h4"}:
+            self.text_parts.append("\n")
+
+    def handle_endtag(self, tag: str) -> None:
+        tag_name = tag.lower()
+        if tag_name in {"script", "style", "noscript", "svg"} and self._skip_depth:
+            self._skip_depth -= 1
+        elif tag_name == "title":
+            self._in_title = False
+        elif tag_name in {"p", "div", "section", "article", "li", "tr", "h1", "h2", "h3", "h4"}:
+            self.text_parts.append("\n")
+
+    def handle_data(self, data: str) -> None:
+        if self._skip_depth:
+            return
+        text = _clean_text(data)
+        if not text:
+            return
+        if self._in_title:
+            self.title = _clean_text(f"{self.title} {text}")
+        else:
+            self.text_parts.append(text)
+
+
 @tool("web_search", args_schema=WebSearchInput)
 async def web_search(
     *,
@@ -131,6 +195,13 @@ async def web_search(
     """Search the web and return compact results with source URLs."""
     del runtime
 
+    debug_event: dict[str, Any] = {
+        "tool": "web_search",
+        "query": query,
+        "allowed_domains": allowed_domains,
+        "blocked_domains": blocked_domains,
+        "limit": limit,
+    }
     try:
         payload = WebSearchInput(
             query=query,
@@ -139,31 +210,91 @@ async def web_search(
             limit=limit,
         )
     except ValueError as exc:
+        debug_event["error"] = str(exc)
+        _write_web_search_debug_event(debug_event)
         raise ToolException(str(exc)) from exc
 
     allowed_domain_set = set(payload.allowed_domains)
     blocked_domain_set = set(payload.blocked_domains)
 
-    results, provider = await _search_results_with_provider(
-        query=payload.query,
-        allowed_domains=allowed_domain_set,
-        blocked_domains=blocked_domain_set,
-        limit=payload.limit,
-    )
+    try:
+        results, provider = await _search_results_with_provider(
+            query=payload.query,
+            allowed_domains=allowed_domain_set,
+            blocked_domains=blocked_domain_set,
+            limit=payload.limit,
+        )
+        debug_event["provider"] = provider
+        debug_event["result_count"] = len(results)
+        debug_event["results"] = results[: payload.limit]
 
-    if not results:
-        filters = []
-        if payload.allowed_domains:
-            filters.append(f"allowed={','.join(payload.allowed_domains)}")
-        if payload.blocked_domains:
-            filters.append(f"blocked={','.join(payload.blocked_domains)}")
-        suffix = f" ({'; '.join(filters)})" if filters else ""
-        return f"No web results found for query: {payload.query}{suffix}"
+        if not results:
+            filters = []
+            if payload.allowed_domains:
+                filters.append(f"allowed={','.join(payload.allowed_domains)}")
+            if payload.blocked_domains:
+                filters.append(f"blocked={','.join(payload.blocked_domains)}")
+            suffix = f" ({'; '.join(filters)})" if filters else ""
+            output = f"No web results found for query: {payload.query}{suffix}"
+        else:
+            lines = [f"Web search results for: {payload.query}", f"Provider: {provider}"]
+            for index, result in enumerate(results[: payload.limit], start=1):
+                lines.append(f"{index}. {result['title']}\n   URL: {result['url']}")
+            output = "\n".join(lines)
 
-    lines = [f"Web search results for: {payload.query}", f"Provider: {provider}"]
-    for index, result in enumerate(results[: payload.limit], start=1):
-        lines.append(f"{index}. {result['title']}\n   URL: {result['url']}")
-    return "\n".join(lines)
+        debug_event["output"] = output
+        return output
+    except Exception as exc:
+        debug_event["error"] = repr(exc)
+        raise
+    finally:
+        _write_web_search_debug_event(debug_event)
+
+
+@tool("web_fetch", args_schema=WebFetchInput)
+async def web_fetch(
+    *,
+    url: str,
+    max_chars: int = _DEFAULT_FETCH_MAX_CHARS,
+    runtime: Any = None,
+) -> str:
+    """Fetch a web page URL and return cleaned, length-limited page text."""
+    del runtime
+
+    debug_event: dict[str, Any] = {
+        "tool": "web_fetch",
+        "url": url,
+        "max_chars": max_chars,
+    }
+    try:
+        payload = WebFetchInput(url=url, max_chars=max_chars)
+    except ValueError as exc:
+        debug_event["error"] = str(exc)
+        _write_web_search_debug_event(debug_event)
+        raise ToolException(str(exc)) from exc
+
+    try:
+        title, content, original_chars, truncated = await _fetch_page_text(payload.url, payload.max_chars)
+        debug_event["title"] = title
+        debug_event["content_chars"] = len(content)
+        debug_event["original_chars"] = original_chars
+        debug_event["truncated"] = truncated
+        debug_event["content"] = content
+
+        lines = [f"Web page content for: {title or payload.url}", f"URL: {payload.url}"]
+        if truncated:
+            lines.append(f"Content: (truncated to {payload.max_chars} chars)")
+        else:
+            lines.append("Content:")
+        lines.append(content or "No readable page text found.")
+        output = "\n".join(lines)
+        debug_event["output"] = output
+        return output
+    except Exception as exc:
+        debug_event["error"] = repr(exc)
+        raise
+    finally:
+        _write_web_search_debug_event(debug_event)
 
 
 async def _search_results_with_provider(
@@ -195,6 +326,33 @@ async def _search_results_with_provider(
         blocked_domains=blocked_domains,
     )
     return filtered, "DuckDuckGo HTML fallback"
+
+
+async def _fetch_page_text(url: str, max_chars: int) -> tuple[str, str, int, bool]:
+    try:
+        async with httpx.AsyncClient(
+            timeout=_DEFAULT_TIMEOUT_SECONDS,
+            follow_redirects=True,
+            headers={"User-Agent": _USER_AGENT},
+        ) as client:
+            response = await client.get(url)
+            response.raise_for_status()
+    except httpx.HTTPError as exc:
+        raise ToolException(f"Web fetch request failed: {exc}") from exc
+
+    content_type = response.headers.get("content-type", "")
+    if content_type and "text/html" not in content_type and "text/plain" not in content_type:
+        raise ToolException(f"Web fetch only supports text/html or text/plain content, got: {content_type}")
+
+    if "text/plain" in content_type:
+        title = ""
+        text = _clean_multiline_text(response.text)
+    else:
+        title, text = _extract_readable_text(response.text)
+
+    original_chars = len(text)
+    truncated_text = _truncate_text(text, max_chars)
+    return title, truncated_text, original_chars, len(truncated_text) < original_chars
 
 
 async def _search_with_tavily(
@@ -325,3 +483,41 @@ def _normalize_result_url(url: str) -> str:
 def _clean_text(value: str) -> str:
     normalized = re.sub(r"\s+", " ", unescape(value or "")).strip()
     return normalized
+
+
+def _clean_multiline_text(value: str) -> str:
+    text = unescape(value or "").replace("\r\n", "\n").replace("\r", "\n")
+    text = re.sub(r"[ \t\f\v]+", " ", text)
+    text = re.sub(r"\n\s*\n+", "\n\n", text)
+    return text.strip()
+
+
+def _extract_readable_text(html: str) -> tuple[str, str]:
+    parser = _ReadableHTMLParser()
+    parser.feed(html)
+    text = _clean_multiline_text(" ".join(parser.text_parts))
+    return parser.title, text
+
+
+def _truncate_text(value: str, max_chars: int) -> str:
+    if len(value) <= max_chars:
+        return value
+    return value[: max_chars - 3].rstrip() + "..."
+
+
+def _write_web_search_debug_event(event: dict[str, Any]) -> None:
+    log_path = os.getenv(_WEB_SEARCH_DEBUG_LOG_ENV, "").strip()
+    if not log_path:
+        return
+
+    payload = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        **event,
+    }
+    try:
+        path = Path(log_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as file:
+            file.write(json.dumps(payload, ensure_ascii=False, default=str) + "\n")
+    except OSError:
+        return

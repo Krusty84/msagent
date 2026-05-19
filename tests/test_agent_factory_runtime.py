@@ -107,7 +107,14 @@ async def test_agent_factory_create_populates_runtime_tools_without_name_error(
     assert hasattr(graph, "_tools_in_catalog")
     assert hasattr(graph, "_agent_backend")
     tool_names = {tool.name for tool in graph._llm_tools}
-    assert {"fetch_tools", "get_tool", "run_tool", "fetch_skills", "get_skill", "web_search"} <= tool_names
+    assert {
+        "fetch_tools",
+        "get_tool",
+        "run_tool",
+        "fetch_skills",
+        "get_skill",
+        "web_search",
+    } <= tool_names
     assert "write_todos" not in tool_names
 
 

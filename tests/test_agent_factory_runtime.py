@@ -84,7 +84,15 @@ async def test_agent_factory_create_populates_runtime_tools_without_name_error(
     assert hasattr(graph, "_tools_in_catalog")
     assert hasattr(graph, "_agent_backend")
     tool_names = {tool.name for tool in graph._llm_tools}
-    assert {"fetch_tools", "get_tool", "run_tool", "fetch_skills", "get_skill", "web_search"} <= tool_names
+    assert {
+        "fetch_tools",
+        "get_tool",
+        "run_tool",
+        "fetch_skills",
+        "get_skill",
+        "web_search",
+        "web_fetch",
+    } <= tool_names
     assert "write_todos" not in tool_names
 
 
@@ -239,6 +247,44 @@ def test_agent_factory_filters_deepagents_default_tools_from_model_request() -> 
     )
 
     assert {tool.name for tool in filtered} == {"get_skill", "msprof-mcp_ping"}
+
+
+@pytest.mark.asyncio
+async def test_agent_factory_removes_builtin_web_tools_when_search_mcp_enabled(
+    monkeypatch,
+) -> None:
+    _patch_deepagent_entrypoints(monkeypatch)
+
+    class _SearchMCPClient:
+        module_map = {
+            "tavily-mcp_search": "mcp:tavily-mcp",
+        }
+        config = SimpleNamespace(
+            servers={
+                "tavily-mcp": SimpleNamespace(enabled=True),
+            }
+        )
+
+        async def tools(self):
+            return [SimpleNamespace(name="tavily-mcp_search")]
+
+    config = SimpleNamespace(
+        name="msagent",
+        prompt="test prompt",
+        llm=SimpleNamespace(),
+        tools=None,
+    )
+
+    graph = await AgentFactory(llm_factory=_DummyLLMFactory()).create(
+        config=config,
+        mcp_client=_SearchMCPClient(),
+        llm_config=SimpleNamespace(),
+    )
+
+    tool_names = {tool.name for tool in graph._llm_tools}
+    assert "web_search" not in tool_names
+    assert "web_fetch" not in tool_names
+    assert "tavily-mcp_search" in tool_names
 
 
 @pytest.mark.asyncio

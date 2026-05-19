@@ -21,9 +21,10 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
+from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 
 import msagent.agents.factory as factory_module
-from msagent.agents.factory import AgentFactory
+from msagent.agents.factory import AgentFactory, _WebToolFailureStopMiddleware
 
 
 class _DummyLLMFactory:
@@ -84,7 +85,15 @@ async def test_agent_factory_create_populates_runtime_tools_without_name_error(
     assert hasattr(graph, "_tools_in_catalog")
     assert hasattr(graph, "_agent_backend")
     tool_names = {tool.name for tool in graph._llm_tools}
-    assert {"fetch_tools", "get_tool", "run_tool", "fetch_skills", "get_skill", "web_search"} <= tool_names
+    assert {
+        "fetch_tools",
+        "get_tool",
+        "run_tool",
+        "fetch_skills",
+        "get_skill",
+        "web_search",
+        "web_fetch",
+    } <= tool_names
     assert "write_todos" not in tool_names
 
 
@@ -239,6 +248,151 @@ def test_agent_factory_filters_deepagents_default_tools_from_model_request() -> 
     )
 
     assert {tool.name for tool in filtered} == {"get_skill", "msprof-mcp_ping"}
+
+
+def test_web_tool_failure_stop_middleware_detects_latest_terminal_web_failure() -> None:
+    messages = [
+        HumanMessage(content="first request"),
+        ToolMessage(
+            content="No web results found for query: old one (reason=timeout)\n"
+            "Model instruction: do not retry web_search or web_fetch again for this request.",
+            name="web_search",
+            tool_call_id="call-1",
+        ),
+        HumanMessage(content="new request"),
+        ToolMessage(
+            content="Unable to fetch usable web page content from: https://example.com "
+            "(reason=URL fetch request failed with HTTP 404)\n"
+            "Model instruction: do not retry web_search or web_fetch again for this request.",
+            name="web_fetch",
+            tool_call_id="call-2",
+        ),
+    ]
+
+    failure = _WebToolFailureStopMiddleware._latest_terminal_web_failure(messages)
+
+    assert failure is not None
+    assert "HTTP 404" in failure
+    assert "old one" not in failure
+
+
+def test_web_tool_failure_stop_middleware_clears_tools_after_terminal_web_failure() -> None:
+    middleware = _WebToolFailureStopMiddleware()
+    request = SimpleNamespace(
+        messages=[
+            HumanMessage(content="please search"),
+            ToolMessage(
+                content="No web results found for query: qwen3 (reason=search timed out after 60s; attempts=3)\n"
+                "Model instruction: do not retry web_search or web_fetch again for this request.",
+                name="web_search",
+                tool_call_id="call-1",
+            ),
+        ],
+        tools=[SimpleNamespace(name="execute"), SimpleNamespace(name="web_search")],
+        tool_choice="auto",
+        system_message=SystemMessage(content="base system"),
+    )
+
+    def _override(**overrides):
+        data = {
+            "messages": request.messages,
+            "tools": request.tools,
+            "tool_choice": request.tool_choice,
+            "system_message": request.system_message,
+            "system_prompt": None,
+        }
+        data.update(overrides)
+        return SimpleNamespace(**data, override=_override)
+
+    request.override = _override
+
+    updated = middleware._maybe_force_final_response(request)
+
+    assert updated.tools == []
+    assert updated.tool_choice is None
+    assert isinstance(updated.system_message, SystemMessage)
+    assert "Do not call any more tools, including execute." in str(updated.system_message.content)
+    assert "search timed out after 60s" in str(updated.system_message.content)
+
+
+@pytest.mark.asyncio
+async def test_agent_factory_prefers_tavily_when_api_key_present(
+    monkeypatch,
+) -> None:
+    _patch_deepagent_entrypoints(monkeypatch)
+    monkeypatch.setenv("TAVILY_API_KEY", "test-key")
+
+    class _SearchMCPClient:
+        module_map = {
+            "tavily-mcp_search": "mcp:tavily-mcp",
+        }
+        config = SimpleNamespace(
+            servers={
+                "tavily-mcp": SimpleNamespace(enabled=True, env={}),
+            }
+        )
+
+        async def tools(self):
+            return [SimpleNamespace(name="tavily-mcp_search")]
+
+    config = SimpleNamespace(
+        name="msagent",
+        prompt="test prompt",
+        llm=SimpleNamespace(),
+        tools=None,
+    )
+
+    graph = await AgentFactory(llm_factory=_DummyLLMFactory()).create(
+        config=config,
+        mcp_client=_SearchMCPClient(),
+        llm_config=SimpleNamespace(),
+    )
+
+    tool_names = {tool.name for tool in graph._llm_tools}
+    assert "web_search" not in tool_names
+    assert "web_fetch" not in tool_names
+    assert "tavily-mcp_search" in tool_names
+
+
+@pytest.mark.asyncio
+async def test_agent_factory_keeps_builtin_web_tools_when_tavily_has_no_key(
+    monkeypatch,
+) -> None:
+    _patch_deepagent_entrypoints(monkeypatch)
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+
+    class _SearchMCPClient:
+        module_map = {
+            "tavily-mcp_search": "mcp:tavily-mcp",
+        }
+        config = SimpleNamespace(
+            servers={
+                "tavily-mcp": SimpleNamespace(enabled=True, env={}),
+            }
+        )
+
+        async def tools(self):
+            return [SimpleNamespace(name="tavily-mcp_search")]
+
+    config = SimpleNamespace(
+        name="msagent",
+        prompt="test prompt",
+        llm=SimpleNamespace(),
+        tools=None,
+    )
+
+    graph = await AgentFactory(llm_factory=_DummyLLMFactory()).create(
+        config=config,
+        mcp_client=_SearchMCPClient(),
+        llm_config=SimpleNamespace(),
+    )
+
+    tool_names = {tool.name for tool in graph._llm_tools}
+    assert "web_search" in tool_names
+    assert "web_fetch" in tool_names
+    assert "tavily-mcp_search" in tool_names
+
+
 
 
 @pytest.mark.asyncio

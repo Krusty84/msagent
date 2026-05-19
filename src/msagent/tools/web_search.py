@@ -20,28 +20,48 @@
 
 from __future__ import annotations
 
-import os
+import asyncio
 import re
+from dataclasses import dataclass
 from html import unescape
 from html.parser import HTMLParser
 from typing import Any
-from urllib.parse import parse_qs, unquote, urljoin, urlparse
+from urllib.parse import urlparse
 
 import httpx
 from langchain_core.tools import ToolException, tool
 from pydantic import BaseModel, Field, field_validator
 
 _DUCKDUCKGO_SEARCH_URL = "https://html.duckduckgo.com/html/"
-_TAVILY_SEARCH_URL = "https://api.tavily.com/search"
 _DEFAULT_TIMEOUT_SECONDS = 30.0
+_SEARCH_DEADLINE_SECONDS = 60.0
+_SEARCH_MAX_ATTEMPTS = 3
 _DEFAULT_RESULT_LIMIT = 5
 _MAX_RESULT_LIMIT = 10
+_DEFAULT_URL_FETCH_MAX_CHARS = 8000
 _USER_AGENT = "msagent/0.1 web-search"
-_TAVILY_API_KEY_ENV = "TAVILY_API_KEY"
+_BROWSER_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/125.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+}
+
+
+@dataclass(frozen=True, slots=True)
+class SearchFailure:
+    """Explain why web search returned no usable results."""
+
+    reason: str
+    attempts: int = 0
+    provider: str = "DuckDuckGo HTML"
 
 
 class WebSearchInput(BaseModel):
-    query: str = Field(description="Search query")
+    query: str = Field(description="Search keywords used to find matching web page URLs")
     allowed_domains: list[str] = Field(
         default_factory=list,
         description="Only include results from these domains",
@@ -86,37 +106,143 @@ class WebSearchInput(BaseModel):
         return normalized
 
 
+class WebFetchInput(BaseModel):
+    url: str = Field(description="HTTP or HTTPS URL, or bare domain URL, to fetch")
+    query: str | None = Field(
+        default=None,
+        description="Optional keywords used to extract relevant snippets from the fetched page content",
+    )
+    max_chars: int = Field(
+        default=_DEFAULT_URL_FETCH_MAX_CHARS,
+        ge=1000,
+        le=20000,
+        description="Maximum fetched page text characters to return",
+    )
+
+    @field_validator("url")
+    @classmethod
+    def _validate_url(cls, value: str) -> str:
+        normalized = _normalize_direct_url(value)
+        if normalized is None:
+            raise ValueError("url must be an HTTP or HTTPS URL, or a bare domain URL")
+        return normalized
+
+    @field_validator("query")
+    @classmethod
+    def _normalize_optional_query(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+
 class _DuckDuckGoHTMLParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__()
         self.results: list[dict[str, str]] = []
-        self._in_title = False
+        self._capture_depth = 0
         self._current: dict[str, str] | None = None
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         if tag != "a":
             return
         attr_map = dict(attrs)
-        href = attr_map.get("href") or ""
-        class_name = attr_map.get("class") or ""
-        if "result__a" not in class_name or not href:
+        href = _normalize_result_url(attr_map.get("href") or "")
+        classes = (attr_map.get("class") or "").split()
+        if not href or not _is_search_result_url(href):
             return
-        self._current = {"title": "", "url": href.strip()}
-        self._in_title = True
+        if "result__a" not in classes and "result-link" not in classes:
+            return
+        self._current = {"title": "", "url": href}
+        self._capture_depth = 1
 
     def handle_data(self, data: str) -> None:
-        if self._in_title and self._current is not None:
+        if self._capture_depth and self._current is not None:
             self._current["title"] += data
 
     def handle_endtag(self, tag: str) -> None:
-        if tag != "a" or not self._in_title or self._current is None:
+        if tag != "a" or not self._capture_depth or self._current is None:
+            return
+        self._capture_depth -= 1
+        if self._capture_depth:
             return
         title = _clean_text(self._current.get("title", ""))
-        url = _normalize_result_url(self._current.get("url", ""))
+        url = self._current.get("url", "").strip()
         if title and url:
             self.results.append({"title": title, "url": url})
         self._current = None
+
+
+class _ReadableHTMLParser(HTMLParser):
+    _SKIPPED_TAGS = {"script", "style", "noscript", "svg", "canvas"}
+    _BLOCK_TAGS = {
+        "article",
+        "aside",
+        "blockquote",
+        "br",
+        "dd",
+        "div",
+        "dl",
+        "dt",
+        "figcaption",
+        "figure",
+        "footer",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "header",
+        "hr",
+        "li",
+        "main",
+        "nav",
+        "ol",
+        "p",
+        "pre",
+        "section",
+        "table",
+        "td",
+        "th",
+        "tr",
+        "ul",
+    }
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.title = ""
+        self.text_parts: list[str] = []
         self._in_title = False
+        self._skip_depth = 0
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        del attrs
+        normalized = tag.lower()
+        if normalized in self._SKIPPED_TAGS:
+            self._skip_depth += 1
+            return
+        if normalized == "title":
+            self._in_title = True
+        if normalized in self._BLOCK_TAGS:
+            self.text_parts.append("\n")
+
+    def handle_data(self, data: str) -> None:
+        if self._skip_depth:
+            return
+        if self._in_title:
+            self.title += data
+        self.text_parts.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        normalized = tag.lower()
+        if normalized in self._SKIPPED_TAGS and self._skip_depth:
+            self._skip_depth -= 1
+            return
+        if normalized == "title":
+            self._in_title = False
+        if normalized in self._BLOCK_TAGS:
+            self.text_parts.append("\n")
 
 
 @tool("web_search", args_schema=WebSearchInput)
@@ -128,7 +254,7 @@ async def web_search(
     limit: int = _DEFAULT_RESULT_LIMIT,
     runtime: Any = None,
 ) -> str:
-    """Search the web and return compact results with source URLs."""
+    """Search the web for URLs matching a keyword query."""
     del runtime
 
     try:
@@ -144,7 +270,7 @@ async def web_search(
     allowed_domain_set = set(payload.allowed_domains)
     blocked_domain_set = set(payload.blocked_domains)
 
-    results, provider = await _search_results_with_provider(
+    results, failure = await _run_search_with_deadline(
         query=payload.query,
         allowed_domains=allowed_domain_set,
         blocked_domains=blocked_domain_set,
@@ -152,98 +278,126 @@ async def web_search(
     )
 
     if not results:
-        filters = []
-        if payload.allowed_domains:
-            filters.append(f"allowed={','.join(payload.allowed_domains)}")
-        if payload.blocked_domains:
-            filters.append(f"blocked={','.join(payload.blocked_domains)}")
-        suffix = f" ({'; '.join(filters)})" if filters else ""
-        return f"No web results found for query: {payload.query}{suffix}"
+        return _format_no_results_message(
+            query=payload.query,
+            failure=failure or SearchFailure(reason="unknown search failure"),
+            allowed_domains=payload.allowed_domains,
+            blocked_domains=payload.blocked_domains,
+        )
 
-    lines = [f"Web search results for: {payload.query}", f"Provider: {provider}"]
+    provider = failure.provider if failure is not None else "DuckDuckGo HTML"
+    lines = [f"Web search URL results for: {payload.query}", f"Provider: {provider}"]
     for index, result in enumerate(results[: payload.limit], start=1):
         lines.append(f"{index}. {result['title']}\n   URL: {result['url']}")
     return "\n".join(lines)
 
 
-async def _search_results_with_provider(
+@tool("web_fetch", args_schema=WebFetchInput)
+async def web_fetch(
+    *,
+    url: str,
+    query: str | None = None,
+    max_chars: int = _DEFAULT_URL_FETCH_MAX_CHARS,
+    runtime: Any = None,
+) -> str:
+    """Fetch a URL and return page content, optionally narrowed to query-matching snippets."""
+    del runtime
+
+    try:
+        payload = WebFetchInput(
+            url=url,
+            query=query,
+            max_chars=max_chars,
+        )
+    except ValueError as exc:
+        raise ToolException(str(exc)) from exc
+
+    title, content, truncated = await _fetch_url_text(payload.url, max_chars=payload.max_chars)
+    if payload.query:
+        content = _extract_relevant_snippets(content, payload.query, max_chars=payload.max_chars)
+        truncated = False
+
+    lines = [f"Web page content for: {title or payload.url}", f"URL: {payload.url}"]
+    if payload.query:
+        lines.append(f"Query: {payload.query}")
+    lines.append(f"Content: (truncated to {payload.max_chars} chars)" if truncated else "Content:")
+    lines.append(content or "No readable page text found.")
+    return "\n".join(lines)
+
+
+async def _run_search_with_deadline(
     *,
     query: str,
     allowed_domains: set[str],
     blocked_domains: set[str],
     limit: int,
-) -> tuple[list[dict[str, str]], str]:
-    tavily_api_key = os.getenv(_TAVILY_API_KEY_ENV, "").strip()
-    if tavily_api_key:
-        try:
-            results = await _search_with_tavily(
+) -> tuple[list[dict[str, str]], SearchFailure | None]:
+    try:
+        return await asyncio.wait_for(
+            _search_result_urls(
                 query=query,
-                api_key=tavily_api_key,
                 allowed_domains=allowed_domains,
                 blocked_domains=blocked_domains,
                 limit=limit,
-            )
-            return results, "Tavily"
-        except ToolException:
-            pass
-
-    html = await _fetch_duckduckgo_html(query)
-    results = _extract_results(html)
-    filtered = _filter_results(
-        results,
-        allowed_domains=allowed_domains,
-        blocked_domains=blocked_domains,
-    )
-    return filtered, "DuckDuckGo HTML fallback"
+            ),
+            timeout=_SEARCH_DEADLINE_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        return [], SearchFailure(
+            reason=f"search timed out after {_SEARCH_DEADLINE_SECONDS:.0f}s",
+            attempts=_SEARCH_MAX_ATTEMPTS,
+        )
 
 
-async def _search_with_tavily(
+async def _search_result_urls(
     *,
     query: str,
-    api_key: str,
     allowed_domains: set[str],
     blocked_domains: set[str],
     limit: int,
-) -> list[dict[str, str]]:
-    payload: dict[str, Any] = {
-        "api_key": api_key,
-        "query": query,
-        "max_results": limit,
-        "search_depth": "advanced",
-        "include_answer": False,
-        "include_raw_content": False,
-    }
-    if allowed_domains:
-        payload["include_domains"] = sorted(allowed_domains)
-    if blocked_domains:
-        payload["exclude_domains"] = sorted(blocked_domains)
+) -> tuple[list[dict[str, str]], SearchFailure | None]:
+    last_reason = "search returned no usable results"
+    attempts = 0
 
-    try:
-        async with httpx.AsyncClient(
-            timeout=_DEFAULT_TIMEOUT_SECONDS,
-            follow_redirects=True,
-            headers={"User-Agent": _USER_AGENT},
-        ) as client:
-            response = await client.post(_TAVILY_SEARCH_URL, json=payload)
-            response.raise_for_status()
-    except httpx.HTTPError as exc:
-        raise ToolException(f"Tavily web search request failed: {exc}") from exc
-
-    try:
-        response_payload = response.json()
-    except ValueError as exc:
-        raise ToolException("Tavily web search returned invalid JSON") from exc
-
-    results: list[dict[str, str]] = []
-    seen_urls: set[str] = set()
-    for item in response_payload.get("results", []) or []:
-        url = str(item.get("url") or "").strip()
-        title = _clean_text(str(item.get("title") or url))
-        if not url or not title or url in seen_urls:
+    for attempts in range(1, _SEARCH_MAX_ATTEMPTS + 1):
+        html, fetch_error = await _try_fetch_duckduckgo_html(query)
+        if fetch_error is not None:
+            last_reason = fetch_error
             continue
-        seen_urls.add(url)
-        results.append({"title": title, "url": url})
-    return results
+        if not html or not html.strip():
+            last_reason = "search provider returned an empty response"
+            continue
+
+        results = _extract_results(html)
+        if not results:
+            last_reason = "search provider returned no result entries"
+            continue
+
+        filtered = _filter_results(
+            results,
+            allowed_domains=allowed_domains,
+            blocked_domains=blocked_domains,
+        )
+        if filtered:
+            return filtered[:limit], SearchFailure(
+                reason="search succeeded",
+                attempts=attempts,
+            )
+
+        last_reason = _build_filtered_out_reason(
+            allowed_domains=allowed_domains,
+            blocked_domains=blocked_domains,
+        )
+
+    return [], SearchFailure(reason=last_reason, attempts=attempts)
+
+
+async def _try_fetch_duckduckgo_html(query: str) -> tuple[str | None, str | None]:
+    try:
+        html = await _fetch_duckduckgo_html(query)
+    except ToolException as exc:
+        return None, str(exc)
+    return html, None
 
 
 async def _fetch_duckduckgo_html(query: str) -> str:
@@ -251,13 +405,34 @@ async def _fetch_duckduckgo_html(query: str) -> str:
         async with httpx.AsyncClient(
             timeout=_DEFAULT_TIMEOUT_SECONDS,
             follow_redirects=True,
-            headers={"User-Agent": _USER_AGENT},
+            headers=_BROWSER_HEADERS,
         ) as client:
             response = await client.get(_DUCKDUCKGO_SEARCH_URL, params={"q": query})
             response.raise_for_status()
+    except httpx.TimeoutException as exc:
+        raise ToolException(f"DuckDuckGo web search request timed out: {exc}") from exc
     except httpx.HTTPError as exc:
         raise ToolException(f"DuckDuckGo web search request failed: {exc}") from exc
     return response.text
+
+
+async def _fetch_url_text(url: str, *, max_chars: int = _DEFAULT_URL_FETCH_MAX_CHARS) -> tuple[str, str, bool]:
+    try:
+        async with httpx.AsyncClient(
+            timeout=_DEFAULT_TIMEOUT_SECONDS,
+            follow_redirects=True,
+            headers=_BROWSER_HEADERS,
+        ) as client:
+            response = await client.get(url)
+            response.raise_for_status()
+    except httpx.TimeoutException as exc:
+        raise ToolException(f"URL fetch request timed out: {exc}") from exc
+    except httpx.HTTPError as exc:
+        raise ToolException(f"URL fetch request failed: {exc}") from exc
+
+    title, text = _extract_page_text(response.text)
+    truncated = len(text) > max_chars
+    return title, _truncate_text(text, max_chars), truncated
 
 
 def _extract_results(html: str) -> list[dict[str, str]]:
@@ -272,6 +447,27 @@ def _extract_results(html: str) -> list[dict[str, str]]:
         seen_urls.add(url)
         results.append(result)
     return results
+
+
+def _is_search_result_url(url: str) -> bool:
+    parsed = urlparse(unescape(url.strip()))
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return False
+    hostname = (parsed.hostname or "").lower()
+    blocked_hosts = {
+        "duckduckgo.com",
+        "www.duckduckgo.com",
+        "html.duckduckgo.com",
+    }
+    return hostname not in blocked_hosts and not hostname.endswith(".duckduckgo.com")
+
+
+def _extract_page_text(html: str) -> tuple[str, str]:
+    parser = _ReadableHTMLParser()
+    parser.feed(html)
+    title = _clean_text(parser.title)
+    text = _clean_multiline_text(" ".join(parser.text_parts))
+    return title, text
 
 
 def _filter_results(
@@ -305,23 +501,138 @@ def _normalize_hostname(url: str) -> str:
     return hostname
 
 
-def _normalize_result_url(url: str) -> str:
-    normalized = unescape(url.strip())
-    if not normalized:
-        return ""
-    if normalized.startswith("//"):
-        normalized = f"https:{normalized}"
-    if normalized.startswith("/"):
-        normalized = urljoin(_DUCKDUCKGO_SEARCH_URL, normalized)
+def _normalize_direct_url(value: str) -> str | None:
+    candidate = value.strip()
+    if not candidate or any(ch.isspace() for ch in candidate):
+        return None
 
-    parsed = urlparse(normalized)
-    if parsed.netloc.endswith("duckduckgo.com") and parsed.path == "/l/":
-        target = parse_qs(parsed.query).get("uddg", [""])[0]
-        if target:
-            normalized = unquote(target)
-    return normalized
+    if "://" in candidate:
+        parsed = urlparse(candidate)
+        if parsed.scheme in {"http", "https"} and parsed.netloc:
+            return candidate
+        return None
+
+    if candidate.startswith("www."):
+        candidate = f"https://{candidate}"
+    elif _looks_like_bare_domain_url(candidate):
+        candidate = f"https://{candidate}"
+    else:
+        return None
+
+    parsed = urlparse(candidate)
+    if parsed.scheme in {"http", "https"} and parsed.netloc:
+        return candidate
+    return None
+
+
+def _looks_like_bare_domain_url(value: str) -> bool:
+    parsed = urlparse(f"https://{value}")
+    hostname = parsed.hostname or ""
+    if "." not in hostname:
+        return False
+    return bool(re.fullmatch(r"[A-Za-z0-9.-]+\.[A-Za-z]{2,}", hostname))
+
+
+def _normalize_result_url(url: str) -> str:
+    return unescape(url.strip())
 
 
 def _clean_text(value: str) -> str:
     normalized = re.sub(r"\s+", " ", unescape(value or "")).strip()
     return normalized
+
+
+def _clean_multiline_text(value: str) -> str:
+    text = unescape(value or "").replace("\r\n", "\n").replace("\r", "\n")
+    text = re.sub(r"[ \t\f\v]+", " ", text)
+    text = re.sub(r"\n\s*\n+", "\n\n", text)
+    return text.strip()
+
+
+def _truncate_text(value: str, max_chars: int) -> str:
+    if len(value) <= max_chars:
+        return value
+    return value[: max_chars - 3].rstrip() + "..."
+
+
+def _extract_relevant_snippets(content: str, query: str, *, max_chars: int) -> str:
+    terms = [term.lower() for term in re.findall(r"[\w.-]+", query) if len(term) >= 2]
+    if not terms:
+        return _truncate_text(content, max_chars)
+
+    paragraphs = [paragraph.strip() for paragraph in re.split(r"\n\s*\n", content) if paragraph.strip()]
+    matched = [
+        paragraph
+        for paragraph in paragraphs
+        if any(term in paragraph.lower() for term in terms)
+    ]
+    if not matched:
+        return _truncate_text(content, max_chars)
+    return _truncate_text("\n\n---\n\n".join(matched), max_chars)
+
+
+def _build_filtered_out_reason(*, allowed_domains: set[str], blocked_domains: set[str]) -> str:
+    filters: list[str] = []
+    if allowed_domains:
+        filters.append(f"no results matched allowed domains: {', '.join(sorted(allowed_domains))}")
+    if blocked_domains:
+        filters.append(f"results were excluded by blocked domains: {', '.join(sorted(blocked_domains))}")
+    if filters:
+        return "; ".join(filters)
+    return "search provider returned results, but none were usable"
+
+
+def _format_no_results_message(
+    *,
+    query: str,
+    failure: SearchFailure,
+    allowed_domains: list[str],
+    blocked_domains: list[str],
+) -> str:
+    filters: list[str] = []
+    if allowed_domains:
+        filters.append(f"allowed={','.join(allowed_domains)}")
+    if blocked_domains:
+        filters.append(f"blocked={','.join(blocked_domains)}")
+
+    details = [f"reason={failure.reason}"]
+    if failure.attempts:
+        details.append(f"attempts={failure.attempts}")
+    details.extend(filters)
+    return f"No web results found for query: {query} ({'; '.join(details)})"
+
+
+async def _amain() -> None:
+    target_url = "https://docs.vllm.ai/projects/vllm-ascend-cn/zh-cn/latest/tutorials/models/"
+    search_query = "vllm ascend qwen3.5 35b a3b recommended config"
+    fetch_query = "example"
+    allowed_domains: list[str] = []
+    blocked_domains: list[str] = []
+    limit = _DEFAULT_RESULT_LIMIT
+
+    search_result = await web_search.coroutine(
+        query=search_query,
+        allowed_domains=allowed_domains,
+        blocked_domains=blocked_domains,
+        limit=limit,
+    )
+    print("=== Search URL result ===")
+    print(search_result)
+
+    try:
+        fetch_result = await web_fetch.coroutine(
+            url=target_url,
+            query=fetch_query,
+        )
+    except ToolException as exc:
+        fetch_result = f"web_fetch failed: {exc}"
+    print("\n=== Fetch URL content result ===")
+    print(fetch_result)
+
+
+def main() -> None:
+    asyncio.run(_amain())
+
+
+if __name__ == "__main__":
+    main()

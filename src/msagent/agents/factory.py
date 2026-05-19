@@ -38,9 +38,15 @@ from msagent.agents.local_context import ensure_local_context_prompt
 from msagent.core.constants import CONFIG_CONVERSATION_HISTORY_DIR
 from msagent.llms.factory import LLMFactory
 from msagent.middlewares.tool_result_eviction import ToolResultEvictionMiddleware
-from msagent.tools.catalog import fetch_skills, fetch_tools, get_skill, get_tool, run_tool
+from msagent.tools.catalog import (
+    fetch_skills,
+    fetch_tools,
+    get_skill,
+    get_tool,
+    run_tool,
+)
 from msagent.tools.factory import ToolFactory
-from msagent.tools.web_search import web_search
+from msagent.tools.web_search import web_fetch, web_search
 from msagent.utils.deepagents_compat import patch_deepagents_windows_absolute_paths
 
 if TYPE_CHECKING:
@@ -52,6 +58,8 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger(__name__)
+
+_SEARCH_MCP_KEYWORDS = ("tavily", "duckduckgo", "search", "searxng", "brave", "serp", "serper")
 
 
 class _ToolPatternFilterMiddleware(AgentMiddleware[Any, Any, Any]):
@@ -136,6 +144,7 @@ class AgentFactory:
             fetch_skills,
             get_skill,
             web_search,
+            web_fetch,
         ]
         mcp_tools: list[BaseTool] = []
         mcp_module_map: dict[str, str] = {}
@@ -143,6 +152,12 @@ class AgentFactory:
             loaded = await mcp_client.tools()
             mcp_tools = list(loaded or [])
             mcp_module_map = dict(getattr(mcp_client, "module_map", {}) or {})
+
+            if self._has_search_mcp(mcp_client):
+                runtime_tools = [
+                    t for t in runtime_tools
+                    if self._tool_name(t) not in ("web_search", "web_fetch")
+                ]
 
         tool_patterns = list(config.tools.patterns or []) if config.tools is not None else []
         mcp_servers = self._collect_mcp_servers(mcp_client, mcp_module_map)
@@ -395,6 +410,19 @@ class AgentFactory:
         if isinstance(config_servers, dict):
             servers.update(str(name) for name in config_servers.keys())
         return servers
+
+    @staticmethod
+    def _has_search_mcp(mcp_client: Any) -> bool:
+        config = getattr(mcp_client, "config", None)
+        servers = getattr(config, "servers", None)
+        if not isinstance(servers, dict):
+            return False
+        for name, server in servers.items():
+            if not getattr(server, "enabled", False):
+                continue
+            if any(kw in name.lower() for kw in _SEARCH_MCP_KEYWORDS):
+                return True
+        return False
 
     def _resolve_mcp_tool_identity(
         self,

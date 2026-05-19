@@ -24,6 +24,8 @@ description: 专门用于 Ascend 集群 Profiling 性能数据的“快慢卡”
     * **定性**：通常为小包通信（ZeRO3 切分过细）、SDMA 地址未对齐或硬件问题。
 
 ## 3. 标准操作流程 (SOP)
+请严格按照以下流程执行：
+
 1. 输入数据类型判断
 
 先判断用户提供的路径或文件属于哪一类，并把后续分析所需证据统一整理为“集群级宏观证据”和“Rank 级明细证据”两类：
@@ -37,11 +39,11 @@ description: 专门用于 Ascend 集群 Profiling 性能数据的“快慢卡”
 * 告知用户，当前数据类型、Rank数量等信息
 
 （2）路由后续操作
-* 用户给的输入数据是 text 格式：请参考 `skills/msprof-analyze-cli` SKILL 的能力二：专家建议分析 (Advisor) 部分进行分析，然后直接进入流程 3。
+* 用户给的输入数据是 text 格式：请参考 `skills/msprof-analyze-cli` SKILL 的能力二：专家建议分析 (Advisor) 部分进行分析，然后直接进入流程 3 基于证据做快慢卡判定。
 * 用户给的输入数据是 db 格式，判断是否已经存在`cluster_analysis_output` 结果文件夹：
-  * 若存在，检查是否包含 `cluster_time_summary`、`compute_op_sum`、`hccl_sum`、`slow_rank`、`slow_link`、`cann_api_sum` 等结果。记录缺失项，进入流程 2 补齐；如果结果已完整，进入流程 3。
-  * 不存在，进入流程 2
-* 用户输入只存在 `cluster_analysis_output` 结果文件夹：进入流程3，做快慢卡判断
+  * 若存在，检查是否包含 `cluster_time_summary`、`compute_op_sum`、`hccl_sum`、`slow_rank`、`slow_link`、`cann_api_sum` 等结果。记录缺失项，直接进入流程 2 调用 `msprof-analyze` 集群分析能力补齐；如果结果已完整，直接进入流程 3 基于证据做快慢卡判定。
+  * 不存在，直接进入流程 2 调用 `msprof-analyze` 集群分析能力
+* 用户输入只存在 `cluster_analysis_output` 结果文件夹：直接进入流程 3 基于证据做快慢卡判定
 
 2. 调用 `msprof-analyze` 集群分析能力
 流程 2 只负责生成分析结果，不负责直接下结论。  

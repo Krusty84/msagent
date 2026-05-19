@@ -29,8 +29,12 @@ description: 专门用于 Ascend 集群 Profiling 性能数据的“快慢卡”
 先判断用户提供的路径或文件属于哪一类，并把后续分析所需证据统一整理为“集群级宏观证据”和“Rank 级明细证据”两类：
 
 （1）明确当前输入数据的类型
-* 路径下若存在Profiling数据：共识别到多少个 Rank；Profilng数据的类型，DB/Text；各 Rank 的 profiling 文件夹是否齐全
+* 路径下若存在Profiling数据：
+  * 共识别到多少个 Rank；
+  * Profilng数据的类型是DB or Text，若路径下存在ascend_pytorch_profiler_{rank_id}.db文件，则为 DB 类型数据，否则为 Text；
+  * 各 Rank 的 profiling 文件夹是否齐全。
 * 路径下是否已存在 `msprof-analyze` 的分析结果目录`cluster_analysis_output`：若存在，输出已包含哪些内容
+* 告知用户，当前数据类型、Rank数量等信息
 
 （2）路由后续操作
 * 用户给的输入数据是 text 格式：请参考 `skills/msprof-analyze-cli` SKILL 的能力二：专家建议分析 (Advisor) 部分进行分析，然后直接进入流程 3。

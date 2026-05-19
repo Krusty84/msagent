@@ -69,7 +69,8 @@ def analyze_comm_ops(input_path):
         try:
             with open(dump_path, 'r', encoding='utf-8') as f:
                 dump_data = json.load(f)['data']
-        except:
+        except (json.JSONDecodeError, KeyError, OSError) as e:
+            print(f"Warning: Failed to load {dump_path}: {e}")
             continue
 
         for op_name, op_data in dump_data.items():

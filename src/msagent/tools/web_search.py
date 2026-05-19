@@ -24,7 +24,7 @@ import os
 import re
 from html import unescape
 from html.parser import HTMLParser
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import parse_qs, unquote, urljoin, urlparse
 
 import httpx
@@ -33,9 +33,13 @@ from pydantic import BaseModel, Field, field_validator
 
 _DUCKDUCKGO_SEARCH_URL = "https://html.duckduckgo.com/html/"
 _TAVILY_SEARCH_URL = "https://api.tavily.com/search"
+_TAVILY_CRAWL_URL = "https://api.tavily.com/crawl"
 _DEFAULT_TIMEOUT_SECONDS = 30.0
+_TAVILY_CRAWL_TIMEOUT_SECONDS = 150.0
 _DEFAULT_RESULT_LIMIT = 5
 _MAX_RESULT_LIMIT = 10
+_DEFAULT_FETCH_MAX_CHARS = 8000
+_MAX_FETCH_CHARS = 20000
 _USER_AGENT = "msagent/0.1 web-search"
 _TAVILY_API_KEY_ENV = "TAVILY_API_KEY"
 
@@ -84,6 +88,43 @@ class WebSearchInput(BaseModel):
                 seen.add(domain)
                 normalized.append(domain)
         return normalized
+
+
+class WebFetchInput(BaseModel):
+    url: str = Field(description="HTTP or HTTPS URL, or bare domain, to crawl")
+    extract_mode: Literal["auto", "text", "markdown"] = Field(
+        default="markdown",
+        description="Extraction format: auto and markdown return Markdown, text returns plain text",
+    )
+    max_chars: int = Field(
+        default=_DEFAULT_FETCH_MAX_CHARS,
+        ge=1000,
+        le=_MAX_FETCH_CHARS,
+        description="Maximum number of crawled page text characters to return",
+    )
+    query: str | None = Field(
+        default=None,
+        description="Optional crawl instructions used by Tavily to find relevant pages from the URL.",
+    )
+
+    @field_validator("url")
+    @classmethod
+    def _validate_url(cls, value: str) -> str:
+        normalized = value.strip()
+        if "://" not in normalized:
+            normalized = f"https://{normalized}"
+        parsed = urlparse(normalized)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("url must be an HTTP or HTTPS URL, or a bare domain")
+        return normalized
+
+    @field_validator("query")
+    @classmethod
+    def _normalize_optional_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
 
 
 class _DuckDuckGoHTMLParser(HTMLParser):
@@ -166,6 +207,41 @@ async def web_search(
     return "\n".join(lines)
 
 
+@tool("web_fetch", args_schema=WebFetchInput)
+async def web_fetch(
+    *,
+    url: str,
+    extract_mode: Literal["auto", "text", "markdown"] = "markdown",
+    max_chars: int = _DEFAULT_FETCH_MAX_CHARS,
+    query: str | None = None,
+    runtime: Any = None,
+) -> str:
+    """Fetch a web page URL and return cleaned, length-limited page content."""
+    del runtime
+
+    try:
+        payload = WebFetchInput(
+            url=url,
+            extract_mode=extract_mode,
+            max_chars=max_chars,
+            query=query,
+        )
+    except ValueError as exc:
+        raise ToolException(str(exc)) from exc
+
+    title, content, truncated = await _fetch_page_text(
+        payload.url,
+        max_chars=payload.max_chars,
+        extract_mode=payload.extract_mode,
+        query=payload.query,
+    )
+
+    lines = [f"Web page content for: {title or payload.url}", f"URL: {payload.url}"]
+    lines.append(f"Content: (truncated to {payload.max_chars} chars)" if truncated else "Content:")
+    lines.append(content or "No readable page text found.")
+    return "\n".join(lines)
+
+
 async def _search_results_with_provider(
     *,
     query: str,
@@ -195,6 +271,93 @@ async def _search_results_with_provider(
         blocked_domains=blocked_domains,
     )
     return filtered, "DuckDuckGo HTML fallback"
+
+
+async def _fetch_page_text(
+    url: str,
+    max_chars: int,
+    extract_mode: Literal["auto", "text", "markdown"] = "markdown",
+    query: str | None = None,
+) -> tuple[str, str, bool]:
+    tavily_api_key = os.getenv(_TAVILY_API_KEY_ENV, "").strip()
+    if not tavily_api_key:
+        raise ToolException(f"{_TAVILY_API_KEY_ENV} is required for web_fetch")
+
+    text = await _crawl_with_tavily(
+        url=url,
+        api_key=tavily_api_key,
+        extract_mode=extract_mode,
+        query=query,
+    )
+    truncated = len(text) > max_chars
+    return "", _truncate_text(text, max_chars), truncated
+
+
+async def _crawl_with_tavily(
+    *,
+    url: str,
+    api_key: str,
+    extract_mode: Literal["auto", "text", "markdown"],
+    query: str | None = None,
+) -> str:
+    payload: dict[str, Any] = {
+        "url": url,
+        "instructions": query or "",
+        "chunks_per_source": 3,
+        "max_depth": 1,
+        "max_breadth": 20,
+        "limit": 50,
+        "select_paths": None,
+        "select_domains": None,
+        "exclude_paths": None,
+        "exclude_domains": None,
+        "allow_external": True,
+        "include_images": False,
+        "extract_depth": "basic",
+        "format": "text" if extract_mode == "text" else "markdown",
+        "include_favicon": False,
+        "timeout": int(_TAVILY_CRAWL_TIMEOUT_SECONDS),
+        "include_usage": False,
+    }
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=_TAVILY_CRAWL_TIMEOUT_SECONDS + 10,
+            follow_redirects=True,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "User-Agent": _USER_AGENT,
+            },
+        ) as client:
+            response = await client.post(_TAVILY_CRAWL_URL, json=payload)
+            response.raise_for_status()
+    except httpx.HTTPError as exc:
+        raise ToolException(f"Tavily web crawl request failed: {exc}") from exc
+
+    try:
+        response_payload = response.json()
+    except ValueError as exc:
+        raise ToolException("Tavily web crawl returned invalid JSON") from exc
+
+    results = response_payload.get("results") or []
+    if not results:
+        failed = response_payload.get("failed_results") or []
+        if failed:
+            error = failed[0].get("error") if isinstance(failed[0], dict) else None
+            raise ToolException(f"Tavily web crawl returned no content: {error or 'unknown error'}")
+        return ""
+
+    pages: list[str] = []
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        raw_content = _clean_multiline_text(str(item.get("raw_content") or ""))
+        if not raw_content:
+            continue
+        page_url = _clean_text(str(item.get("url") or ""))
+        pages.append(f"Source: {page_url}\n\n{raw_content}" if page_url else raw_content)
+    return _clean_multiline_text("\n\n---\n\n".join(pages))
 
 
 async def _search_with_tavily(
@@ -325,3 +488,16 @@ def _normalize_result_url(url: str) -> str:
 def _clean_text(value: str) -> str:
     normalized = re.sub(r"\s+", " ", unescape(value or "")).strip()
     return normalized
+
+
+def _clean_multiline_text(value: str) -> str:
+    text = unescape(value or "").replace("\r\n", "\n").replace("\r", "\n")
+    text = re.sub(r"[ \t\f\v]+", " ", text)
+    text = re.sub(r"\n\s*\n+", "\n\n", text)
+    return text.strip()
+
+
+def _truncate_text(value: str, max_chars: int) -> str:
+    if len(value) <= max_chars:
+        return value
+    return value[: max_chars - 3].rstrip() + "..."

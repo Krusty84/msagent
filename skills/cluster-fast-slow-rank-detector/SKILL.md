@@ -27,6 +27,7 @@ description: 专门用于 Ascend 集群 Profiling 性能数据的“快慢卡”
 1. 输入数据类型判断
 
 先判断用户提供的路径或文件属于哪一类，并把后续分析所需证据统一整理为“集群级宏观证据”和“Rank 级明细证据”两类：
+
 （1）明确当前输入数据的类型
 * 路径下若存在Profiling数据：共识别到多少个 Rank；Profilng数据的类型，DB/Text；各 Rank 的 profiling 文件夹是否齐全
 * 路径下是否已存在 `msprof-analyze` 的分析结果目录`cluster_analysis_output`：若存在，输出已包含哪些内容
@@ -64,8 +65,8 @@ msprof-analyze -m cluster_time_summary -d ./cluster_data -o ./output/cluster_tim
 
 流程 3 只在证据集可用后执行。agent 不能只引用单项指标直接给结论，必须综合流程 1/2 得到的宏观证据和必要的 Rank 级明细证据，明确回答以下问题：
 
-（1）**是否存在快慢卡现象**；
-（2）**真正的慢卡 Rank ID 是谁**，以及候选快卡 Rank ID 是谁；
+（1）**是否存在快慢卡现象**；  
+（2）**真正的慢卡 Rank ID 是谁**，以及候选快卡 Rank ID 是谁；  
 （3）**问题属于哪一类**：
    * Host 下发慢 / 调度瓶颈；
    * 计算型慢卡；
@@ -73,6 +74,7 @@ msprof-analyze -m cluster_time_summary -d ./cluster_data -o ./output/cluster_tim
    * 负载不均衡；
    * 多种问题叠加；
    * 证据不足，暂不能判定。
+
 （4）**判定依据是什么**：至少引用 `cluster_time_summary`、`slow_rank` 或 `slow_link` 中的一类宏观证据；若涉及计算型或 Host 下发瓶颈，还应继续调用流程 4 中的对比脚本，用 `compare_op_stats.py` 或 `compare_api_stats.py` 给出微观证据。
 
 

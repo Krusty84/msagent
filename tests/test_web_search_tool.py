@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import json
 from unittest.mock import AsyncMock
 
 import httpx
@@ -26,13 +27,17 @@ from langchain_core.tools import ToolException
 
 import msagent.tools.web_search as web_search_module
 from msagent.tools.web_search import (
+    WebFetchInput,
     WebSearchInput,
+    _crawl_with_tavily,
     _extract_results,
     _fetch_duckduckgo_html,
+    _fetch_page_text,
     _filter_results,
     _normalize_result_url,
     _search_results_with_provider,
     _search_with_tavily,
+    web_fetch,
     web_search,
 )
 
@@ -47,6 +52,12 @@ def test_web_search_input_normalizes_domains() -> None:
     assert payload.query == "langchain deepagents"
     assert payload.allowed_domains == ["github.com", "docs.python.org"]
     assert payload.blocked_domains == ["example.com"]
+
+
+def test_web_fetch_input_normalizes_bare_domain_url() -> None:
+    payload = WebFetchInput(url="docs.tavily.com")
+
+    assert payload.url == "https://docs.tavily.com"
 
 
 def test_extract_results_parses_and_deduplicates_html() -> None:
@@ -87,7 +98,9 @@ def test_normalize_result_url_decodes_duckduckgo_redirect() -> None:
 
 
 @pytest.mark.asyncio
-async def test_fetch_duckduckgo_html_translates_http_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_fetch_duckduckgo_html_translates_http_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     response = httpx.Response(503, request=httpx.Request("GET", "https://html.duckduckgo.com/html/"))
     transport = httpx.MockTransport(lambda request: response)
     original_async_client = web_search_module.httpx.AsyncClient
@@ -102,19 +115,146 @@ async def test_fetch_duckduckgo_html_translates_http_errors(monkeypatch: pytest.
 
 
 @pytest.mark.asyncio
-async def test_search_with_tavily_formats_and_deduplicates_results(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_fetch_page_text_requires_tavily_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+
+    with pytest.raises(ToolException, match="TAVILY_API_KEY is required for web_fetch"):
+        await _fetch_page_text("https://example.com/docs", 5000, extract_mode="text")
+
+
+@pytest.mark.asyncio
+async def test_crawl_with_tavily_requests_markdown_content(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_payload = {}
+    captured_headers = {}
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        nonlocal captured_payload, captured_headers
+        captured_payload = json.loads(request.content.decode("utf-8"))
+        captured_headers = dict(request.headers)
+        return response
+
     response = httpx.Response(
         200,
         json={
             "results": [
-                {"title": "deepagents", "url": "https://github.com/langchain-ai/deepagents"},
-                {"title": "duplicate", "url": "https://github.com/langchain-ai/deepagents"},
+                {
+                    "url": "https://example.com/docs",
+                    "raw_content": "# Docs\n\nUseful content.",
+                },
+                {
+                    "url": "https://example.com/sdk",
+                    "raw_content": "# SDK\n\nPython SDK content.",
+                }
+            ],
+            "failed_results": [],
+        },
+        request=httpx.Request("POST", "https://api.tavily.com/crawl"),
+    )
+    transport = httpx.MockTransport(_handler)
+    original_async_client = web_search_module.httpx.AsyncClient
+
+    def _client(*args, **kwargs):
+        return original_async_client(*args, transport=transport, **kwargs)
+
+    monkeypatch.setattr(web_search_module.httpx, "AsyncClient", _client)
+
+    content = await _crawl_with_tavily(
+        url="https://example.com/docs",
+        api_key="test-key",
+        extract_mode="markdown",
+        query="Find Python SDK pages",
+    )
+
+    assert content == (
+        "Source: https://example.com/docs\n\n# Docs\n\nUseful content.\n\n"
+        "---\n\n"
+        "Source: https://example.com/sdk\n\n# SDK\n\nPython SDK content."
+    )
+    assert captured_payload == {
+        "url": "https://example.com/docs",
+        "instructions": "Find Python SDK pages",
+        "chunks_per_source": 3,
+        "max_depth": 1,
+        "max_breadth": 20,
+        "limit": 50,
+        "select_paths": None,
+        "select_domains": None,
+        "exclude_paths": None,
+        "exclude_domains": None,
+        "allow_external": True,
+        "include_images": False,
+        "extract_depth": "basic",
+        "format": "markdown",
+        "include_favicon": False,
+        "timeout": 150,
+        "include_usage": False,
+    }
+    assert captured_headers["authorization"] == "Bearer test-key"
+    assert captured_headers["content-type"] == "application/json"
+
+
+@pytest.mark.asyncio
+async def test_fetch_page_text_uses_tavily_crawl_when_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TAVILY_API_KEY", "test-key")
+    monkeypatch.setattr(
+        web_search_module,
+        "_crawl_with_tavily",
+        AsyncMock(return_value="# Docs\n\nUseful content."),
+    )
+
+    title, content, truncated = await _fetch_page_text(
+        "https://example.com/docs",
+        100,
+        extract_mode="markdown",
+        query="Useful",
+    )
+
+    assert title == ""
+    assert content == "# Docs\n\nUseful content."
+    assert truncated is False
+    web_search_module._crawl_with_tavily.assert_awaited_once_with(
+        url="https://example.com/docs",
+        api_key="test-key",
+        extract_mode="markdown",
+        query="Useful",
+    )
+
+
+@pytest.mark.asyncio
+async def test_search_with_tavily_formats_and_deduplicates_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_payload = {}
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        nonlocal captured_payload
+        captured_payload = json.loads(request.content.decode("utf-8"))
+        return response
+
+    response = httpx.Response(
+        200,
+        json={
+            "results": [
+                {
+                    "title": "deepagents",
+                    "url": "https://github.com/langchain-ai/deepagents",
+                },
+                {
+                    "title": "duplicate",
+                    "url": "https://github.com/langchain-ai/deepagents",
+                },
                 {"title": "", "url": "https://docs.python.org/3/"},
             ]
         },
         request=httpx.Request("POST", "https://api.tavily.com/search"),
     )
-    transport = httpx.MockTransport(lambda request: response)
+    transport = httpx.MockTransport(_handler)
     original_async_client = web_search_module.httpx.AsyncClient
 
     def _client(*args, **kwargs):
@@ -134,15 +274,26 @@ async def test_search_with_tavily_formats_and_deduplicates_results(monkeypatch: 
         {"title": "deepagents", "url": "https://github.com/langchain-ai/deepagents"},
         {"title": "https://docs.python.org/3/", "url": "https://docs.python.org/3/"},
     ]
+    assert captured_payload["include_answer"] is False
+    assert captured_payload["include_raw_content"] is False
 
 
 @pytest.mark.asyncio
-async def test_search_results_with_provider_uses_tavily_when_configured(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_search_results_with_provider_uses_tavily_when_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("TAVILY_API_KEY", "test-key")
     monkeypatch.setattr(
         web_search_module,
         "_search_with_tavily",
-        AsyncMock(return_value=[{"title": "deepagents", "url": "https://github.com/langchain-ai/deepagents"}]),
+        AsyncMock(
+            return_value=[
+                {
+                    "title": "deepagents",
+                    "url": "https://github.com/langchain-ai/deepagents",
+                }
+            ]
+        ),
     )
     monkeypatch.setattr(
         web_search_module,
@@ -162,13 +313,15 @@ async def test_search_results_with_provider_uses_tavily_when_configured(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_search_results_with_provider_falls_back_without_tavily_key(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_search_results_with_provider_falls_back_without_tavily_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
     monkeypatch.setattr(
         web_search_module,
         "_fetch_duckduckgo_html",
         AsyncMock(
-            return_value='''<a class="result__a" href="https://github.com/langchain-ai/deepagents">deepagents</a>'''
+            return_value="""<a class="result__a" href="https://github.com/langchain-ai/deepagents">deepagents</a>"""
         ),
     )
 
@@ -184,7 +337,9 @@ async def test_search_results_with_provider_falls_back_without_tavily_key(monkey
 
 
 @pytest.mark.asyncio
-async def test_search_results_with_provider_falls_back_when_tavily_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_search_results_with_provider_falls_back_when_tavily_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("TAVILY_API_KEY", "test-key")
     monkeypatch.setattr(
         web_search_module,
@@ -194,7 +349,7 @@ async def test_search_results_with_provider_falls_back_when_tavily_fails(monkeyp
     monkeypatch.setattr(
         web_search_module,
         "_fetch_duckduckgo_html",
-        AsyncMock(return_value='''<a class="result__a" href="https://docs.python.org/3/">Python Docs</a>'''),
+        AsyncMock(return_value="""<a class="result__a" href="https://docs.python.org/3/">Python Docs</a>"""),
     )
 
     results, provider = await _search_results_with_provider(
@@ -215,7 +370,12 @@ async def test_web_search_formats_results(monkeypatch: pytest.MonkeyPatch) -> No
         "_search_results_with_provider",
         AsyncMock(
             return_value=(
-                [{"title": "deepagents", "url": "https://github.com/langchain-ai/deepagents"}],
+                [
+                    {
+                        "title": "deepagents",
+                        "url": "https://github.com/langchain-ai/deepagents",
+                    }
+                ],
                 "Tavily",
             )
         ),
@@ -230,7 +390,28 @@ async def test_web_search_formats_results(monkeypatch: pytest.MonkeyPatch) -> No
 
 
 @pytest.mark.asyncio
-async def test_web_search_returns_no_results_message_when_filtered_out(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_web_fetch_formats_page_content(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        web_search_module,
+        "_fetch_page_text",
+        AsyncMock(return_value=("Docs", "Useful content.", False)),
+    )
+
+    result = await web_fetch.coroutine(
+        url="https://example.com/docs",
+        extract_mode="markdown",
+        query="Useful",
+    )
+
+    assert "Web page content for: Docs" in result
+    assert "URL: https://example.com/docs" in result
+    assert "Useful content." in result
+
+
+@pytest.mark.asyncio
+async def test_web_search_returns_no_results_message_when_filtered_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(
         web_search_module,
         "_search_results_with_provider",

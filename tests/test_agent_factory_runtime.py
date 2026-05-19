@@ -54,7 +54,9 @@ def _make_model_request(
 ) -> SimpleNamespace:
     request = SimpleNamespace(
         system_message=system_message,
-        runtime=SimpleNamespace(context=SimpleNamespace(template_vars=template_vars or {})),
+        runtime=SimpleNamespace(
+            context=SimpleNamespace(template_vars=template_vars or {})
+        ),
     )
 
     def _override(**overrides):
@@ -107,7 +109,14 @@ async def test_agent_factory_create_populates_runtime_tools_without_name_error(
     assert hasattr(graph, "_tools_in_catalog")
     assert hasattr(graph, "_agent_backend")
     tool_names = {tool.name for tool in graph._llm_tools}
-    assert {"fetch_tools", "get_tool", "run_tool", "fetch_skills", "get_skill", "web_search"} <= tool_names
+    assert {
+        "fetch_tools",
+        "get_tool",
+        "run_tool",
+        "fetch_skills",
+        "get_skill",
+        "web_search",
+    } <= tool_names
     assert "write_todos" not in tool_names
 
 
@@ -244,7 +253,9 @@ async def test_agent_factory_create_supports_negative_tool_patterns(
 
 def test_agent_factory_filters_deepagents_default_tools_from_model_request() -> None:
     factory = AgentFactory(llm_factory=_DummyLLMFactory())
-    positive, negative = factory._compile_tool_patterns(["impl:deepagents:get_skill", "mcp:msprof-mcp:*"])
+    positive, negative = factory._compile_tool_patterns(
+        ["impl:deepagents:get_skill", "mcp:msprof-mcp:*"]
+    )
 
     tools = [
         SimpleNamespace(name="execute"),
@@ -264,7 +275,9 @@ def test_agent_factory_filters_deepagents_default_tools_from_model_request() -> 
     assert {tool.name for tool in filtered} == {"get_skill", "msprof-mcp_ping"}
 
 
-def test_system_message_middleware_renders_known_vars_and_preserves_unknown_placeholders() -> None:
+def test_system_message_middleware_renders_known_vars_and_preserves_unknown_placeholders() -> (
+    None
+):
     request = _make_model_request(
         system_message=SystemMessage(
             content="cwd={working_dir}; local={local_environment_context}; worker={worker}; rank={Rank_ID}"
@@ -283,7 +296,9 @@ def test_system_message_middleware_renders_known_vars_and_preserves_unknown_plac
     )
 
 
-def test_system_message_middleware_leaves_request_unchanged_without_template_vars() -> None:
+def test_system_message_middleware_leaves_request_unchanged_without_template_vars() -> (
+    None
+):
     request = _make_model_request(
         system_message=SystemMessage(content="cwd={working_dir}; worker={worker}"),
         template_vars={},
@@ -353,7 +368,9 @@ def test_system_message_middleware_preserves_system_message_metadata() -> None:
 async def test_system_message_middleware_awrap_model_call_applies_rendering() -> None:
     middleware = _SystemMessageMiddleware()
     request = _make_model_request(
-        system_message=SystemMessage(content="local={local_environment_context}; rank={Rank_ID}"),
+        system_message=SystemMessage(
+            content="local={local_environment_context}; rank={Rank_ID}"
+        ),
         template_vars={"local_environment_context": "NPU=910B"},
     )
 
@@ -366,7 +383,10 @@ async def test_system_message_middleware_awrap_model_call_applies_rendering() ->
     result = await middleware.awrap_model_call(request, _handler)
 
     assert result == "ok"
-    assert str(captured["request"].system_message.content) == "local=NPU=910B; rank={Rank_ID}"
+    assert (
+        str(captured["request"].system_message.content)
+        == "local=NPU=910B; rank={Rank_ID}"
+    )
 
 
 @pytest.mark.asyncio
@@ -425,7 +445,9 @@ async def test_agent_factory_maps_retry_config_to_deepagents_primitives(
 
     middleware = captured["middleware"]
     assert isinstance(middleware, list)
-    tool_retry = next(item for item in middleware if item.__class__.__name__ == "ToolRetryMiddleware")
+    tool_retry = next(
+        item for item in middleware if item.__class__.__name__ == "ToolRetryMiddleware"
+    )
     assert tool_retry.max_retries == 4
     assert tool_retry.tools == []
     assert tool_retry._tool_filter == ["alpha_ping"]
@@ -532,7 +554,9 @@ async def test_agent_factory_adds_tool_result_eviction_middleware_when_output_li
 
     middleware = captured["middleware"]
     assert isinstance(middleware, list)
-    assert any(item.__class__.__name__ == "ToolResultEvictionMiddleware" for item in middleware)
+    assert any(
+        item.__class__.__name__ == "ToolResultEvictionMiddleware" for item in middleware
+    )
 
 
 def test_build_composite_backend_persists_conversation_history_under_workdir(
@@ -561,7 +585,9 @@ def test_build_composite_backend_persists_conversation_history_under_workdir(
     backend = AgentFactory._build_composite_backend(tmp_path)
     conversation_history_backend = backend.routes["/conversation_history/"]
 
-    assert conversation_history_backend.root_dir == (tmp_path / factory_module.CONFIG_CONVERSATION_HISTORY_DIR)
+    assert conversation_history_backend.root_dir == (
+        tmp_path / factory_module.CONFIG_CONVERSATION_HISTORY_DIR
+    )
     assert conversation_history_backend.virtual_mode is True
 
 
@@ -630,3 +656,101 @@ async def test_agent_factory_injects_local_environment_placeholder_into_system_p
     system_prompt = str(captured.get("system_prompt"))
     assert "test prompt" in system_prompt
     assert "{local_environment_context}" in system_prompt
+
+
+@pytest.mark.asyncio
+async def test_should_prefer_search_mcp_requires_valid_tavily_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(factory_module, "_TAVILY_KEY_VALIDATION_CACHE", {})
+    monkeypatch.setattr(
+        AgentFactory,
+        "_probe_tavily_api_key",
+        staticmethod(lambda api_key: _return_true(api_key)),
+    )
+    mcp_client = SimpleNamespace(
+        config=SimpleNamespace(
+            servers={
+                "tavily-mcp": SimpleNamespace(
+                    enabled=True,
+                    env={"TAVILY_API_KEY": "tvly-valid-key"},
+                )
+            }
+        )
+    )
+
+    assert await AgentFactory._should_prefer_search_mcp(mcp_client) is True
+
+
+@pytest.mark.asyncio
+async def test_should_prefer_search_mcp_keeps_builtin_web_search_for_invalid_tavily_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(factory_module, "_TAVILY_KEY_VALIDATION_CACHE", {})
+    monkeypatch.setattr(
+        AgentFactory,
+        "_probe_tavily_api_key",
+        staticmethod(lambda api_key: _return_false(api_key)),
+    )
+    mcp_client = SimpleNamespace(
+        config=SimpleNamespace(
+            servers={
+                "tavily-mcp": SimpleNamespace(
+                    enabled=True,
+                    env={"TAVILY_API_KEY": "tvly-invalid-key"},
+                )
+            }
+        )
+    )
+
+    assert await AgentFactory._should_prefer_search_mcp(mcp_client) is False
+
+
+@pytest.mark.asyncio
+async def test_resolve_tavily_api_key_reads_env_placeholders(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-from-env")
+
+    key = AgentFactory._resolve_tavily_api_key(
+        SimpleNamespace(env={"TAVILY_API_KEY": "${TAVILY_API_KEY}"})
+    )
+
+    assert key == "tvly-from-env"
+
+
+@pytest.mark.asyncio
+async def test_probe_tavily_api_key_uses_usage_endpoint_and_caches_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(factory_module, "_TAVILY_KEY_VALIDATION_CACHE", {})
+    calls: list[tuple[str, dict[str, str]]] = []
+
+    class _DummyClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url: str, headers: dict[str, str]):
+            calls.append((url, headers))
+            return SimpleNamespace(status_code=200)
+
+    monkeypatch.setattr(
+        factory_module.httpx, "AsyncClient", lambda **kwargs: _DummyClient()
+    )
+
+    assert await AgentFactory._probe_tavily_api_key("tvly-valid") is True
+    assert await AgentFactory._probe_tavily_api_key("tvly-valid") is True
+    assert calls == [
+        ("https://api.tavily.com/usage", {"Authorization": "Bearer tvly-valid"})
+    ]
+
+
+async def _return_true(_api_key: str) -> bool:
+    return True
+
+
+async def _return_false(_api_key: str) -> bool:
+    return False

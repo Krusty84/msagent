@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import logging
 import string
+import os
 import tempfile
 from fnmatch import fnmatch
 from importlib import import_module
@@ -39,7 +40,13 @@ from msagent.agents.local_context import ensure_local_context_prompt
 from msagent.core.constants import CONFIG_CONVERSATION_HISTORY_DIR
 from msagent.llms.factory import LLMFactory
 from msagent.middlewares.tool_result_eviction import ToolResultEvictionMiddleware
-from msagent.tools.catalog import fetch_skills, fetch_tools, get_skill, get_tool, run_tool
+from msagent.tools.catalog import (
+    fetch_skills,
+    fetch_tools,
+    get_skill,
+    get_tool,
+    run_tool,
+)
 from msagent.tools.factory import ToolFactory
 from msagent.tools.web_search import web_search
 from msagent.utils.deepagents_compat import patch_deepagents_windows_absolute_paths
@@ -53,6 +60,18 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger(__name__)
+
+_SEARCH_MCP_KEYWORDS = (
+    "tavily",
+    "duckduckgo",
+    "search",
+    "searxng",
+    "brave",
+    "serp",
+    "serper",
+)
+_TAVILY_SERVER_KEYWORDS = ("tavily",)
+_TAVILY_API_KEY_ENV = "TAVILY_API_KEY"
 
 
 class _ToolPatternFilterMiddleware(AgentMiddleware[Any, Any, Any]):
@@ -217,6 +236,9 @@ class AgentFactory:
             loaded = await mcp_client.tools()
             mcp_tools = list(loaded or [])
             mcp_module_map = dict(getattr(mcp_client, "module_map", {}) or {})
+
+            if self._should_prefer_search_mcp(mcp_client):
+                runtime_tools = [t for t in runtime_tools if self._tool_name(t) != "web_search"]
 
         tool_patterns = list(config.tools.patterns or []) if config.tools is not None else []
         mcp_servers = self._collect_mcp_servers(mcp_client, mcp_module_map)
@@ -470,6 +492,40 @@ class AgentFactory:
         if isinstance(config_servers, dict):
             servers.update(str(name) for name in config_servers.keys())
         return servers
+
+    @staticmethod
+    def _should_prefer_search_mcp(mcp_client: Any) -> bool:
+        config = getattr(mcp_client, "config", None)
+        servers = getattr(config, "servers", None)
+        if not isinstance(servers, dict):
+            return False
+
+        for name, server in servers.items():
+            if not getattr(server, "enabled", False):
+                continue
+
+            normalized_name = str(name).lower()
+            if not any(kw in normalized_name for kw in _SEARCH_MCP_KEYWORDS):
+                continue
+
+            if any(kw in normalized_name for kw in _TAVILY_SERVER_KEYWORDS):
+                if AgentFactory._has_tavily_api_key(server):
+                    return True
+                continue
+
+            return True
+
+        return False
+
+    @staticmethod
+    def _has_tavily_api_key(server: Any) -> bool:
+        env = getattr(server, "env", None)
+        if isinstance(env, dict):
+            explicit_key = str(env.get(_TAVILY_API_KEY_ENV, "") or "").strip()
+            if explicit_key:
+                return True
+
+        return bool(str(os.environ.get(_TAVILY_API_KEY_ENV, "") or "").strip())
 
     def _resolve_mcp_tool_identity(
         self,

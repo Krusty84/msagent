@@ -20,7 +20,6 @@
 
 from __future__ import annotations
 
-import os
 import re
 from html import unescape
 from html.parser import HTMLParser
@@ -32,12 +31,10 @@ from langchain_core.tools import ToolException, tool
 from pydantic import BaseModel, Field, field_validator
 
 _DUCKDUCKGO_SEARCH_URL = "https://html.duckduckgo.com/html/"
-_TAVILY_SEARCH_URL = "https://api.tavily.com/search"
 _DEFAULT_TIMEOUT_SECONDS = 30.0
 _DEFAULT_RESULT_LIMIT = 5
 _MAX_RESULT_LIMIT = 10
 _USER_AGENT = "msagent/0.1 web-search"
-_TAVILY_API_KEY_ENV = "TAVILY_API_KEY"
 
 
 class WebSearchInput(BaseModel):
@@ -173,20 +170,6 @@ async def _search_results_with_provider(
     blocked_domains: set[str],
     limit: int,
 ) -> tuple[list[dict[str, str]], str]:
-    tavily_api_key = os.getenv(_TAVILY_API_KEY_ENV, "").strip()
-    if tavily_api_key:
-        try:
-            results = await _search_with_tavily(
-                query=query,
-                api_key=tavily_api_key,
-                allowed_domains=allowed_domains,
-                blocked_domains=blocked_domains,
-                limit=limit,
-            )
-            return results, "Tavily"
-        except ToolException:
-            pass
-
     html = await _fetch_duckduckgo_html(query)
     results = _extract_results(html)
     filtered = _filter_results(
@@ -194,56 +177,7 @@ async def _search_results_with_provider(
         allowed_domains=allowed_domains,
         blocked_domains=blocked_domains,
     )
-    return filtered, "DuckDuckGo HTML fallback"
-
-
-async def _search_with_tavily(
-    *,
-    query: str,
-    api_key: str,
-    allowed_domains: set[str],
-    blocked_domains: set[str],
-    limit: int,
-) -> list[dict[str, str]]:
-    payload: dict[str, Any] = {
-        "api_key": api_key,
-        "query": query,
-        "max_results": limit,
-        "search_depth": "advanced",
-        "include_answer": False,
-        "include_raw_content": False,
-    }
-    if allowed_domains:
-        payload["include_domains"] = sorted(allowed_domains)
-    if blocked_domains:
-        payload["exclude_domains"] = sorted(blocked_domains)
-
-    try:
-        async with httpx.AsyncClient(
-            timeout=_DEFAULT_TIMEOUT_SECONDS,
-            follow_redirects=True,
-            headers={"User-Agent": _USER_AGENT},
-        ) as client:
-            response = await client.post(_TAVILY_SEARCH_URL, json=payload)
-            response.raise_for_status()
-    except httpx.HTTPError as exc:
-        raise ToolException(f"Tavily web search request failed: {exc}") from exc
-
-    try:
-        response_payload = response.json()
-    except ValueError as exc:
-        raise ToolException("Tavily web search returned invalid JSON") from exc
-
-    results: list[dict[str, str]] = []
-    seen_urls: set[str] = set()
-    for item in response_payload.get("results", []) or []:
-        url = str(item.get("url") or "").strip()
-        title = _clean_text(str(item.get("title") or url))
-        if not url or not title or url in seen_urls:
-            continue
-        seen_urls.add(url)
-        results.append({"title": title, "url": url})
-    return results
+    return filtered, "DuckDuckGo HTML"
 
 
 async def _fetch_duckduckgo_html(query: str) -> str:
@@ -325,3 +259,4 @@ def _normalize_result_url(url: str) -> str:
 def _clean_text(value: str) -> str:
     normalized = re.sub(r"\s+", " ", unescape(value or "")).strip()
     return normalized
+

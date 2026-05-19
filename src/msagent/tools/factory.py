@@ -56,7 +56,8 @@ class ToolFactory:
         ToolPreview("run_tool", "Invoke a tool by name with explicit arguments"),
         ToolPreview("fetch_skills", "List available skills in the current runtime"),
         ToolPreview("get_skill", "Read skill instructions from SKILL.md"),
-        ToolPreview("web_search", "Search the web and return results with source URLs"),
+        # Temporarily disabled while validating Tavily MCP-based web tools.
+        # ToolPreview("web_search", "Search the web and return results with source URLs"),
     )
 
     def get_impl_tools(self) -> list[ToolPreview]:

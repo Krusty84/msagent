@@ -8,7 +8,8 @@
 
 ## 📢 最新消息
 
-- 2026-04-27： `v26.1.0.alpha1`发布：新增`Accuracy` / `Zephyr` Agent，辅助精度调优、模型量化。
+- 2026-05-19： `v26.0.0`发布：新增 `Icarus` Agent，辅助算子调优。
+- 2026-04-27： `v26.0.0.a1`发布：新增 `Accuracy` / `Zephyr` Agent，辅助精度调优、模型量化。
 - 2026-04-08：`v0.1.3` 发布，完成 DeepAgents 重构更快更好用，并增强 ，新增 `msagent web` 能力。
 - 2026-03-19：`mindstudio-agent` 已发布到 PyPI，推荐优先使用 `pip install -U mindstudio-agent` 安装
 
@@ -19,8 +20,9 @@
 | <img src="docs/images/Hermes.png" alt="Hermes" width="120">     | **Hermes**   | 性能调优：聚焦 Ascend Profiling 分析，覆盖单卡、多卡、集群等场景，擅长快慢卡、慢节点、MFU、通信瓶颈、算子热点、下发调度等性能问题定位与优化建议。           | [Hermes说明](docs/agents/Hermes.md)     |
 | <img src="docs/images/Accuracy.png" alt="Accuracy" width="120"> | **Accuracy** | 精度调优：聚焦Ascend精度分析与优化，覆盖单卡，多卡，集群等场景，可处理RL训推一致性分析，loss/gnorm NaN分析等常见精度问题。                      | [Accuracy说明](docs/agents/Accuracy.md) |
 | <img src="docs/images/Zephyr.jpg" alt="Minos" width="120">      | **Zephyr**   | 模型量化：聚焦 msModelSlim 量化与压缩场景，协助完成模型适配可行性与结构风险评估，辅助完成基础适配器开发。                                   | [Zephyr说明](docs/agents/Zephyr.md)     |
-| <img src="docs/images/Minos.png" alt="Minos" width="120">       | **Minos**    | 文档体验与代码审查辅助：聚焦 README 走查、安装流程验证、Quick Start 体验、新手 onboarding、文档可用性评估，以及 GitCode PR 审查与评审意见整理。 | [Minos说明](docs/agents/Minos.md)       |
 | <img src="docs/images/Icarus.png" alt="Minos" width="120">      | **Icarus**   | 算子调优：聚焦Ascend NPU 算子性能调优，包括算子性能深度分析、端到端算子性能优化，辅助提升算子性能优化效率，降低开发难度          | [Icarus说明](docs/agents/Icarus.md)     |
+| <img src="docs/images/Minos.png" alt="Minos" width="120">       | **Minos**    | 文档体验与代码审查辅助：聚焦 README 走查、安装流程验证、Quick Start 体验、新手 onboarding、文档可用性评估，以及 GitCode PR 审查与评审意见整理。 | [Minos说明](docs/agents/Minos.md)       |
+
 ## ⚡ 快速上手
 
 ### 1) 🧰 准备环境

@@ -26,13 +26,15 @@ from langchain_core.tools import ToolException
 
 import msagent.tools.web_search as web_search_module
 from msagent.tools.web_search import (
+    WebFetchInput,
     WebSearchInput,
-    _extract_results,
-    _fetch_duckduckgo_html,
+    _extract_relevant_snippets,
+    _fetch_exa_search_results,
+    _fetch_url_text,
     _filter_results,
-    _normalize_result_url,
-    _search_results_with_provider,
-    _search_with_tavily,
+    _normalize_direct_url,
+    _search_result_urls,
+    web_fetch,
     web_search,
 )
 
@@ -49,19 +51,11 @@ def test_web_search_input_normalizes_domains() -> None:
     assert payload.blocked_domains == ["example.com"]
 
 
-def test_extract_results_parses_and_deduplicates_html() -> None:
-    html = """
-    <a class="result__a" href="//example.com/one"> First Result </a>
-    <a class="result__a" href="https://example.com/one">Duplicate Result</a>
-    <a class="result__a" href="https://docs.python.org/3/">Python Docs</a>
-    """
+def test_web_fetch_input_normalizes_bare_domain_url() -> None:
+    payload = WebFetchInput(url="docs.example.com/path", query="  install  ")
 
-    results = _extract_results(html)
-
-    assert results == [
-        {"title": "First Result", "url": "https://example.com/one"},
-        {"title": "Python Docs", "url": "https://docs.python.org/3/"},
-    ]
+    assert payload.url == "https://docs.example.com/path"
+    assert payload.query == "install"
 
 
 def test_filter_results_honors_allowed_and_blocked_domains() -> None:
@@ -80,15 +74,22 @@ def test_filter_results_honors_allowed_and_blocked_domains() -> None:
     assert filtered == [{"title": "GitHub", "url": "https://github.com/langchain-ai/deepagents"}]
 
 
-def test_normalize_result_url_decodes_duckduckgo_redirect() -> None:
-    url = "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fgithub.com%2Flangchain-ai%2Fdeepagents"
-
-    assert _normalize_result_url(url) == "https://github.com/langchain-ai/deepagents"
+def test_normalize_direct_url_accepts_urls_and_domains() -> None:
+    assert _normalize_direct_url("https://example.com/docs") == "https://example.com/docs"
+    assert _normalize_direct_url("www.example.com/docs") == "https://www.example.com/docs"
+    assert _normalize_direct_url("docs.example.com/path") == "https://docs.example.com/path"
+    assert _normalize_direct_url("vllm ascend docs") is None
 
 
 @pytest.mark.asyncio
-async def test_fetch_duckduckgo_html_translates_http_errors(monkeypatch: pytest.MonkeyPatch) -> None:
-    response = httpx.Response(503, request=httpx.Request("GET", "https://html.duckduckgo.com/html/"))
+async def test_fetch_exa_search_results_translates_http_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response = httpx.Response(
+        503,
+        json={"message": "upstream unavailable"},
+        request=httpx.Request("POST", "https://api.exa.ai/search"),
+    )
     transport = httpx.MockTransport(lambda request: response)
     original_async_client = web_search_module.httpx.AsyncClient
 
@@ -97,22 +98,25 @@ async def test_fetch_duckduckgo_html_translates_http_errors(monkeypatch: pytest.
 
     monkeypatch.setattr(web_search_module.httpx, "AsyncClient", _client)
 
-    with pytest.raises(ToolException, match="DuckDuckGo web search request failed"):
-        await _fetch_duckduckgo_html("deepagents")
+    with pytest.raises(ToolException, match="Exa web search request failed: HTTP 503"):
+        await _fetch_exa_search_results(api_key="exa-key", query="deepagents", limit=5)
 
 
 @pytest.mark.asyncio
-async def test_search_with_tavily_formats_and_deduplicates_results(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_fetch_url_text_fetches_exa_contents(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     response = httpx.Response(
         200,
         json={
             "results": [
-                {"title": "deepagents", "url": "https://github.com/langchain-ai/deepagents"},
-                {"title": "duplicate", "url": "https://github.com/langchain-ai/deepagents"},
-                {"title": "", "url": "https://docs.python.org/3/"},
+                {
+                    "title": "Docs",
+                    "text": "Useful content.\n\nOther content.",
+                }
             ]
         },
-        request=httpx.Request("POST", "https://api.tavily.com/search"),
+        request=httpx.Request("POST", "https://api.exa.ai/contents"),
     )
     transport = httpx.MockTransport(lambda request: response)
     original_async_client = web_search_module.httpx.AsyncClient
@@ -122,119 +126,117 @@ async def test_search_with_tavily_formats_and_deduplicates_results(monkeypatch: 
 
     monkeypatch.setattr(web_search_module.httpx, "AsyncClient", _client)
 
-    results = await _search_with_tavily(
-        query="deepagents",
-        api_key="test-key",
-        allowed_domains=set(),
-        blocked_domains=set(),
-        limit=5,
+    title, content, truncated = await _fetch_url_text(
+        "https://example.com/docs",
+        api_key="exa-key",
     )
 
-    assert results == [
-        {"title": "deepagents", "url": "https://github.com/langchain-ai/deepagents"},
-        {"title": "https://docs.python.org/3/", "url": "https://docs.python.org/3/"},
-    ]
+    assert title == "Docs"
+    assert "Useful content." in content
+    assert truncated is False
 
 
 @pytest.mark.asyncio
-async def test_search_results_with_provider_uses_tavily_when_configured(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("TAVILY_API_KEY", "test-key")
+async def test_search_result_urls_uses_exa(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(
         web_search_module,
-        "_search_with_tavily",
-        AsyncMock(return_value=[{"title": "deepagents", "url": "https://github.com/langchain-ai/deepagents"}]),
-    )
-    monkeypatch.setattr(
-        web_search_module,
-        "_fetch_duckduckgo_html",
-        AsyncMock(side_effect=AssertionError("DuckDuckGo fallback should not be used")),
-    )
-
-    results, provider = await _search_results_with_provider(
-        query="deepagents",
-        allowed_domains=set(),
-        blocked_domains=set(),
-        limit=5,
-    )
-
-    assert provider == "Tavily"
-    assert results == [{"title": "deepagents", "url": "https://github.com/langchain-ai/deepagents"}]
-
-
-@pytest.mark.asyncio
-async def test_search_results_with_provider_falls_back_without_tavily_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
-    monkeypatch.setattr(
-        web_search_module,
-        "_fetch_duckduckgo_html",
+        "_fetch_exa_search_results",
         AsyncMock(
-            return_value='''<a class="result__a" href="https://github.com/langchain-ai/deepagents">deepagents</a>'''
+            return_value=[
+                {"title": "deepagents", "url": "https://github.com/langchain-ai/deepagents"}
+            ]
         ),
     )
 
-    results, provider = await _search_results_with_provider(
+    results, failure = await _search_result_urls(
+        api_key="exa-key",
         query="deepagents",
         allowed_domains=set(),
         blocked_domains=set(),
         limit=5,
     )
 
-    assert provider == "DuckDuckGo HTML fallback"
+    assert failure is not None
+    assert failure.provider == "Exa"
+    assert failure.attempts == 1
     assert results == [{"title": "deepagents", "url": "https://github.com/langchain-ai/deepagents"}]
 
 
 @pytest.mark.asyncio
-async def test_search_results_with_provider_falls_back_when_tavily_fails(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("TAVILY_API_KEY", "test-key")
+async def test_web_search_formats_url_results(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("EXA_API_KEY", "exa-key")
     monkeypatch.setattr(
         web_search_module,
-        "_search_with_tavily",
-        AsyncMock(side_effect=ToolException("boom")),
-    )
-    monkeypatch.setattr(
-        web_search_module,
-        "_fetch_duckduckgo_html",
-        AsyncMock(return_value='''<a class="result__a" href="https://docs.python.org/3/">Python Docs</a>'''),
-    )
-
-    results, provider = await _search_results_with_provider(
-        query="deepagents",
-        allowed_domains=set(),
-        blocked_domains=set(),
-        limit=5,
-    )
-
-    assert provider == "DuckDuckGo HTML fallback"
-    assert results == [{"title": "Python Docs", "url": "https://docs.python.org/3/"}]
-
-
-@pytest.mark.asyncio
-async def test_web_search_formats_results(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        web_search_module,
-        "_search_results_with_provider",
+        "_run_search_with_deadline",
         AsyncMock(
             return_value=(
-                [{"title": "deepagents", "url": "https://github.com/langchain-ai/deepagents"}],
-                "Tavily",
+                [
+                    {
+                        "title": "deepagents",
+                        "url": "https://github.com/langchain-ai/deepagents",
+                    }
+                ],
+                web_search_module.SearchFailure(reason="search succeeded", attempts=1),
             )
         ),
     )
 
     result = await web_search.coroutine(query="deepagents")
 
-    assert "Web search results for: deepagents" in result
-    assert "Provider: Tavily" in result
+    assert "Web search URL results for: deepagents" in result
+    assert "Provider: Exa" in result
     assert "1. deepagents" in result
     assert "URL: https://github.com/langchain-ai/deepagents" in result
 
 
 @pytest.mark.asyncio
-async def test_web_search_returns_no_results_message_when_filtered_out(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_web_fetch_formats_page_content(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("EXA_API_KEY", "exa-key")
     monkeypatch.setattr(
         web_search_module,
-        "_search_results_with_provider",
-        AsyncMock(return_value=([], "DuckDuckGo HTML fallback")),
+        "_fetch_url_text",
+        AsyncMock(return_value=("Docs", "Useful content.\n\nOther content.", False)),
+    )
+
+    result = await web_fetch.coroutine(
+        url="https://example.com/docs",
+        query="Useful",
+    )
+
+    assert "Web page content for: Docs" in result
+    assert "URL: https://example.com/docs" in result
+    assert "Query: Useful" in result
+    assert "Useful content." in result
+
+
+def test_extract_relevant_snippets_filters_by_query_terms() -> None:
+    content = "Alpha paragraph.\n\nBeta useful paragraph.\n\nGamma paragraph."
+
+    result = _extract_relevant_snippets(content, "useful", max_chars=1000)
+
+    assert "Beta useful paragraph." in result
+    assert "Alpha paragraph." not in result
+
+
+@pytest.mark.asyncio
+async def test_web_search_returns_no_results_message_when_filtered_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("EXA_API_KEY", "exa-key")
+    monkeypatch.setattr(
+        web_search_module,
+        "_run_search_with_deadline",
+        AsyncMock(
+            return_value=(
+                [],
+                web_search_module.SearchFailure(
+                    reason="no results matched allowed domains: python.org",
+                    attempts=3,
+                ),
+            )
+        ),
     )
 
     result = await web_search.coroutine(
@@ -242,4 +244,68 @@ async def test_web_search_returns_no_results_message_when_filtered_out(monkeypat
         allowed_domains=["python.org"],
     )
 
-    assert result == "No web results found for query: deepagents (allowed=python.org)"
+    assert (
+        result
+        == "No web results found for query: deepagents "
+        "(reason=no results matched allowed domains: python.org; attempts=3; allowed=python.org)"
+    )
+
+
+@pytest.mark.asyncio
+async def test_web_search_reports_timeout_reason(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("EXA_API_KEY", "exa-key")
+    monkeypatch.setattr(
+        web_search_module,
+        "_run_search_with_deadline",
+        AsyncMock(
+            return_value=(
+                [],
+                web_search_module.SearchFailure(
+                    reason="search timed out after 60s",
+                    attempts=3,
+                ),
+            )
+        ),
+    )
+
+    result = await web_search.coroutine(query="deepagents")
+
+    assert result == "No web results found for query: deepagents (reason=search timed out after 60s; attempts=3)"
+
+
+@pytest.mark.asyncio
+async def test_search_result_urls_stops_after_max_attempts(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        web_search_module,
+        "_try_fetch_exa_search_results",
+        AsyncMock(return_value=(None, "Exa web search request failed: HTTP 503 (upstream unavailable)")),
+    )
+
+    results, failure = await _search_result_urls(
+        api_key="exa-key",
+        query="deepagents",
+        allowed_domains=set(),
+        blocked_domains=set(),
+        limit=5,
+    )
+
+    assert results == []
+    assert failure is not None
+    assert failure.attempts == 3
+    assert failure.reason == "Exa web search request failed: HTTP 503 (upstream unavailable)"
+
+
+@pytest.mark.asyncio
+async def test_web_search_requires_exa_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("EXA_API_KEY", raising=False)
+
+    with pytest.raises(ToolException, match="EXA_API_KEY is required"):
+        await web_search.coroutine(query="deepagents")
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_requires_exa_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("EXA_API_KEY", raising=False)
+
+    with pytest.raises(ToolException, match="EXA_API_KEY is required"):
+        await web_fetch.coroutine(url="https://example.com/docs")

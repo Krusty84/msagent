@@ -57,3 +57,12 @@ test_data/
 .claude/
 .omx/
 .msagent/
+
+# Benchmark
+tests/benchmark_builder/log
+tests/benchmark_builder/runs
+tests/benchmark_builder/data
+tests/benchmark_builder/benchmarks
+
+
+

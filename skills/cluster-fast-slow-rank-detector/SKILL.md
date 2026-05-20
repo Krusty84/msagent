@@ -5,72 +5,49 @@ description: 专门用于 Ascend 集群 Profiling 性能数据的“快慢卡”
 
 # 集群快慢卡诊断
 
-## 0. 执行模式约束
-本技能必须保持原有 SOP，但执行时必须采用“静默批处理”模式，避免因多轮播报和长文本展开触发 context compaction。
-
-强制约束如下：
-
-* 除非用户明确要求过程详情，否则整个任务默认只允许：
-  * 1 次简短开场说明：说明将先检查数据类型与已有结果，再按 SOP 完成诊断。
-  * 1 次最终结论输出：汇总证据、结论、根因、建议。
-  * 若遇到阻塞，可额外增加 1 次阻塞说明。
-* 禁止按步骤持续汇报，不要在每跑完一个 `-m` 能力后都单独发消息。
-* 禁止粘贴命令原文、原始日志、长表格、长 JSON、README 内容、CSV 内容。
-* 所有工具输出只保留“是否成功、关键发现、是否影响结论”的摘要。
-* 若需要执行多个目录检查、文件检查或命令，优先一次性批量完成，再统一汇总，避免拆成多轮对话。
-* 不要为了展示严谨性而重复复述 SOP、专家规则或技能说明。
-* 不要调用额外 agent，不要把同一证据反复解释给用户。
-* 最终回复默认不超过 20 行；除非用户追问，不展开中间推理链。
-
 ## 1. 技能目标
-在 Ascend 多卡/集群场景下，利用 `msprof-analyze` 命令工具结合专家规则，自动识别因计算、通信或 Host 下发导致的性能瓶颈卡（慢卡），并下钻定位微观根因。
+在 Ascend 多卡/集群场景下，利用msprof-analyze命令工具结合专家规则，自动识别因计算、通信或 Host 下发导致的性能瓶颈卡（慢卡），并下钻定位微观根因。
 
 ## 2. 诊断先验知识库 (Expert Rules)
 禁止仅凭单项指标字面意思下结论，必须严格遵守以下华为官方诊断逻辑：
 
 * **【Host 下发瓶颈 (伪快卡)】**
-  * **现象**：某卡（Rank X）的 `Free Time` 极长（占比 > 10% 或远超均值），且 `Compute` 和 `Communication` 时间异常偏短。
-  * **定性**：**Rank X 绝非快卡，而是导致集群阻塞的“慢卡”。** CPU 下发慢导致其 NPU 饿死（产生巨大 Free Time）。当它终于发起通信时，其他卡已等待多时（其他卡 Wait 长），故其通信瞬间完成。
-  * **动作**：调用 `scripts/compare_api_stats.py`，重点观察 `launch`、`aclrtSynchronizeDevice` 等下发/同步 API 的耗时与间隙差异。
+    * **现象**：某卡（Rank X）的 `Free Time` 极长（占比 > 10% 或远超均值），且 `Compute` 和 `Communication` 时间异常偏短。
+    * **定性**：**Rank X 绝非快卡，而是导致集群阻塞的“慢卡”。** CPU 下发慢导致其 NPU 饿死（产生巨大 Free Time）。当它终于发起通信时，其他卡已等待多时（其他卡 Wait 长），故其通信瞬间完成。
+    * **动作**：调用 `scripts/compare_api_stats.py`，重点观察 `launch`、`aclrtSynchronizeDevice` 等下发/同步 API 的耗时与间隙差异。
 * **【纯计算快慢卡】**
-  * **现象**：各卡 `Free Time` 普遍较短且均匀，但某卡 `Compute Time` 显著大于均值。
-  * **定性**：计算型慢卡。若单算子调用次数 (`count`) 不同，为负载切分不均；若次数相同但平均耗时 (`avg_time`) 激增，为算子硬件劣化或动态 Shape 导致。
-  * **动作**：调用 `scripts/compare_op_stats.py` 对比算子执行差异。
+    * **现象**：各卡 `Free Time` 普遍较短且均匀，但某卡 `Compute Time` 显著大于均值。
+    * **定性**：计算型慢卡。若单算子调用次数 (`count`) 不同，为负载切分不均；若次数相同但平均耗时 (`avg_time`) 激增，为算子硬件劣化或动态 Shape 导致。
+    * **动作**：调用 `scripts/compare_op_stats.py` 对比算子执行差异。
 * **【通信/慢链路瓶颈】**
-  * **现象**：各卡通信带宽远低于理论值（如 SDMA < 2GB/s）。
-  * **定性**：通常为小包通信（ZeRO3 切分过细）、SDMA 地址未对齐或硬件问题。
+    * **现象**：各卡通信带宽远低于理论值（如 SDMA < 2GB/s）。
+    * **定性**：通常为小包通信（ZeRO3 切分过细）、SDMA 地址未对齐或硬件问题。
 
 ## 3. 标准操作流程 (SOP)
-请严格按照以下流程执行。允许优化执行顺序和批处理方式，但**不得改变该 SOP 的判定逻辑和结论标准**。
+请严格按照以下流程执行：
 
-### 1. 输入数据类型判断
-先判断用户提供的路径或文件属于哪一类，并把后续分析所需证据统一整理为“集群级宏观证据”和“Rank 级明细证据”两类。
+1. 输入数据类型判断
+
+先判断用户提供的路径或文件属于哪一类，并把后续分析所需证据统一整理为“集群级宏观证据”和“Rank 级明细证据”两类：
 
 （1）明确当前输入数据的类型
-
-* 路径下若存在 Profiling 数据：
+* 路径下若存在Profiling数据：
   * 共识别到多少个 Rank；
-  * Profiling 数据的类型是 DB or Text，若路径下存在 `ascend_pytorch_profiler_{rank_id}.db` 文件，则为 DB 类型数据，否则为 Text；
+  * Profilng数据的类型是DB or Text，若路径下存在ascend_pytorch_profiler_{rank_id}.db文件，则为 DB 类型数据，否则为 Text；
   * 各 Rank 的 profiling 文件夹是否齐全。
-* 路径下是否已存在 `msprof-analyze` 的分析结果目录 `cluster_analysis_output`：若存在，输出已包含哪些内容。
-* 告知用户当前数据类型、Rank 数量等信息。
-
-执行约束：
-
-* 这一步的检查结果一次性汇总，不要逐目录播报。
-* 只汇报：Rank 数量、数据类型、已有结果项、缺失结果项。
+* 路径下是否已存在 `msprof-analyze` 的分析结果目录`cluster_analysis_output`：若存在，输出已包含哪些内容
+* 告知用户，当前数据类型、Rank数量等信息
 
 （2）路由后续操作
+* 用户给的输入数据是 text 格式：请参考 `skills/msprof-analyze-cli` SKILL 的能力二：专家建议分析 (Advisor) 部分进行分析，然后直接进入流程 3 基于证据做快慢卡判定
+* 用户给的输入数据是 db 格式，判断是否已经存在`cluster_analysis_output` 结果文件夹：
+  * 若存在，检查是否包含 `cluster_time_summary`、`compute_op_sum`、`hccl_sum`、`slow_rank`、`slow_link`、`cann_api_sum` 等结果。记录缺失项，直接进入流程 2 调用 `msprof-analyze` 集群分析能力补齐；如果结果已完整，直接进入流程 3 基于证据做快慢卡判定
+  * 不存在，直接进入流程 2 调用 `msprof-analyze` 集群分析能力
+* 用户输入只存在 `cluster_analysis_output` 结果文件夹：直接进入流程 3 基于证据做快慢卡判定
 
-* 用户给的输入数据是 text 格式：请参考 `skills/msprof-analyze-cli` SKILL 的能力二：专家建议分析 (Advisor) 部分进行分析，然后直接进入流程 3 基于证据做快慢卡判定。
-* 用户给的输入数据是 db 格式，判断是否已经存在 `cluster_analysis_output` 结果文件夹：
-  * 若存在，检查是否包含 `cluster_time_summary`、`compute_op_sum`、`hccl_sum`、`slow_rank`、`slow_link`、`cann_api_sum` 等结果。记录缺失项，直接进入流程 2 调用 `msprof-analyze` 集群分析能力补齐；如果结果已完整，直接进入流程 3 基于证据做快慢卡判定。
-  * 不存在，直接进入流程 2 调用 `msprof-analyze` 集群分析能力。
-* 用户输入只存在 `cluster_analysis_output` 结果文件夹：直接进入流程 3 基于证据做快慢卡判定。
-
-### 2. 调用 `msprof-analyze` 集群分析能力
+2. 调用 `msprof-analyze` 集群分析能力
 流程 2 只负责生成分析结果，不负责直接下结论。  
-必须调用 `msprof-analyze` 执行集群分析。请参考 `skills/msprof-analyze-cli` SKILL 中“集群综合分析 (Cluster)”的部分。
+必须调用 `msprof-analyze` 执行集群分析。请参考 `skills/msprof-analyze-cli` SKILL 中 “集群综合分析 (Cluster)” 的部分
 **要求不是只跑 `all`，而是将 README 中与集群分析相关的 `-m` 能力逐项跑全**，至少覆盖下列能力：
 
 | 分析能力 | 介绍 |
@@ -84,45 +61,34 @@ description: 专门用于 Ascend 集群 Profiling 性能数据的“快慢卡”
 | cann_api_sum | 汇总 CANN 层 API，用于定位 Host 下发、同步点和 launch 间隙问题。 |
 
 命令示例：
-
 ```bash
 msprof-analyze -m cluster_time_summary -d ./cluster_data -o ./output/cluster_time_summary
 ```
 
 如环境允许，优先为每个 `-m` 能力使用独立输出目录，避免不同分析结果互相覆盖。若某项能力执行失败，必须记录失败命令、错误摘要和缺失影响，后续结论中不得把该项当成已验证证据。
 
-执行约束：
+3. 基于证据做快慢卡判定
 
-* 允许在内部逐项跑全，但不要逐项向用户汇报。
-* 对用户只输出一个汇总句：哪些能力成功、哪些失败、失败是否影响结论。
-* 若已有结果可复用，优先复用，不重复执行同一能力。
-
-### 3. 基于证据做快慢卡判定
 流程 3 只在证据集可用后执行。agent 不能只引用单项指标直接给结论，必须综合流程 1/2 得到的宏观证据和必要的 Rank 级明细证据，明确回答以下问题：
 
 （1）**是否存在快慢卡现象**；  
 （2）**真正的慢卡 Rank ID 是谁**，以及候选快卡 Rank ID 是谁；  
 （3）**问题属于哪一类**：
-
-* Host 下发慢 / 调度瓶颈；
-* 计算型慢卡；
-* 通信型慢卡 / 慢链路；
-* 负载不均衡；
-* 多种问题叠加；
-* 证据不足，暂不能判定。
+   * Host 下发慢 / 调度瓶颈；
+   * 计算型慢卡；
+   * 通信型慢卡 / 慢链路；
+   * 负载不均衡；
+   * 多种问题叠加；
+   * 证据不足，暂不能判定。
 
 （4）**判定依据是什么**：至少引用 `cluster_time_summary`、`slow_rank` 或 `slow_link` 中的一类宏观证据；若涉及计算型或 Host 下发瓶颈，还应继续调用流程 4 中的对比脚本，用 `compare_op_stats.py` 或 `compare_api_stats.py` 给出微观证据。
 
-执行约束：
 
-* 结论只输出最终判定，不要按“我先看了什么、又看了什么、再看了什么”展开过程叙述。
-* 证据引用只写证据名称和关键现象，不抄原表。
+4. 快卡vs慢卡比对
 
-### 4. 快卡 vs 慢卡比对
 对比脚本统一存放在本技能目录的 `scripts/` 文件夹中，支持自动发现集群目录或手动指定文件（优先 CSV，次选 DB）。
 
 **核心命令模板：**
-
 ```bash
 # 【计算类瓶颈】调用算子对比脚本（将 <本技能目录> 替换为 get_skill 返回中的路径）
 python <本技能目录>/scripts/compare_op_stats.py <集群数据根目录> <慢卡RankID> <快卡RankID> [--top N]
@@ -130,22 +96,16 @@ python <本技能目录>/scripts/compare_op_stats.py <集群数据根目录> <�
 # 【下发类瓶颈】调用 API 对比脚本
 python <本技能目录>/scripts/compare_api_stats.py <集群数据根目录> <慢卡RankID> <快卡RankID> [--top N]
 ```
-
 参数说明：
+* cluster_path: 集群数据根目录（包含 profiler_info_{rank}.json）。 
+* slow_rank / fast_rank: 慢卡与快卡（基准）的 Rank ID。 
+* --top N: （可选）输出差异最大的前 N 条，默认 20。 
+* --slow-path / --fast-path: （可选）当集群自动发现机制报错时，用于手动指定慢/快卡的 *.csv 或 *.db 绝对路径。 
+* --json: （可选）以 JSON 格式结构化输出。
 
-* `cluster_path`: 集群数据根目录（包含 `profiler_info_{rank}.json`）。
-* `slow_rank / fast_rank`: 慢卡与快卡（基准）的 Rank ID。
-* `--top N`: 输出差异最大的前 N 条，默认 20。
-* `--slow-path / --fast-path`: 当集群自动发现机制报错时，用于手动指定慢/快卡的 `*.csv` 或 `*.db` 绝对路径。
-* `--json`: 以 JSON 格式结构化输出。
+5. 对慢卡目录执行 advisor，并给出调优建议（可选）
 
-执行约束：
-
-* 若只是为了支持最终结论，允许把 `--top N` 实际收敛到较小值，但不改变脚本语义。
-* 最终只总结最关键的少量差异项，不粘贴完整结果。
-
-### 5. 对慢卡目录执行 advisor，并给出调优建议（可选）
-当流程 3 已锁定慢卡 Rank ID 后，必须进入该慢卡对应的 profiling 文件夹，再执行：
+当流程3已锁定慢卡 Rank ID 后，必须进入该慢卡对应的 profiling 文件夹，再执行：
 
 ```bash
 msprof-analyze advisor all -d <slow-rank-profiling-dir>
@@ -158,20 +118,4 @@ msprof-analyze advisor all -d <slow-rank-profiling-dir>
 * 通信型慢卡：排查小包通信、并行切分策略、链路带宽、通信域配置、SDMA/HCCL 异常；
 * 负载不均衡：排查数据切分、专家负载、pipeline stage 分配、rank 侧 workload 偏斜。
 
-若 advisor 输出与流程 3 的集群判断不一致，必须显式指出这一点，并说明以哪类证据为主、为什么。
-
-执行约束：
-
-* advisor 结果只提炼与最终根因最相关的建议，不展开全部输出。
-* 若用户只要求判断“是否有快慢卡问题”，且流程 3 已能稳定定性，可不主动展示 advisor 明细，只在最终结论中简述是否已用其交叉验证。
-
-## 4. 最终输出模板
-最终统一按以下结构输出，不要增加过程型废话：
-
-1. 输入概况：路径、Rank 数量、数据类型、已有结果是否完整。
-2. 结论：是否存在快慢卡，慢卡是谁，候选快卡是谁。
-3. 根因：属于哪一类，关键证据是什么。
-4. 补充验证：是否执行了 `compare_op_stats.py` / `compare_api_stats.py` / `advisor`，它们是否支持主结论。
-5. 建议：只给最相关的少量调优建议。
-
-若证据不足，直接说明缺什么，不要生成冗长候选分析树。
+若 advisor 输出与流程3的集群判断不一致，必须显式指出这一点，并说明以哪类证据为主、为什么。

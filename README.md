@@ -27,7 +27,6 @@
 
 - Python `3.11+`
 - 推荐使用 `uv`
-- 至少准备一个可用的 LLM API Key
 - glibc >= 2.34 (msprof-mcp trace_processor binary required)
 
 ### 2) 📦 安装
@@ -56,42 +55,15 @@ cd msagent
 
 如果你只需要使用当前仓库锁定的 Skills 版本，可以跳过这一步。
 
-安装依赖并启动：
+安装依赖：
 
 ```bash
 uv sync
-uv run msagent
 ```
-
-#### 常用命令
-
-检查版本：
-
-```bash
-msagent --version
-```
-
-开启详细日志：
-
-```bash
-msagent -v
-```
-
-启用后日志会写入当前工作目录下的 `./.msagent/logs/app.log`，同时终端会提示日志文件位置。
-
-#### 日志级别环境变量
-
-通过 `MSAGENT_LOG_LEVEL` 环境变量可调整日志详细程度（默认 `INFO`）：
-
-```bash
-# 调试模式，记录最详细日志
-export MSAGENT_LOG_LEVEL=DEBUG
-msagent -v
-```
-
-支持的级别（从低到高）：`DEBUG` < `INFO` < `WARNING` < `ERROR` < `CRITICAL`
 
 ### 3) 🔐 配置 LLM
+
+在开始配置前，请确保已准备好对应 Provider 的 API Key。未配置 LLM 时，启动后将无法访问任何服务。
 
 当前 `config` 子命令直接支持的 Provider 是：`openai`、`anthropic`、`google`。
 
@@ -230,6 +202,34 @@ msagent web --no-ui
 
 </details>
 
+#### 常用命令
+
+检查版本：
+
+```bash
+msagent --version
+```
+
+开启详细日志（终端显示更详细）：
+
+```bash
+msagent -v
+```
+
+日志默认会写入当前工作目录下的 `./.msagent/logs/app.log`。  
+使用 `-v` 时，终端会额外提示日志文件位置并输出更详细日志。
+
+#### 日志级别环境变量
+
+通过 `MSAGENT_LOG_LEVEL` 环境变量可调整日志详细程度（默认 `INFO`）：
+
+```bash
+# 调试模式，记录最详细日志
+export MSAGENT_LOG_LEVEL=DEBUG
+msagent -v
+```
+
+支持的级别（从低到高）：`DEBUG` < `INFO` < `WARNING` < `ERROR` < `CRITICAL`
 
 ### 5) 📚 按 Agent 查看说明与示例
 
@@ -269,11 +269,11 @@ msagent web --no-ui
 | `/hotkeys` | 查看键盘快捷键说明。 |
 | `/agents` | 打开 Agent 选择器。 |
 | `/model` | 打开模型选择器。 |
-| `/threads` | 浏览并恢复历史会话线程。 |
+| `/threads` | 浏览并恢复历史会话线程；已执行过 offload 的线程会显示 `[history offloaded]`。 |
 | `/tools` | 查看当前可用工具。 |
 | `/skills` | 浏览当前可用 Skills。 |
 | `/mcp` | 管理 MCP 服务启用状态。 |
-| `/offload` | 压缩并卸载较早的会话消息。 |
+| `/offload` | 压缩并卸载较早的会话消息；原始历史会写入 `./.msagent/conversation_history/<thread_id>.md`。 |
 | `/tool-output` | 打开最近一次可展开的工具输出。 |
 | `/clear` | 清屏并开启新线程。 |
 | `/exit` | 退出当前会话。 |
@@ -290,6 +290,16 @@ msagent web --no-ui
 | `Ctrl+O` | 打开最近一次可展开的工具输出。 |
 | `Tab` | 应用第一个补全项。 |
 | `Enter` | 提交输入；如果当前选中了补全项，则先应用补全。 |
+
+### 交互式选择器通用快捷键
+
+`/threads`、`/agents`、`/model`、`/tools`、`/skills`、`/mcp` 等命令会打开交互式选择器，均支持：
+
+| 快捷键 | 说明 |
+|---|---|
+| `Up` / `Down` | 移动选中项。 |
+| `Enter` | 确认选择。 |
+| `Esc` / `Ctrl+C` | 关闭选择器，不做任何操作。 |
 
 ### 工具输出查看器
 

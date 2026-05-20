@@ -12,7 +12,7 @@ class ThemedConsole:
         self.console = Console(
             theme=console_theme.rich_theme,
             force_terminal=True,
-            color_system="truecolor",
+            color_system="auto",
         )
 
     def print(self, *args, style: str = "default", **kwargs):

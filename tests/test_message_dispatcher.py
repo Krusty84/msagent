@@ -126,6 +126,52 @@ def _patch_dispatch_to_raise_connection_error(
 
 
 @pytest.mark.asyncio
+async def test_invoke_without_stream_resumes_interrupts(tmp_path: Path) -> None:
+    session = _build_session(tmp_path)
+    dispatcher = MessageDispatcher(session)
+    calls: list[Any] = []
+
+    async def fake_ainvoke(input_data, config, *, context):
+        del config, context
+        calls.append(input_data)
+        if len(calls) == 1:
+            return {"__interrupt__": [SimpleNamespace(id="interrupt-1")]}
+        return {
+            "messages": [
+                AIMessage(
+                    id="final-message",
+                    content="done",
+                    usage_metadata={
+                        "input_tokens": 10,
+                        "output_tokens": 2,
+                        "total_tokens": 12,
+                    },
+                )
+            ]
+        }
+
+    async def fake_handle(interrupts):
+        assert interrupts[0].id == "interrupt-1"
+        return {"decisions": [{"type": "approve"}]}
+
+    rendered: list[Any] = []
+    session.graph.ainvoke = fake_ainvoke
+    session.renderer.render_message = rendered.append
+    dispatcher.interrupt_handler.handle = fake_handle
+
+    await dispatcher._invoke_without_stream(
+        {"messages": []},
+        {},
+        message_module.AgentContext(),
+    )
+
+    assert len(calls) == 2
+    assert rendered and isinstance(rendered[0], AIMessage)
+    assert session.context.current_input_tokens == 10
+    assert session.context.current_output_tokens == 2
+
+
+@pytest.mark.asyncio
 async def test_dispatch_logs_detailed_connection_errors(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

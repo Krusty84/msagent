@@ -41,14 +41,9 @@ except ImportError:  # pragma: no cover - graceful fallback when dependency isn'
 WELCOME_TITLE = "* Welcome to msAgent"
 WELCOME_ASCII_FONT = "ansi_shadow"
 WELCOME_ASCII_PALETTE = [
-    "#0b1f5e",
-    "#123b8d",
-    "#1d4ed8",
-    "#2563eb",
-    "#3b82f6",
-    "#4f8ff7",
-    "#6ea8fb",
-    "#8bb8f8",
+    "dark_blue",
+    "blue",
+    "bright_blue",
 ]
 
 
@@ -58,33 +53,6 @@ def _render_welcome_ascii(
     gradient: str = "dark_to_light",
 ) -> Text:
     """Render ASCII art welcome text in the langchain-code style."""
-
-    def _hex_to_rgb(h: str) -> tuple[int, int, int]:
-        h = h.lstrip("#")
-        return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
-
-    def _lerp(a: int, b: int, t: float) -> int:
-        return int(a + (b - a) * t)
-
-    def _smoothstep(t: float) -> float:
-        return t * t * (3 - 2 * t)
-
-    def _interpolate_palette(palette: list[str], steps: int) -> list[str]:
-        if steps <= 1:
-            return [palette[0]]
-        out: list[str] = []
-        steps_total = steps - 1
-        for x in range(steps):
-            pos = _smoothstep(x / steps_total)
-            seg = min(int(pos * (len(palette) - 1)), len(palette) - 2)
-            seg_start = seg / (len(palette) - 1)
-            seg_end = (seg + 1) / (len(palette) - 1)
-            local_t = (pos - seg_start) / (seg_end - seg_start + 1e-9)
-            c1 = _hex_to_rgb(palette[seg])
-            c2 = _hex_to_rgb(palette[seg + 1])
-            rgb = tuple(_lerp(a, b, local_t) for a, b in zip(c1, c2))
-            out.append("#{:02x}{:02x}{:02x}".format(*rgb))
-        return out
 
     if Figlet is None:
         return Text(text, style="accent")
@@ -105,8 +73,15 @@ def _render_welcome_ascii(
     active_columns = [
         column for column in range(width) if any(column < len(line) and line[column] != " " for line in lines)
     ]
-    ramp = _interpolate_palette(palette, len(active_columns))
-    column_colors = {column: ramp[index] for index, column in enumerate(active_columns)}
+    color_steps = max(1, len(palette))
+    if active_columns:
+        max_index = max(1, len(active_columns) - 1)
+        column_colors = {
+            column: palette[min((index * color_steps) // (max_index + 1), color_steps - 1)]
+            for index, column in enumerate(active_columns)
+        }
+    else:
+        column_colors = {}
 
     result = Text()
     for line in lines:

@@ -79,6 +79,14 @@ msagent -v
 
 启用后日志会写入当前工作目录下的 `./.msagent/logs/app.log`，同时终端会提示日志文件位置。
 
+输出机器可读的 JSONL 追踪（便于 benchmark 统计工具调用、token 和耗时）：
+
+```bash
+msagent --no-stream --trace-jsonl runs/msagent.events.jsonl "检查 input_data 并输出结论"
+```
+
+JSONL 中包含 `tool_call`、`tool_result`、`token_usage` 和 `session_finished` 等事件。
+
 #### 日志级别环境变量
 
 通过 `MSAGENT_LOG_LEVEL` 环境变量可调整日志详细程度（默认 `INFO`）：

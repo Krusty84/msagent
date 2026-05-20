@@ -103,11 +103,13 @@ tool-call summary with the count, tool names, commands, token usage, and elapsed
 wall-clock time.
 
 The msAgent adapter runs `msagent` in one-shot mode against the isolated
-`input_data/` directory. It defaults to the built-in `Hermes` persona, which is
-oriented toward Ascend profiling and performance diagnosis. It copies the local
-`.msagent` configuration into the isolated workspace so project-local model and
-agent settings are available without exposing benchmark YAML files. Override the
-CLI path with `MSAGENT_CLI` when running from source, for example
+`input_data/` directory and passes `--trace-jsonl` so the runner can read
+structured tool calls, tool results, token usage, and elapsed time from msAgent
+instead of scraping terminal text. It defaults to the built-in `Hermes` persona,
+which is oriented toward Ascend profiling and performance diagnosis. It copies
+the local `.msagent` configuration into the isolated workspace so project-local
+model and agent settings are available without exposing benchmark YAML files.
+Override the CLI path with `MSAGENT_CLI` when running from source, for example
 `MSAGENT_CLI="uv --project /path/to/msagent run msagent"`, and override the
 persona with either `--msagent-agent` or `MSAGENT_AGENT`.
 

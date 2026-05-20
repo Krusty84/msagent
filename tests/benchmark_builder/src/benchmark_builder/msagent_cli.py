@@ -18,6 +18,7 @@ from .codex_cli import (
     build_judge_prompt,
     copy_input_data,
     display_path,
+    parse_jsonl,
     safe_command_for_trace,
     safe_path_component,
     trim_event_text,
@@ -39,7 +40,7 @@ class MsagentCliAgent:
     agent_info = {
         "name": "msagent-cli-agent",
         "runtime": "msagent one-shot",
-        "token_usage_mode": "unavailable",
+        "token_usage_mode": "msagent-jsonl",
     }
 
     def __init__(
@@ -67,6 +68,7 @@ class MsagentCliAgent:
         final_artifact_path = self.artifact_dir / f"{case.id}.agent.final.json"
         stdout_path = self.artifact_dir / f"{case.id}.agent.stdout.txt"
         stderr_path = self.artifact_dir / f"{case.id}.agent.stderr.txt"
+        jsonl_path = self.artifact_dir / f"{case.id}.agent.events.jsonl"
 
         prefix = f"benchmark-builder-msagent-agent-{safe_path_component(case.id)}-"
         with tempfile.TemporaryDirectory(prefix=prefix) as temp_dir:
@@ -87,6 +89,7 @@ class MsagentCliAgent:
                 msagent_agent=self.msagent_agent,
                 model=self.model,
                 approval_mode=self.approval_mode,
+                trace_jsonl_path=jsonl_path,
                 prompt=prompt,
             )
 
@@ -103,6 +106,8 @@ class MsagentCliAgent:
             duration_ms = round((perf_counter() - started) * 1000)
             stdout_path.write_text(completed.stdout, encoding="utf-8")
             stderr_path.write_text(completed.stderr, encoding="utf-8")
+            raw_events = read_msagent_jsonl_events(jsonl_path)
+            token_usage = extract_msagent_token_usage(raw_events)
 
             if completed.returncode != 0:
                 raise RuntimeError(
@@ -138,13 +143,15 @@ class MsagentCliAgent:
                 input_data_isolation="copied",
                 stdout_path=display_path(stdout_path, self.workspace),
                 stderr_path=display_path(stderr_path, self.workspace),
+                jsonl_path=display_path(jsonl_path, self.workspace),
+                jsonl_event_count=len(raw_events),
                 stderr_tail=completed.stderr[-2000:],
                 duration_ms=duration_ms,
             )
-            for event in normalize_msagent_stdout(completed.stdout):
+            for event in normalize_msagent_events(raw_events) or normalize_msagent_stdout(completed.stdout):
                 trace.add(**event)
             trace.final_answer(final_answer)
-            trace.finish(msagent_token_usage())
+            trace.finish(token_usage)
             trace.duration_ms = duration_ms
             return trace.to_dict()
 
@@ -153,7 +160,7 @@ class MsagentCliJudge:
     judge_info = {
         "name": "msagent-cli-judge",
         "runtime": "msagent one-shot",
-        "token_usage_mode": "unavailable",
+        "token_usage_mode": "msagent-jsonl",
     }
 
     def __init__(
@@ -186,6 +193,7 @@ class MsagentCliJudge:
         final_artifact_path = self.artifact_dir / f"{case.id}.judge.final.json"
         stdout_path = self.artifact_dir / f"{case.id}.judge.stdout.txt"
         stderr_path = self.artifact_dir / f"{case.id}.judge.stderr.txt"
+        jsonl_path = self.artifact_dir / f"{case.id}.judge.events.jsonl"
 
         prompt = build_msagent_judge_prompt(
             case,
@@ -203,6 +211,7 @@ class MsagentCliJudge:
                 msagent_agent=self.msagent_agent,
                 model=self.model,
                 approval_mode=self.approval_mode,
+                trace_jsonl_path=jsonl_path,
                 prompt=prompt,
             )
 
@@ -219,6 +228,8 @@ class MsagentCliJudge:
             duration_ms = round((perf_counter() - started) * 1000)
             stdout_path.write_text(completed.stdout, encoding="utf-8")
             stderr_path.write_text(completed.stderr, encoding="utf-8")
+            raw_events = read_msagent_jsonl_events(jsonl_path)
+            token_usage = extract_msagent_token_usage(raw_events)
 
             if completed.returncode != 0:
                 raise RuntimeError(
@@ -246,7 +257,8 @@ class MsagentCliJudge:
                 },
                 **judge_result,
                 "duration_ms": duration_ms,
-                "token_usage": msagent_token_usage(),
+                "token_usage": token_usage,
+                "jsonl_path": display_path(jsonl_path, self.workspace),
                 "stdout_path": display_path(stdout_path, self.workspace),
                 "stderr_path": display_path(stderr_path, self.workspace),
             }
@@ -285,6 +297,7 @@ def build_msagent_command(
     msagent_agent: str,
     model: str | None,
     approval_mode: str,
+    trace_jsonl_path: Path | None,
     prompt: str,
 ) -> list[str]:
     cmd = [
@@ -297,6 +310,8 @@ def build_msagent_command(
         "--approval-mode",
         approval_mode,
     ]
+    if trace_jsonl_path is not None:
+        cmd.extend(["--trace-jsonl", str(trace_jsonl_path)])
     if model:
         cmd.extend(["--model", model])
     cmd.append(prompt)
@@ -417,6 +432,98 @@ def strip_ansi(text: str) -> str:
     return re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", text)
 
 
+def read_msagent_jsonl_events(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    return parse_jsonl(path.read_text(encoding="utf-8"))
+
+
+def extract_msagent_token_usage(events: list[dict[str, Any]]) -> dict[str, Any]:
+    for event in reversed(events):
+        if event.get("type") != "session_finished":
+            continue
+        usage = event.get("token_usage")
+        if isinstance(usage, dict):
+            return normalize_msagent_usage(usage)
+
+    for event in reversed(events):
+        if event.get("type") != "token_usage":
+            continue
+        cumulative = event.get("cumulative")
+        if isinstance(cumulative, dict):
+            return normalize_msagent_usage(cumulative)
+
+    return msagent_token_usage()
+
+
+def normalize_msagent_usage(usage: dict[str, Any]) -> dict[str, Any]:
+    try:
+        input_tokens = int(usage.get("input_tokens") or 0)
+        output_tokens = int(usage.get("output_tokens") or 0)
+        total_tokens = int(usage.get("total_tokens") or input_tokens + output_tokens)
+    except (TypeError, ValueError):
+        return msagent_token_usage()
+
+    available = bool(usage.get("available", total_tokens > 0))
+    return {
+        "available": available,
+        "source": str(usage.get("source") or "msagent-cli-jsonl"),
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": total_tokens,
+    }
+
+
+def normalize_msagent_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    for raw in events:
+        event_type = str(raw.get("type") or "")
+        if event_type == "tool_call":
+            normalized.append({
+                "event_type": "tool_call",
+                "raw_type": raw.get("raw_type") or "assistant.tool_call",
+                "tool": str(raw.get("tool") or "unknown"),
+                "item_id": raw.get("item_id"),
+                "input": raw.get("input") if isinstance(raw.get("input"), dict) else {},
+                "summary": trim_event_text(raw),
+            })
+            continue
+
+        if event_type == "tool_result":
+            output = raw.get("output")
+            payload: dict[str, Any] = {
+                "event_type": "tool_result",
+                "raw_type": raw.get("raw_type") or "tool.result",
+                "tool": str(raw.get("tool") or "tool"),
+                "item_id": raw.get("item_id"),
+                "output": output if isinstance(output, dict) else {"content": str(output or "")},
+                "summary": trim_event_text(raw),
+            }
+            if raw.get("duration_ms") is not None:
+                payload["duration_ms"] = raw.get("duration_ms")
+            normalized.append(payload)
+            continue
+
+        if event_type == "assistant_message":
+            content = str(raw.get("content") or "")
+            if content:
+                normalized.append({
+                    "event_type": "agent_event",
+                    "raw_type": "assistant.message",
+                    "summary": trim_text(content, 2000),
+                })
+            continue
+
+        if event_type in {"session_started", "session_finished", "token_usage", "error"}:
+            normalized.append({
+                "event_type": "agent_event",
+                "raw_type": f"msagent.{event_type}",
+                "summary": trim_event_text(raw),
+            })
+
+    return normalized
+
+
 def normalize_msagent_stdout(stdout: str) -> list[dict[str, Any]]:
     text = strip_ansi(stdout).strip()
     if not text:
@@ -453,7 +560,7 @@ def parse_msagent_tool_call_line(line: str) -> dict[str, Any] | None:
 def msagent_token_usage() -> dict[str, Any]:
     return {
         "available": False,
-        "source": "msagent-cli-no-usage-event",
+        "source": "msagent-cli-jsonl-no-usage-event",
         "input_tokens": 0,
         "output_tokens": 0,
         "total_tokens": 0,

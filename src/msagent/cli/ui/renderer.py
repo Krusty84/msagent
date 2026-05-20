@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import sys
 from dataclasses import dataclass
 from typing import Any, cast
 
@@ -24,6 +26,7 @@ from rich.text import Text
 
 from msagent.cli.core.context import Context
 from msagent.cli.theme import console
+from msagent.cli.theme.detect import detect_terminal_theme
 from msagent.cli.ui.markdown import wrap_html_in_code_blocks
 from msagent.cli.ui.shared import build_agent_prompt
 from msagent.cli.ui.tool_display import order_tool_arg_items
@@ -40,16 +43,126 @@ except ImportError:  # pragma: no cover - graceful fallback when dependency isn'
 
 WELCOME_TITLE = "* Welcome to msAgent"
 WELCOME_ASCII_FONT = "ansi_shadow"
-WELCOME_ASCII_PALETTE = [
-    "#0b1f5e",
+WELCOME_ASCII_TRUECOLOR_DARK_PALETTE = [
+    "#123b8d",
     "#123b8d",
     "#1d4ed8",
     "#2563eb",
     "#3b82f6",
-    "#4f8ff7",
-    "#6ea8fb",
-    "#8bb8f8",
+    "#3b7cf0",
+    "#4a88f2",
+    "#5a94f4",
 ]
+WELCOME_ASCII_TRUECOLOR_LIGHT_PALETTE = [
+    "#1d4ed8",
+    "#2256e5",
+    "#2563eb",
+    "#2d6eed",
+    "#3478ef",
+    "#3b82f6",
+    "#4289f2",
+    "#4a90ee",
+]
+WELCOME_ASCII_EIGHT_BIT_DARK_PALETTE = [
+    "color(18)",
+    "color(19)",
+    "color(20)",
+    "color(21)",
+    "color(26)",
+    "color(27)",
+    "color(32)",
+    "color(33)",
+]
+WELCOME_ASCII_EIGHT_BIT_LIGHT_PALETTE = [
+    "color(19)",
+    "color(20)",
+    "color(21)",
+    "color(26)",
+    "color(27)",
+    "color(27)",
+    "color(32)",
+    "color(32)",
+]
+WELCOME_ASCII_LOW_COLOR_PALETTE = [
+    "blue",
+    "blue",
+    "bright_blue",
+    "bright_blue",
+]
+
+
+def _select_welcome_ascii_palette() -> list[str]:
+    """Pick a terminal-safe welcome palette based on console capabilities."""
+    color_system = getattr(console.console, "color_system", None) or ""
+    terminal_theme = detect_terminal_theme()
+    is_windows_conda = sys.platform == "win32" and bool(
+        os.environ.get("CONDA_PREFIX") or os.environ.get("CONDA_DEFAULT_ENV")
+    )
+
+    if is_windows_conda:
+        if terminal_theme == "light":
+            return WELCOME_ASCII_EIGHT_BIT_LIGHT_PALETTE
+        return WELCOME_ASCII_EIGHT_BIT_DARK_PALETTE
+
+    if color_system == "truecolor":
+        if terminal_theme == "light":
+            return WELCOME_ASCII_TRUECOLOR_LIGHT_PALETTE
+        return WELCOME_ASCII_TRUECOLOR_DARK_PALETTE
+
+    if color_system == "256":
+        if terminal_theme == "light":
+            return WELCOME_ASCII_EIGHT_BIT_LIGHT_PALETTE
+        return WELCOME_ASCII_EIGHT_BIT_DARK_PALETTE
+
+    return WELCOME_ASCII_LOW_COLOR_PALETTE
+
+
+def _build_welcome_column_colors(palette: list[str], active_columns: list[int]) -> dict[int, str]:
+    """Map active text columns to colors, interpolating only for hex palettes."""
+
+    def _is_hex_palette(colors: list[str]) -> bool:
+        return all(isinstance(color, str) and color.startswith("#") and len(color) == 7 for color in colors)
+
+    if not active_columns:
+        return {}
+
+    if _is_hex_palette(palette):
+        def _hex_to_rgb(h: str) -> tuple[int, int, int]:
+            h = h.lstrip("#")
+            return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+
+        def _lerp(a: int, b: int, t: float) -> int:
+            return int(a + (b - a) * t)
+
+        def _smoothstep(t: float) -> float:
+            return t * t * (3 - 2 * t)
+
+        def _interpolate_palette(colors: list[str], steps: int) -> list[str]:
+            if steps <= 1:
+                return [colors[0]]
+            out: list[str] = []
+            steps_total = steps - 1
+            for x in range(steps):
+                pos = _smoothstep(x / steps_total)
+                seg = min(int(pos * (len(colors) - 1)), len(colors) - 2)
+                seg_start = seg / (len(colors) - 1)
+                seg_end = (seg + 1) / (len(colors) - 1)
+                local_t = (pos - seg_start) / (seg_end - seg_start + 1e-9)
+                c1 = _hex_to_rgb(colors[seg])
+                c2 = _hex_to_rgb(colors[seg + 1])
+                rgb = tuple(_lerp(a, b, local_t) for a, b in zip(c1, c2))
+                out.append("#{:02x}{:02x}{:02x}".format(*rgb))
+            return out
+
+        ramp = _interpolate_palette(palette, len(active_columns))
+        return {column: ramp[index] for index, column in enumerate(active_columns)}
+
+    color_steps = max(1, len(palette))
+    max_index = max(1, len(active_columns) - 1)
+    return {
+        column: palette[min((index * color_steps) // (max_index + 1), color_steps - 1)]
+        for index, column in enumerate(active_columns)
+    }
 
 
 def _render_welcome_ascii(
@@ -58,33 +171,6 @@ def _render_welcome_ascii(
     gradient: str = "dark_to_light",
 ) -> Text:
     """Render ASCII art welcome text in the langchain-code style."""
-
-    def _hex_to_rgb(h: str) -> tuple[int, int, int]:
-        h = h.lstrip("#")
-        return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
-
-    def _lerp(a: int, b: int, t: float) -> int:
-        return int(a + (b - a) * t)
-
-    def _smoothstep(t: float) -> float:
-        return t * t * (3 - 2 * t)
-
-    def _interpolate_palette(palette: list[str], steps: int) -> list[str]:
-        if steps <= 1:
-            return [palette[0]]
-        out: list[str] = []
-        steps_total = steps - 1
-        for x in range(steps):
-            pos = _smoothstep(x / steps_total)
-            seg = min(int(pos * (len(palette) - 1)), len(palette) - 2)
-            seg_start = seg / (len(palette) - 1)
-            seg_end = (seg + 1) / (len(palette) - 1)
-            local_t = (pos - seg_start) / (seg_end - seg_start + 1e-9)
-            c1 = _hex_to_rgb(palette[seg])
-            c2 = _hex_to_rgb(palette[seg + 1])
-            rgb = tuple(_lerp(a, b, local_t) for a, b in zip(c1, c2))
-            out.append("#{:02x}{:02x}{:02x}".format(*rgb))
-        return out
 
     if Figlet is None:
         return Text(text, style="accent")
@@ -97,7 +183,7 @@ def _render_welcome_ascii(
     while lines and not lines[-1].strip():
         lines.pop()
 
-    palette = WELCOME_ASCII_PALETTE
+    palette = _select_welcome_ascii_palette()
     if gradient == "light_to_dark":
         palette = list(reversed(palette))
 
@@ -105,8 +191,7 @@ def _render_welcome_ascii(
     active_columns = [
         column for column in range(width) if any(column < len(line) and line[column] != " " for line in lines)
     ]
-    ramp = _interpolate_palette(palette, len(active_columns))
-    column_colors = {column: ramp[index] for index, column in enumerate(active_columns)}
+    column_colors = _build_welcome_column_colors(palette, active_columns)
 
     result = Text()
     for line in lines:

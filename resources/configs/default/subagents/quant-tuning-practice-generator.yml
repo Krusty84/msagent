@@ -1,0 +1,16 @@
+version: __APP_VERSION__
+name: quant-tuning-practice-generator
+description: Generate msmodelslim quantization practice YAML configuration
+prompt:
+  - prompts/subagents/quant-tuning-practice-generator.md
+llm: haiku-4.5
+tools:
+  patterns:
+    - impl:deepagents:*
+    - mcp:*:*
+  use_catalog: false
+  output_max_tokens: 10000
+skills:
+  patterns:
+    - default:tune-practice-cfg
+  use_catalog: false

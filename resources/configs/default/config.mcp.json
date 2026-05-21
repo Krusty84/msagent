@@ -11,6 +11,18 @@
       "stateful": true,
       "repair_timeout": 30,
       "invoke_timeout": 3600.0
+    },
+    "modelslim": {
+      "command": "python",
+      "args": ["-m", "msmodelslim.mcp"],
+      "transport": "stdio",
+      "env": {},
+      "include": [],
+      "exclude": [],
+      "enabled": true,
+      "stateful": true,
+      "repair_timeout": 30,
+      "invoke_timeout": 3600.0
     }
   }
 }

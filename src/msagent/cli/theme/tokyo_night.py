@@ -51,11 +51,13 @@ class TokyoNightTheme(BaseTheme):
         return Theme(
             {
                 # Basic text styles
-                "default": Style(color=c.light_blue_white),
-                "primary": Style(color=c.light_blue_white),
-                "secondary": Style(color=c.muted_blue),
-                "muted": Style(color=c.blue_gray),
-                "muted.bold": Style(color=c.blue_gray, bold=True),
+                "default": Style(color="#f8fafc"),
+                "primary": Style(color="#f8fafc"),
+                "ai.response": Style(color="#e5e7eb"),
+                "user.input": Style(color="#f8fafc"),
+                "secondary": Style(color="#cbd5e1"),
+                "muted": Style(color="#94a3b8"),
+                "muted.bold": Style(color="#94a3b8", bold=True),
                 "disabled": Style(color=c.dark_gray),
                 # Accent styles
                 "accent": Style(color=c.bright_blue, bold=True),
@@ -73,6 +75,16 @@ class TokyoNightTheme(BaseTheme):
                 "command": Style(color=c.purple),
                 "option": Style(color=c.cyan),
                 "indicator": Style(color=c.teal),
+                "thinking": Style(color=c.blue_gray, italic=True),
+                "thinking.preview": Style(color=c.blue_gray, italic=True, dim=True),
+                "tool.prefix": Style(color="#93c5fd"),
+                "tool.name": Style(color="#dbeafe"),
+                "tool.arg.key": Style(color="#bfdbfe"),
+                "tool.arg.value": Style(color="#ddd6fe"),
+                "tool.arg.separator": Style(color="#bfdbfe"),
+                "tool.output.low": Style(color="#aeb8e8"),
+                "tool.sweep.edge": Style(color="#bfdbfe"),
+                "tool.sweep.core": Style(color="#ffffff", bold=True),
                 # Code syntax highlighting
                 "code": Style(color=c.teal, bold=False),
                 "code.keyword": Style(color=c.purple, bold=True),
@@ -82,15 +94,17 @@ class TokyoNightTheme(BaseTheme):
                 "code.operator": Style(color=c.sky_blue),
                 # Markdown specific styles
                 "markdown.code": Style(color=c.purple, bold=True),
+                "markdown.link": Style(color="#93c5fd", underline=True),
+                "repr.url": Style(color="#93c5fd", underline=True),
                 # Special elements
-                "timestamp": Style(color=c.blue_gray, italic=True),
+                "timestamp": Style(color="#94a3b8", italic=True),
             }
         )
 
     # Semantic color accessors for BaseTheme protocol
     @property
     def primary_text(self) -> str:
-        return self.colors.light_blue_white
+        return "#f8fafc"
 
     @property
     def secondary_text(self) -> str:

@@ -123,13 +123,13 @@ def _render_welcome_ascii(
     return result
 
 
-THINKING_STYLE = Style(italic=True, dim=True)
-LOW_PRIORITY_STYLE = console.console.get_style("muted") + Style(dim=True)
-TOOL_PREFIX_STYLE = "accent"
-TOOL_NAME_STYLE = "primary"
-TOOL_ARG_KEY_STYLE = "muted"
-TOOL_ARG_VALUE_STYLE = "primary"
-TOOL_ARG_SEPARATOR_STYLE = "muted"
+THINKING_STYLE = "thinking"
+LOW_PRIORITY_STYLE = "tool.output.low"
+TOOL_PREFIX_STYLE = "tool.prefix"
+TOOL_NAME_STYLE = "tool.name"
+TOOL_ARG_KEY_STYLE = "tool.arg.key"
+TOOL_ARG_VALUE_STYLE = "tool.arg.value"
+TOOL_ARG_SEPARATOR_STYLE = "tool.arg.separator"
 TOOL_SUMMARY_VALUE_MAX = 72
 TOOL_COMMAND_VALUE_MAX = 240
 TOOL_MESSAGE_MAX_DISPLAY_CHARS = 200
@@ -237,11 +237,13 @@ class PrefixedMarkdown:
         prefix: str,
         content: str,
         prefix_style: str = "success",
+        content_style: str = "ai.response",
         code_theme: str = "dracula",
         indent_level: int = 0,
     ):
         self.prefix = prefix
         self.prefix_style = prefix_style
+        self.content_style = content_style
         self.content = content
         self.code_theme = code_theme
         self.indent_level = indent_level
@@ -259,7 +261,11 @@ class PrefixedMarkdown:
         adjusted_options = options.update_width(options.max_width - indent_width)
 
         # Render all content as markdown with adjusted width
-        markdown = TransparentMarkdown(self.content, code_theme=self.code_theme)
+        markdown = TransparentMarkdown(
+            self.content,
+            code_theme=self.code_theme,
+            style=self.content_style,
+        )
         segments = list(console.render(markdown, adjusted_options))
 
         if not segments:
@@ -436,16 +442,19 @@ class Renderer:
         prefix_width = cell_len(prompt_prefix)
         indent = " " * prefix_width
 
-        # Split content into lines and add indentation
+        rendered = Text()
         lines = content.split("\n")
-        formatted_lines = []
         for i, line in enumerate(lines):
             if i == 0:
-                formatted_lines.append(f"[prompt]{prompt_prefix}[/prompt]{line}")
+                rendered.append(prompt_prefix, style="prompt")
+                rendered.append(line, style="user.input")
             else:
-                formatted_lines.append(f"{indent}{line}")
+                rendered.append(indent, style="user.input")
+                rendered.append(line, style="user.input")
+            if i < len(lines) - 1:
+                rendered.append("\n")
 
-        console.print("\n".join(formatted_lines))
+        console.console.print(rendered, highlight=False)
         console.print("")
 
     @staticmethod

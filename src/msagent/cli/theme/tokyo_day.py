@@ -53,6 +53,7 @@ class TokyoDayTheme(BaseTheme):
                 # Basic text styles
                 "default": Style(color=c.deep_blue),
                 "primary": Style(color=c.deep_blue),
+                "ai.response": Style(color="#111827"),
                 "secondary": Style(color=c.slate_blue),
                 "muted": Style(color=c.gray_blue),
                 "muted.bold": Style(color=c.gray_blue, bold=True),
@@ -73,6 +74,14 @@ class TokyoDayTheme(BaseTheme):
                 "command": Style(color=c.royal_purple),
                 "option": Style(color=c.ocean_blue),
                 "indicator": Style(color=c.forest_teal),
+                "thinking": Style(color=c.gray_blue, italic=True),
+                "thinking.preview": Style(color=c.gray_blue, italic=True, dim=True),
+                "tool.prefix": Style(color=c.ocean_blue),
+                "tool.name": Style(color="#1f2937"),
+                "tool.arg.key": Style(color=c.slate_blue),
+                "tool.arg.value": Style(color="#312e81"),
+                "tool.arg.separator": Style(color=c.slate_blue),
+                "tool.output.low": Style(color="#374151"),
                 # Code syntax highlighting
                 "code": Style(color=c.forest_teal, bold=False),
                 "code.keyword": Style(color=c.royal_purple, bold=True),

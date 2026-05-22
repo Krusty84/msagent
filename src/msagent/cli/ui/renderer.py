@@ -123,7 +123,7 @@ def _render_welcome_ascii(
     return result
 
 
-THINKING_STYLE = Style(italic=True, dim=True)
+THINKING_STYLE = "thinking"
 LOW_PRIORITY_STYLE = console.console.get_style("muted") + Style(dim=True)
 TOOL_PREFIX_STYLE = "accent"
 TOOL_NAME_STYLE = "primary"
@@ -237,11 +237,13 @@ class PrefixedMarkdown:
         prefix: str,
         content: str,
         prefix_style: str = "success",
+        content_style: str = "ai.response",
         code_theme: str = "dracula",
         indent_level: int = 0,
     ):
         self.prefix = prefix
         self.prefix_style = prefix_style
+        self.content_style = content_style
         self.content = content
         self.code_theme = code_theme
         self.indent_level = indent_level
@@ -259,7 +261,11 @@ class PrefixedMarkdown:
         adjusted_options = options.update_width(options.max_width - indent_width)
 
         # Render all content as markdown with adjusted width
-        markdown = TransparentMarkdown(self.content, code_theme=self.code_theme)
+        markdown = TransparentMarkdown(
+            self.content,
+            code_theme=self.code_theme,
+            style=self.content_style,
+        )
         segments = list(console.render(markdown, adjusted_options))
 
         if not segments:

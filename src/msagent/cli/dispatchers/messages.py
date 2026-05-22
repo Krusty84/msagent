@@ -1044,7 +1044,7 @@ class MessageDispatcher:
             )
             preview_text = "\n".join(f"{indent}{line}" for line in preview_lines[-3:])
             if preview_text:
-                renderables.append(Text(preview_text, style="dim"))
+                renderables.append(Text(preview_text, style="thinking.preview"))
 
         if not renderables:
             renderables.append(

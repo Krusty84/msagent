@@ -53,6 +53,7 @@ class TokyoNightTheme(BaseTheme):
                 # Basic text styles
                 "default": Style(color=c.light_blue_white),
                 "primary": Style(color=c.light_blue_white),
+                "ai.response": Style(color="#e5e7eb"),
                 "secondary": Style(color=c.muted_blue),
                 "muted": Style(color=c.blue_gray),
                 "muted.bold": Style(color=c.blue_gray, bold=True),
@@ -73,6 +74,8 @@ class TokyoNightTheme(BaseTheme):
                 "command": Style(color=c.purple),
                 "option": Style(color=c.cyan),
                 "indicator": Style(color=c.teal),
+                "thinking": Style(color=c.blue_gray, italic=True),
+                "thinking.preview": Style(color=c.blue_gray, italic=True, dim=True),
                 # Code syntax highlighting
                 "code": Style(color=c.teal, bold=False),
                 "code.keyword": Style(color=c.purple, bold=True),

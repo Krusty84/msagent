@@ -73,6 +73,13 @@ class TokyoNightTheme(BaseTheme):
                 "command": Style(color=c.purple),
                 "option": Style(color=c.cyan),
                 "indicator": Style(color=c.teal),
+                "thinking": Style(color=c.blue_gray, italic=True),
+                "thinking.preview": Style(color=c.blue_gray, italic=True, dim=True),
+                "tool.prefix": Style(color="#93c5fd"),
+                "tool.name": Style(color="#dbeafe"),
+                "tool.arg.key": Style(color="#bfdbfe"),
+                "tool.arg.value": Style(color="#ddd6fe"),
+                "tool.arg.separator": Style(color="#bfdbfe"),
                 # Code syntax highlighting
                 "code": Style(color=c.teal, bold=False),
                 "code.keyword": Style(color=c.purple, bold=True),

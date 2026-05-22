@@ -123,13 +123,13 @@ def _render_welcome_ascii(
     return result
 
 
-THINKING_STYLE = Style(italic=True, dim=True)
+THINKING_STYLE = "thinking"
 LOW_PRIORITY_STYLE = console.console.get_style("muted") + Style(dim=True)
-TOOL_PREFIX_STYLE = "accent"
-TOOL_NAME_STYLE = "primary"
-TOOL_ARG_KEY_STYLE = "muted"
-TOOL_ARG_VALUE_STYLE = "primary"
-TOOL_ARG_SEPARATOR_STYLE = "muted"
+TOOL_PREFIX_STYLE = "tool.prefix"
+TOOL_NAME_STYLE = "tool.name"
+TOOL_ARG_KEY_STYLE = "tool.arg.key"
+TOOL_ARG_VALUE_STYLE = "tool.arg.value"
+TOOL_ARG_SEPARATOR_STYLE = "tool.arg.separator"
 TOOL_SUMMARY_VALUE_MAX = 72
 TOOL_COMMAND_VALUE_MAX = 240
 TOOL_MESSAGE_MAX_DISPLAY_CHARS = 200

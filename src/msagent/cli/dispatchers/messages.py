@@ -55,13 +55,13 @@ _TOOL_ACTIVITY_CYCLE_S = 0.75
 _TOOL_DOT_ON_STYLE = "indicator"
 _TOOL_DOT_OFF_STYLE = "muted"
 _TOOL_SWEEP_WIDTH = 8
-_TOOL_SWEEP_EDGE_STYLE = "secondary"
-_TOOL_SWEEP_CORE_STYLE = "accent.secondary bold"
-_TOOL_PREFIX_STYLE = "accent"
-_TOOL_NAME_STYLE = "primary"
-_TOOL_ARG_KEY_STYLE = "muted"
-_TOOL_ARG_VALUE_STYLE = "primary"
-_TOOL_ARG_SEPARATOR_STYLE = "muted"
+_TOOL_SWEEP_EDGE_STYLE = "tool.name"
+_TOOL_SWEEP_CORE_STYLE = "tool.name bold"
+_TOOL_PREFIX_STYLE = "tool.prefix"
+_TOOL_NAME_STYLE = "tool.name"
+_TOOL_ARG_KEY_STYLE = "tool.arg.key"
+_TOOL_ARG_VALUE_STYLE = "tool.arg.value"
+_TOOL_ARG_SEPARATOR_STYLE = "tool.arg.separator"
 _TOOL_LIVE_SUMMARY_VALUE_MAX = 72
 
 
@@ -1044,7 +1044,7 @@ class MessageDispatcher:
             )
             preview_text = "\n".join(f"{indent}{line}" for line in preview_lines[-3:])
             if preview_text:
-                renderables.append(Text(preview_text, style="dim"))
+                renderables.append(Text(preview_text, style="thinking.preview"))
 
         if not renderables:
             renderables.append(

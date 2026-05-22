@@ -53,6 +53,7 @@ class TokyoNightTheme(BaseTheme):
                 # Basic text styles
                 "default": Style(color=c.light_blue_white),
                 "primary": Style(color=c.light_blue_white),
+                "ai.response": Style(color="#e5e7eb"),
                 "secondary": Style(color=c.muted_blue),
                 "muted": Style(color=c.blue_gray),
                 "muted.bold": Style(color=c.blue_gray, bold=True),
@@ -73,6 +74,16 @@ class TokyoNightTheme(BaseTheme):
                 "command": Style(color=c.purple),
                 "option": Style(color=c.cyan),
                 "indicator": Style(color=c.teal),
+                "thinking": Style(color=c.blue_gray, italic=True),
+                "thinking.preview": Style(color=c.blue_gray, italic=True, dim=True),
+                "tool.prefix": Style(color="#93c5fd"),
+                "tool.name": Style(color="#dbeafe"),
+                "tool.arg.key": Style(color="#bfdbfe"),
+                "tool.arg.value": Style(color="#ddd6fe"),
+                "tool.arg.separator": Style(color="#bfdbfe"),
+                "tool.output.low": Style(color="#aeb8e8"),
+                "tool.sweep.edge": Style(color="#bfdbfe"),
+                "tool.sweep.core": Style(color="#ffffff", bold=True),
                 # Code syntax highlighting
                 "code": Style(color=c.teal, bold=False),
                 "code.keyword": Style(color=c.purple, bold=True),
@@ -90,7 +101,7 @@ class TokyoNightTheme(BaseTheme):
     # Semantic color accessors for BaseTheme protocol
     @property
     def primary_text(self) -> str:
-        return self.colors.light_blue_white
+        return "#f8fafc"
 
     @property
     def secondary_text(self) -> str:

@@ -64,5 +64,6 @@ tests/benchmark_builder/runs
 tests/benchmark_builder/data
 tests/benchmark_builder/benchmarks
 
-
+# DS_Store
+.DS_Store
 

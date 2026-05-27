@@ -33,6 +33,7 @@ from deepagents.backends.filesystem import FilesystemBackend
 from deepagents.middleware import MemoryMiddleware, SkillsMiddleware
 from langchain.agents.middleware import ToolRetryMiddleware
 from langchain.agents.middleware.types import AgentMiddleware
+from langchain_core.messages import SystemMessage
 
 from msagent.agents.local_context import ensure_local_context_prompt
 from msagent.core.constants import CONFIG_CONVERSATION_HISTORY_DIR
@@ -42,6 +43,7 @@ from msagent.tools.catalog import fetch_skills, fetch_tools, get_skill, get_tool
 from msagent.tools.factory import ToolFactory
 from msagent.tools.web_search import web_search
 from msagent.utils.deepagents_compat import patch_deepagents_windows_absolute_paths
+from msagent.utils.render import render_templates
 
 if TYPE_CHECKING:
     from langchain_core.tools import BaseTool
@@ -72,6 +74,33 @@ class _ToolPatternFilterMiddleware(AgentMiddleware[Any, Any, Any]):
     async def awrap_model_call(self, request, handler):
         filtered_tools = self._filter_tools(list(getattr(request, "tools", []) or []))
         request = request.override(tools=filtered_tools)
+        return await handler(request)
+
+
+class _RenderTemplateVarsMiddleware(AgentMiddleware[Any, Any, Any]):
+    """Render system prompt placeholders from runtime AgentContext.template_vars."""
+
+    @staticmethod
+    def _render_request_system_message(request):
+        system_message = getattr(request, "system_message", None)
+        runtime = getattr(request, "runtime", None)
+        context = getattr(runtime, "context", None) if runtime is not None else None
+        template_vars = getattr(context, "template_vars", None) if context is not None else None
+        if system_message is None or not template_vars:
+            return request
+
+        rendered_content = render_templates(system_message.content, template_vars)
+        if rendered_content == system_message.content:
+            return request
+
+        return request.override(system_message=SystemMessage(content=rendered_content))
+
+    def wrap_model_call(self, request, handler):
+        request = self._render_request_system_message(request)
+        return handler(request)
+
+    async def awrap_model_call(self, request, handler):
+        request = self._render_request_system_message(request)
         return await handler(request)
 
 
@@ -220,6 +249,7 @@ class AgentFactory:
                     tool_token_limit_before_evict=tool_output_max_tokens,
                 )
             )
+        middleware.append(_RenderTemplateVarsMiddleware())
 
         raw_system_prompt = config.prompt
         if isinstance(raw_system_prompt, list):

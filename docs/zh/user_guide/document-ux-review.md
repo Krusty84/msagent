@@ -22,7 +22,7 @@
 
 `document-ux-review` 属于内置 skill。大多数情况下，只要 `msagent` 已正确安装、LLM 已配置完成，就可以直接使用，不需要在这里重复维护单独的安装步骤。
 
-具体安装、LLM 配置和启动方式请直接参考[首页](index.md)中的 `⚡ 快速上手` 章节。
+具体安装、LLM 配置和启动方式请直接参考[快速入门指导](../quick_start/op_tool_quick_start.md)。
 
 ### ✅ 使用前确认
 
@@ -48,6 +48,6 @@
 
 ## 🖼️ 实际效果
 
-可参考示例产物：[msmonitor-review-run.html](example/msmonitor-review-run.html)。
+可参考示例产物：[msmonitor-review-run.html](../example/msmonitor-review-run.html)。
 
 由于 GitHub 仓库页面不会直接渲染这类 HTML 报告，建议将该文件下载到本地后，用浏览器直接打开查看效果。

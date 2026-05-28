@@ -11,9 +11,8 @@ from .codex_cli import CodexCliAgent, CodexCliJudge
 from .judge import MockLLMJudge, normalized_judge_score
 from .metrics import build_case_metrics
 from .msagent_cli import MsagentCliAgent, MsagentCliJudge
-from .mock_agent import MockSlowCardAgent
-from .schema import load_suite
-from .scoring import RuleBasedTraceScorer
+from .mock_agent import MockBenchmarkAgent
+from .schema import BenchmarkCase, load_suite
 
 
 def run(
@@ -37,24 +36,20 @@ def run(
         timeout_seconds=timeout_seconds,
         msagent_agent=msagent_agent,
     )
-    scorer = RuleBasedTraceScorer()
-    judge = None
-    if judge_kind != "none":
-        judge = _build_judge(
-            judge_kind,
-            workspace=Path.cwd(),
-            artifact_dir=runtime_dir / "judge",
-            model=judge_model or model,
-            timeout_seconds=timeout_seconds,
-            msagent_agent=msagent_agent,
-        )
+    judge = _build_judge(
+        judge_kind,
+        workspace=Path.cwd(),
+        artifact_dir=runtime_dir / "judge",
+        model=judge_model or model,
+        timeout_seconds=timeout_seconds,
+        msagent_agent=msagent_agent,
+    )
 
     traces_dir = out_dir / "traces"
     metrics_dir = out_dir / "metrics"
     traces_dir.mkdir(parents=True, exist_ok=True)
     judge_dir = out_dir / "judge"
-    if judge is not None:
-        judge_dir.mkdir(parents=True, exist_ok=True)
+    judge_dir.mkdir(parents=True, exist_ok=True)
     metrics_dir.mkdir(parents=True, exist_ok=True)
 
     scores = []
@@ -68,16 +63,12 @@ def run(
         trace_path = traces_dir / f"{case.id}.trace.json"
         trace_path.write_text(json.dumps(trace, indent=2, ensure_ascii=False), encoding="utf-8")
 
-        correctness = scorer.score(case, trace)
-        judge_result = None
-        judge_path = None
-        if judge is not None:
-            judge_result = judge.judge(case, trace, correctness)
-            judge_path = judge_dir / f"{case.id}.judge.json"
-            judge_path.write_text(
-                json.dumps(judge_result, indent=2, ensure_ascii=False),
-                encoding="utf-8",
-            )
+        judge_result = _normalize_judge_result(case, judge.judge(case, trace))
+        judge_path = judge_dir / f"{case.id}.judge.json"
+        judge_path.write_text(
+            json.dumps(judge_result, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
 
         case_metrics = build_case_metrics(case.id, trace, judge_result)
         metrics_path = metrics_dir / f"{case.id}.metrics.json"
@@ -87,33 +78,32 @@ def run(
         )
         metrics_items.append(case_metrics)
 
-        if judge_result is None:
-            final_score = round(float(correctness["f1"]), 4)
-        else:
-            final_score = round(
-                0.7 * float(correctness["f1"]) + 0.3 * normalized_judge_score(judge_result),
-                4,
-            )
+        final_score = _final_score(judge_result)
         score = {
-            **correctness,
-            "correctness_score": correctness["score"],
-            "judge_score": judge_result["overall_score"] if judge_result is not None else None,
+            "case_id": case.id,
+            "must_include_pass": judge_result["must_include_pass"],
+            "must_include_results": judge_result["must_include_results"],
+            "judge_score": judge_result["rubric_score"],
             "score": final_score,
+            "strengths": judge_result.get("strengths", []),
+            "weaknesses": judge_result.get("weaknesses", []),
             "trace_path": str(trace_path),
             "metrics_path": str(metrics_path),
+            "judge_path": str(judge_path),
         }
-        if judge_path is not None:
-            score["judge_path"] = str(judge_path)
         scores.append(score)
 
-    judge_scores = [item["judge_score"] for item in scores if item["judge_score"] is not None]
+    judge_scores = [float(item["judge_score"]) for item in scores]
     report = {
         "suite": suite.name,
         "case_count": len(scores),
-        "judge_enabled": judge is not None,
+        "judge_enabled": True,
         "average_score": round(mean(item["score"] for item in scores), 4),
-        "average_correctness_score": round(mean(item["correctness_score"] for item in scores), 4),
-        "average_judge_score": round(mean(judge_scores), 4) if judge_scores else None,
+        "average_judge_score": round(mean(judge_scores), 4),
+        "must_include_pass_rate": round(
+            mean(1.0 if item["must_include_pass"] else 0.0 for item in scores),
+            4,
+        ),
         "token_usage": _sum_token_usage(metrics_items),
         "duration_ms": _sum_durations(metrics_items),
         "tool_calls": _sum_tool_calls(metrics_items),
@@ -160,7 +150,7 @@ def _build_agent(
             msagent_agent=msagent_agent,
         )
     if agent_kind == "heuristic":
-        return MockSlowCardAgent()
+        return MockBenchmarkAgent()
     raise ValueError(f"Unknown agent kind: {agent_kind}")
 
 
@@ -197,9 +187,69 @@ def _build_judge(
         )
     if judge_kind == "heuristic":
         return MockLLMJudge()
-    if judge_kind == "none":
-        return None
     raise ValueError(f"Unknown judge kind: {judge_kind}")
+
+
+def _normalize_judge_result(
+    case: BenchmarkCase,
+    judge_result: dict[str, Any],
+) -> dict[str, Any]:
+    normalized = dict(judge_result)
+    normalized["rubric_score"] = _clamp_score(normalized.get("rubric_score", 0.0))
+    normalized["must_include_results"] = _normalize_must_include_results(case, normalized)
+    normalized["must_include_pass"] = all(
+        item["covered"] for item in normalized["must_include_results"]
+    )
+    return normalized
+
+
+def _normalize_must_include_results(
+    case: BenchmarkCase,
+    judge_result: dict[str, Any],
+) -> list[dict[str, Any]]:
+    raw_results = judge_result.get("must_include_results", [])
+    raw_items: list[dict[str, Any]] = []
+    by_item: dict[str, dict[str, Any]] = {}
+    if isinstance(raw_results, list):
+        for item in raw_results:
+            if isinstance(item, dict):
+                raw_items.append(item)
+                key = str(item.get("item", ""))
+                if key and key not in by_item:
+                    by_item[key] = item
+
+    normalized = []
+    for index, required_item in enumerate(case.must_include):
+        raw = by_item.get(required_item)
+        if raw is None and index < len(raw_items):
+            raw = raw_items[index]
+        if raw is None:
+            normalized.append({
+                "item": required_item,
+                "covered": False,
+                "reason": "Judge did not return a result for this required item.",
+            })
+            continue
+        normalized.append({
+            "item": required_item,
+            "covered": bool(raw.get("covered")),
+            "reason": str(raw.get("reason", "")).strip(),
+        })
+    return normalized
+
+
+def _clamp_score(value: Any) -> float:
+    try:
+        score = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return round(max(0.0, min(5.0, score)), 2)
+
+
+def _final_score(judge_result: dict[str, Any]) -> float:
+    if not judge_result.get("must_include_pass"):
+        return 0.0
+    return round(normalized_judge_score(judge_result), 4)
 
 
 def _render_markdown_report(report: dict[str, Any]) -> str:
@@ -207,31 +257,30 @@ def _render_markdown_report(report: dict[str, Any]) -> str:
         f"# Benchmark Report: {report['suite']}",
         "",
         f"- Cases: {report['case_count']}",
-        f"- Judge: {'enabled' if report.get('judge_enabled') else 'disabled'}",
+        "- Judge: enabled",
         f"- Average score: {report['average_score']:.4f}",
-        f"- Average correctness score: {report['average_correctness_score']:.4f}",
         _format_judge_score(report.get("average_judge_score")),
+        f"- Must-include pass rate: {report['must_include_pass_rate']:.4f}",
         f"- Total tokens: {report['token_usage']['total_tokens']}",
         f"- Total duration: {report['duration_ms']['total']} ms",
         f"- Agent tool calls: {report['tool_calls']['agent']['count']}",
         "",
-        "| Case | Final | Correctness | Judge | Exact | Precision | Recall | Predicted | Ground Truth |",
-        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |",
+        "| Case | Final | Judge | Must Include | Missing Items |",
+        "| --- | ---: | ---: | --- | --- |",
     ]
     for item in report["scores"]:
-        judge_score = item["judge_score"]
+        missing_items = [
+            result["item"]
+            for result in item.get("must_include_results", [])
+            if not result.get("covered")
+        ]
         lines.append(
-            "| {case_id} | {score:.4f} | {correctness_score:.4f} | {judge_score} | "
-            "{exact_match:.0f} | {precision:.2f} | {recall:.2f} | {predicted} | {ground_truth} |".format(
+            "| {case_id} | {score:.4f} | {judge_score:.2f} | {must_include} | {missing} |".format(
                 case_id=item["case_id"],
                 score=item["score"],
-                correctness_score=item["correctness_score"],
-                judge_score=f"{judge_score:.2f}" if judge_score is not None else "n/a",
-                exact_match=1 if item["exact_match"] else 0,
-                precision=item["precision"],
-                recall=item["recall"],
-                predicted=", ".join(item["predicted_slow_cards"]) or "[]",
-                ground_truth=", ".join(item["ground_truth"]) or "[]",
+                judge_score=float(item["judge_score"]),
+                must_include="pass" if item["must_include_pass"] else "fail",
+                missing=", ".join(missing_items) or "[]",
             )
         )
     lines.append("")
@@ -289,7 +338,7 @@ def _sum_tool_calls(metrics_items: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run a trace-based benchmark suite.")
+    parser = argparse.ArgumentParser(description="Run a judge-scored benchmark suite.")
     parser.add_argument("--config", type=Path, required=True, help="Path to benchmark YAML.")
     parser.add_argument("--out", type=Path, required=True, help="Output directory for traces and scores.")
     parser.add_argument(
@@ -303,11 +352,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--judge",
-        choices=["codex-cli", "claude-cli", "msagent-cli", "heuristic", "none"],
+        choices=["codex-cli", "claude-cli", "msagent-cli", "heuristic"],
         default="codex-cli",
         help=(
             "Judge adapter to run. codex-cli, claude-cli, and msagent-cli are real LLM judges; "
-            "heuristic is local-only; none skips judging."
+            "heuristic is local-only."
         ),
     )
     parser.add_argument("--model", help="Model for the selected real CLI agent.")

@@ -10,8 +10,8 @@ from time import perf_counter
 from typing import Any
 
 from .codex_cli import (
+    AGENT_OUTPUT_SCHEMA,
     JUDGE_OUTPUT_SCHEMA,
-    SLOW_CARD_OUTPUT_SCHEMA,
     build_agent_prompt,
     build_judge_prompt,
     copy_input_data,
@@ -54,8 +54,8 @@ class ClaudeCliAgent:
 
     def run(self, case: BenchmarkCase, input_path: Path) -> dict[str, Any]:
         self.artifact_dir.mkdir(parents=True, exist_ok=True)
-        schema_text = json.dumps(SLOW_CARD_OUTPUT_SCHEMA, indent=2)
-        schema_artifact_path = self.artifact_dir / "slow_card_output.schema.json"
+        schema_text = json.dumps(AGENT_OUTPUT_SCHEMA, indent=2)
+        schema_artifact_path = self.artifact_dir / "agent_output.schema.json"
         schema_artifact_path.write_text(schema_text, encoding="utf-8")
         final_artifact_path = self.artifact_dir / f"{case.id}.agent.final.json"
         jsonl_path = self.artifact_dir / f"{case.id}.agent.events.jsonl"
@@ -153,7 +153,6 @@ class ClaudeCliJudge:
         self,
         case: BenchmarkCase,
         trace: dict[str, Any],
-        correctness: dict[str, Any],
     ) -> dict[str, Any]:
         self.artifact_dir.mkdir(parents=True, exist_ok=True)
         schema_text = json.dumps(JUDGE_OUTPUT_SCHEMA, indent=2)
@@ -162,7 +161,7 @@ class ClaudeCliJudge:
         final_artifact_path = self.artifact_dir / f"{case.id}.judge.final.json"
         jsonl_path = self.artifact_dir / f"{case.id}.judge.events.jsonl"
 
-        prompt = build_judge_prompt(case, trace, correctness)
+        prompt = build_judge_prompt(case, trace)
         prefix = f"benchmark-builder-claude-judge-{safe_path_component(case.id)}-"
         with tempfile.TemporaryDirectory(prefix=prefix) as temp_dir:
             run_workspace = Path(temp_dir).resolve()

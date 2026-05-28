@@ -81,24 +81,30 @@ class BenchmarkCase:
     id: str
     input_data_path: str
     prompt: str
-    ground_truth: list[str]
+    must_include: list[str]
+    scoring_prompt: str
     source_path: Path = field(repr=False)
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any], source_path: Path) -> "BenchmarkCase":
         missing = [
             key
-            for key in ("id", "input_data_path", "prompt", "ground_truth")
+            for key in ("input_data_path", "prompt", "must_include", "scoring_prompt")
             if key not in raw
         ]
         if missing:
             raise ValueError(f"{source_path} is missing required field(s): {', '.join(missing)}")
 
+        scoring_prompt = str(raw["scoring_prompt"]).strip()
+        if not scoring_prompt:
+            raise ValueError(f"{source_path} scoring_prompt must not be empty.")
+
         return cls(
-            id=str(raw["id"]),
+            id=str(raw.get("id") or source_path.stem),
             input_data_path=str(raw["input_data_path"]),
             prompt=str(raw["prompt"]),
-            ground_truth=_normalize_ground_truth(raw["ground_truth"], source_path),
+            must_include=_normalize_string_list(raw["must_include"], source_path, "must_include"),
+            scoring_prompt=scoring_prompt,
             source_path=source_path,
         )
 
@@ -143,11 +149,11 @@ def _load_case_file(path: Path) -> BenchmarkCase:
     return BenchmarkCase.from_dict(raw, path)
 
 
-def _normalize_ground_truth(value: Any, source_path: Path) -> list[str]:
+def _normalize_string_list(value: Any, source_path: Path, field_name: str) -> list[str]:
     if isinstance(value, str):
         if not value.strip():
             return []
         return [item.strip() for item in value.split(",") if item.strip()]
     if isinstance(value, list):
         return [str(item).strip() for item in value if str(item).strip()]
-    raise ValueError(f"{source_path} ground_truth must be a list of card ids.")
+    raise ValueError(f"{source_path} {field_name} must be a list of strings.")

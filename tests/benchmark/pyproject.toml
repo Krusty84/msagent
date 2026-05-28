@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "benchmark-builder"
 version = "0.1.0"
-description = "Trace-based benchmark harness for AI cluster performance diagnosis agents."
+description = "Judge-scored benchmark harness for agent evaluations."
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [

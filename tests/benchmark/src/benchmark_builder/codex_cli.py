@@ -15,23 +15,23 @@ from .schema import BenchmarkCase
 from .trace import TraceBuilder
 
 
-SLOW_CARD_OUTPUT_SCHEMA: dict[str, Any] = {
+AGENT_OUTPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
     "properties": {
-        "slow_cards": {
-            "type": "array",
-            "items": {"type": "string"},
-            "description": "Slow card ids, using the same id style requested by the prompt. Use rank-prefixed ids such as rank3 for profiler ranks.",
+        "answer": {
+            "type": "string",
+            "description": "The final answer to the benchmark prompt.",
         },
         "evidence": {
             "type": "array",
             "items": {"type": "string"},
+            "description": "Short evidence snippets or file-derived facts supporting the answer.",
         },
         "reasoning_summary": {"type": "string"},
         "confidence": {"type": "number", "minimum": 0, "maximum": 1},
     },
-    "required": ["slow_cards", "evidence", "reasoning_summary", "confidence"],
+    "required": ["answer", "evidence", "reasoning_summary", "confidence"],
 }
 
 
@@ -39,22 +39,28 @@ JUDGE_OUTPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
     "properties": {
-        "reasoning_score": {"type": "number", "minimum": 0, "maximum": 5},
-        "evidence_score": {"type": "number", "minimum": 0, "maximum": 5},
-        "tool_use_score": {"type": "number", "minimum": 0, "maximum": 5},
-        "result_score": {"type": "number", "minimum": 0, "maximum": 5},
-        "format_score": {"type": "number", "minimum": 0, "maximum": 5},
-        "overall_score": {"type": "number", "minimum": 0, "maximum": 5},
+        "must_include_pass": {"type": "boolean"},
+        "must_include_results": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "item": {"type": "string"},
+                    "covered": {"type": "boolean"},
+                    "reason": {"type": "string"},
+                },
+                "required": ["item", "covered", "reason"],
+            },
+        },
+        "rubric_score": {"type": "number", "minimum": 0, "maximum": 5},
         "strengths": {"type": "array", "items": {"type": "string"}},
         "weaknesses": {"type": "array", "items": {"type": "string"}},
     },
     "required": [
-        "reasoning_score",
-        "evidence_score",
-        "tool_use_score",
-        "result_score",
-        "format_score",
-        "overall_score",
+        "must_include_pass",
+        "must_include_results",
+        "rubric_score",
         "strengths",
         "weaknesses",
     ],
@@ -88,8 +94,8 @@ class CodexCliAgent:
 
     def run(self, case: BenchmarkCase, input_path: Path) -> dict[str, Any]:
         self.artifact_dir.mkdir(parents=True, exist_ok=True)
-        schema_text = json.dumps(SLOW_CARD_OUTPUT_SCHEMA, indent=2)
-        schema_artifact_path = self.artifact_dir / "slow_card_output.schema.json"
+        schema_text = json.dumps(AGENT_OUTPUT_SCHEMA, indent=2)
+        schema_artifact_path = self.artifact_dir / "agent_output.schema.json"
         schema_artifact_path.write_text(schema_text, encoding="utf-8")
         final_artifact_path = self.artifact_dir / f"{case.id}.agent.final.json"
         jsonl_path = self.artifact_dir / f"{case.id}.agent.events.jsonl"
@@ -204,7 +210,6 @@ class CodexCliJudge:
         self,
         case: BenchmarkCase,
         trace: dict[str, Any],
-        correctness: dict[str, Any],
     ) -> dict[str, Any]:
         self.artifact_dir.mkdir(parents=True, exist_ok=True)
         schema_text = json.dumps(JUDGE_OUTPUT_SCHEMA, indent=2)
@@ -213,7 +218,7 @@ class CodexCliJudge:
         final_artifact_path = self.artifact_dir / f"{case.id}.judge.final.json"
         jsonl_path = self.artifact_dir / f"{case.id}.judge.events.jsonl"
 
-        prompt = build_judge_prompt(case, trace, correctness)
+        prompt = build_judge_prompt(case, trace)
         prefix = f"benchmark-builder-judge-{safe_path_component(case.id)}-"
         with tempfile.TemporaryDirectory(prefix=prefix) as temp_dir:
             run_workspace = Path(temp_dir).resolve()
@@ -304,7 +309,7 @@ def build_agent_prompt(
 ) -> str:
     data_guidance = build_input_data_guidance(input_path)
     prompt_input_path = visible_input_path or input_path
-    return f"""You are the benchmarked slow-card detection agent.
+    return f"""You are the benchmarked agent.
 
 Task:
 {case.prompt}
@@ -322,8 +327,6 @@ Requirements:
 - Prefer compact aggregate files over raw traces or databases.
 - Never dump an entire large JSON/HTML/DB file into context; use targeted shell commands or small scripts to extract only the relevant rows/sections.
 - Do not modify files.
-- Identify the main slow card/rank ids using the id style requested by the case prompt.
-- For numeric profiler rank ids, return rank-prefixed strings such as rank3, not bare numbers such as 3.
 - Return only JSON matching the provided schema.
 - Do not include private chain-of-thought. Use reasoning_summary for a concise, auditable explanation.
 """
@@ -437,30 +440,27 @@ def display_path(path: Path, root: Path) -> str:
 def build_judge_prompt(
     case: BenchmarkCase,
     trace: dict[str, Any],
-    correctness: dict[str, Any],
 ) -> str:
     judge_input = {
         "case": {
             "id": case.id,
             "prompt": case.prompt,
-            "ground_truth": case.ground_truth,
+            "must_include": case.must_include,
+            "scoring_prompt": case.scoring_prompt,
         },
-        "correctness": correctness,
         "trace_excerpt": trace_excerpt(trace),
         "final_answer": final_answer_from_trace(trace),
     }
-    return f"""You are judging an AI agent run for slow-card detection.
+    return f"""You are judging an AI agent benchmark run.
 
-Score only the visible trace and final answer. Do not reward hidden reasoning.
-Correctness is provided by deterministic ground-truth matching; use result_score to reflect it.
+Judge only the visible trace and final answer. Do not reward hidden reasoning.
 
-Rubric, each 0-5:
-- reasoning_score: whether the visible reasoning_summary/observations avoid misleading signals.
-- evidence_score: whether evidence supports the identified slow_cards.
-- tool_use_score: whether the agent inspected appropriate files or data.
-- result_score: consistency with deterministic correctness.
-- format_score: whether final answer follows the requested slow_cards JSON format.
-- overall_score: your weighted holistic process score.
+You have two jobs:
+1. For every must_include item, decide whether the final answer semantically covers it.
+   Allow equivalent wording, but mark covered=false when the answer omits or contradicts the item.
+2. Use scoring_prompt to assign rubric_score from 0 to 5.
+
+The final benchmark runner will set score=0 if any must_include item is not covered.
 
 Return only JSON matching the provided schema.
 

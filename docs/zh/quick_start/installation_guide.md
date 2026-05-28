@@ -60,4 +60,6 @@ msagent -v
 
 ## 下一步
 
-完成安装后，继续阅读 [快速入门指导](quick_start.md)，配置 LLM 并启动第一个 Agent 会话。
+🔹 **构建与打包**：需要生成 wheel 或检查构建产物时，请参见 [《编译与打包》](docs/zh/developer_guide/build-and-package.md)。  
+🔹 **版本与兼容性**：Python 版本、Provider 支持和内置 MCP 版本说明，请参见 [《版本与兼容性》](docs/zh/developer_guide/version-and-compatibility.md)。  
+🔹 **完整安装说明**：日志与版本检查等更多内容，请参见 [《入门安装指南》](docs/zh/quick_start/installation_guide.md)。

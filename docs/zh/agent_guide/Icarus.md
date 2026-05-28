@@ -1,8 +1,5 @@
 # Icarus 算子调优
 
-<p align="center">
-  <img src="../figures/Icarus.png" alt="Hermes" width="220">
-</p>
 `Icarus` 是面向 Ascend 算子开发性能优化场景的 Agent,负责把复杂算子性能数据优化为结构化、可分析和可执行的优化建议，并提供端到端性能优化的能力
 
 

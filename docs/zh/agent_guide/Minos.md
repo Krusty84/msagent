@@ -1,9 +1,5 @@
 # Minos 文档辅助
 
-<p align="center">
-  <img src="../figures/Minos.png" alt="Minos" width="220">
-</p>
-
 `Minos` 是面向文档体验与代码审查辅助场景的 Agent，负责从首次接触项目的新手视角审查 README、安装文档、Quick Start 和 onboarding 路径，也负责结合仓库上下文审查 GitCode PR 的改动风险与修改质量。
 
 ## Agent 定位

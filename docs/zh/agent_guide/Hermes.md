@@ -1,9 +1,5 @@
 # Hermes 性能调优
 
-<p align="center">
-  <img src="../figures/Hermes.png" alt="Hermes" width="220">
-</p>
-
 `Hermes` 是面向 Ascend Profiling 与性能调优场景的 Agent，负责把复杂性能数据转化为结构化结论、根因分析和可执行优化建议。
 
 ## Agent 定位

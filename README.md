@@ -7,7 +7,6 @@
 [![快速入门](https://badgen.net/badge/快速入门/QuickStart/blue)](#-快速入门)
 [![精确搜索](https://badgen.net/badge/精确搜索/ReadTheDocs/blue)](https://mindstudio-agent.readthedocs.io/zh-cn/latest/)
 [![安装指南](https://badgen.net/badge/安装指南/Install/blue)](#-安装指南)
-
 [![配置文档](https://badgen.net/badge/配置文档/Docs/blue)](docs/zh/user_guide/configuration-and-extension.md)
 [![昇腾社区](https://badgen.net/badge/昇腾社区/Community/blue)](https://www.hiascend.com/cn/developer/software/mindstudio)
 [![报告问题](https://badgen.net/badge/报告问题/Issues/blue)](https://gitcode.com/Ascend/msagent/issues)

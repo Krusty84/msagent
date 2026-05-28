@@ -15,12 +15,23 @@ def build_case_metrics(
     judge_available = bool(judge_tokens.get("available", True)) if judge_result is not None else True
     agent_duration = int(trace.get("duration_ms") or 0)
     judge_duration = int(judge_result.get("duration_ms") or 0) if judge_result is not None else 0
+    agent_msagent_duration = extract_msagent_session_duration(trace)
+    judge_msagent_duration = (
+        normalize_optional_int(judge_result.get("msagent_session_duration_ms"))
+        if judge_result is not None
+        else None
+    )
     return {
         "case_id": case_id,
         "duration_ms": {
             "agent": agent_duration,
             "judge": judge_duration,
             "total": agent_duration + judge_duration,
+        },
+        "msagent_session_duration_ms": {
+            "agent": agent_msagent_duration,
+            "judge": judge_msagent_duration,
+            "total": sum_optional_ints(agent_msagent_duration, judge_msagent_duration),
         },
         "token_usage": {
             "agent": agent_tokens,
@@ -42,6 +53,26 @@ def build_case_metrics(
             "enabled": judge_result is not None,
         },
     }
+
+
+def extract_msagent_session_duration(trace: dict[str, Any]) -> int | None:
+    for event in trace.get("events", []):
+        if event.get("type") == "agent_run":
+            return normalize_optional_int(event.get("msagent_session_duration_ms"))
+    return None
+
+
+def normalize_optional_int(value: Any) -> int | None:
+    if isinstance(value, (int, float)):
+        return round(float(value))
+    return None
+
+
+def sum_optional_ints(*values: int | None) -> int | None:
+    present = [value for value in values if value is not None]
+    if not present:
+        return None
+    return sum(present)
 
 
 def summarize_tool_calls(trace: dict[str, Any]) -> dict[str, Any]:

@@ -132,6 +132,18 @@ runs/<run_id>/
 - `must_include_results`：逐项覆盖判断。
 - `token_usage`、`duration_ms`、`tool_calls`：运行指标。
 
+msAgent 运行会额外启用 `--trace-jsonl`，并把 msAgent trace 保存到
+`runs/<run_id>/runtime/{agent,judge}/`。`token_usage` 来自 msAgent trace 的
+`session_finished.token_usage`，`duration_ms` 是 benchmark 外层进程耗时；
+每个 case 的 metrics 中也会保留 `msagent_session_duration_ms`。
+
+查看 token 和耗时：
+
+```bash
+jq '.token_usage, .duration_ms' runs/msagent-smoke/scores.json
+jq '.token_usage, .duration_ms' runs/msagent-smoke/metrics/mock_agent_smoke.metrics.json
+```
+
 ## 运行
 
 安装后运行：

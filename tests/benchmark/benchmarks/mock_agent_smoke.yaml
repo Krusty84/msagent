@@ -1,5 +1,5 @@
 id: mock_agent_smoke
-input_data_path: ../data/cases/mock_agent_smoke
+input_data_path: ../data/mock_agent_smoke
 prompt: >
   Read the files under input_data and produce a concise incident diagnosis.
   The answer must identify the root cause, the impacted service, and one

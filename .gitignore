@@ -59,10 +59,10 @@ test_data/
 .msagent/
 
 # Benchmark
-tests/benchmark_builder/log
-tests/benchmark_builder/runs
-tests/benchmark_builder/data
-tests/benchmark_builder/benchmarks
+tests/benchmark/log
+tests/benchmark/runs
+tests/benchmark/data
+tests/benchmark/benchmarks
 
 # DS_Store
 .DS_Store

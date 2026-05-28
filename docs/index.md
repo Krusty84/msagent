@@ -51,6 +51,7 @@ zh/developer_guide/readthedocs-local-build
 
 zh/legal/index
 zh/legal/SECURITY
+zh/legal/DISCLAIMER
 ```
 
 ## 内置 Agent 与能力分工

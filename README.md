@@ -1,12 +1,13 @@
+<h1 align="center" >MindStudio Agent</h1>
+
 <div align="center">
 <p><b><span style="font-size:24px;">面向 Ascend NPU 场景的一站式调试调优 Agent</span></b></p>
 
 
-
-[![PyPI](https://badgen.net/pypi/v/mindstudio-agent?label=PyPI)](https://pypi.org/project/mindstudio-agent/)
+[![快速入门](https://badgen.net/badge/快速入门/QuickStart/blue)](#-快速入门)
 [![文档](https://readthedocs.org/projects/mindstudio-agent/badge/?version=latest)](https://mindstudio-agent.readthedocs.io/zh-cn/latest/)
 [![安装指南](https://badgen.net/badge/安装指南/Install/blue)](#-安装指南)
-[![快速入门](https://badgen.net/badge/快速入门/QuickStart/blue)](#-快速入门)
+
 [![配置文档](https://badgen.net/badge/配置文档/Docs/blue)](docs/zh/user_guide/configuration-and-extension.md)
 [![昇腾社区](https://badgen.net/badge/昇腾社区/Community/blue)](https://www.hiascend.com/cn/developer/software/mindstudio)
 [![报告问题](https://badgen.net/badge/报告问题/Issues/blue)](https://gitcode.com/Ascend/msagent/issues)
@@ -44,14 +45,14 @@ MindStudio-Agent（简称 `msagent`）是面向昇腾 Ascend NPU 开发、调试
 | **Minos** | **【文档体验与代码审查】**  聚焦 README 走查、安装流程验证、Quick Start 体验、新手 onboarding、文档可用性评估，以及 GitCode PR 审查与评审意见整理。 |
 
 ## 🚀 快速入门
-快速体验核心功能，请参见[msAgent快速入门](docs/zh/quick_start/quick_start.md)。
+快速体验核心功能，请参见[《msAgent快速入门》](docs/zh/quick_start/quick_start.md)。
 
 ## 📦 安装指南
-介绍工具的环境依赖与安装方法，请参见[msAgent安装指南](docs/zh/quick_start/installation_guide.md)
+介绍工具的环境依赖与安装方法，请参见[《msAgent安装指南》](docs/zh/quick_start/installation_guide.md)
 
 
 ## 📘 使用指南
-工具的详细使用方法，请参见[msAgent使用指南](docs/zh/user_guide/usemap.md)
+工具的详细使用方法，请参见[《msAgent使用指南》](docs/zh/user_guide/usemap.md)
  
 ## ❓ FAQ
 
@@ -60,9 +61,9 @@ MindStudio-Agent（简称 `msagent`）是面向昇腾 Ascend NPU 开发、调试
 ## 🌌 智能检索
 
 为提升文档查阅效率，建议优先通过以下入口定位信息：  
-🔹 [中文文档首页](docs/index.md)：按快速入门、用户指南、Agent 指南和开发指南组织内容。  
-🔹 [配置与扩展](docs/zh/user_guide/configuration-and-extension.md)：查询本地配置目录、MCP 配置、Skills 扩展与加载顺序。  
-🔹 [版本与兼容性](docs/zh/developer_guide/version-and-compatibility.md)：查询版本要求、兼容策略与内置依赖。  
+🔹 [《中文文档首页》](docs/index.md)：按快速入门、用户指南、Agent 指南和开发指南组织内容。  
+🔹 [《配置与扩展》](docs/zh/user_guide/configuration-and-extension.md)：查询本地配置目录、MCP 配置、Skills 扩展与加载顺序。  
+🔹 [《版本与兼容性》](docs/zh/developer_guide/version-and-compatibility.md)：查询版本要求、兼容策略与内置依赖。  
 🔹 会话内直接询问 `msagent`：让对应 Agent 结合仓库文档、配置和上下文辅助定位问题。  
 
 ## 🛠️ 贡献指南
@@ -72,16 +73,21 @@ MindStudio-Agent（简称 `msagent`）是面向昇腾 Ascend NPU 开发、调试
 ## ⚖️ 相关说明
 
 🔹 [《版本与兼容性》](docs/zh/developer_guide/version-and-compatibility.md)  
-🔹 [《配置与扩展》](docs/zh/user_guide/configuration-and-extension.md)  
-🔹 [Mulan PSL v2 许可证](http://license.coscl.org.cn/MulanPSL2)  
-🔹 [提交问题与建议](https://gitcode.com/Ascend/msagent/issues)  
+🔹 [《安全声明》](docs/zh/legal/SECURITY.md)  
+🔹 [《免责声明》](docs/zh/legal/DISCLAIMER.md)  
+🔹 [《许可证声明》](http://license.coscl.org.cn/MulanPSL2)  
 
 ## 🤝 建议与交流
 
-| 技术交流 | 问题反馈 | 社区入口 |
-|:---:|:---:|:---:|
-| <a href="https://applink.feishu.cn/client/chat/chatter/add_by_link?link_token=854v5833-c03a-484e-8aac-0637f0303dc4&qr_code=true"><img src="https://img.shields.io/badge/Feishu-3370FF?style=for-the-badge&logo=lark&logoColor=white" alt="Feishu Group"></a><br><sub>加入飞书群交流使用体验与问题定位</sub> | [![Issues](https://badgen.net/badge/GitCode/Issues/blue)](https://gitcode.com/Ascend/msagent/issues)<br><sub>提交 Bug、需求和文档建议</sub> | [![Community](https://badgen.net/badge/Ascend/Community/blue)](https://www.hiascend.com/cn/developer/software/mindstudio)<br><sub>了解 MindStudio 与昇腾开发者资源</sub> |
+欢迎大家为社区做贡献。如果有任何疑问或建议，请提交 [Issues](https://gitcode.com/Ascend/msagent/issues)，我们会尽快回复。感谢您的支持。
+
+| 即时互动（飞书群） | 交流说明 |
+|:--:|:--|
+| [![Feishu](https://img.shields.io/badge/Feishu-3370FF?style=for-the-badge&logo=lark&logoColor=white)](https://applink.feishu.cn/client/chat/chatter/add_by_link?link_token=854v5833-c03a-484e-8aac-0637f0303dc4&qr_code=true)<br><sub>*点击蓝色按钮加入技术交流群*</sub> | 加入飞书群，直达 MindStudio 用户与开发者交流平台：<br> **快速提问：** 与社区小伙伴即时探讨技术问题<br>**掌握动态：** 第一时间获取版本发布与功能更新通知<br> **经验共享：** 与广大开发者交流最佳实践与实战心得 |
 
 ## 🙏 致谢
 
-本工具由昇腾计算MindStudio开发部、Ascend 生态伙伴以及社区开发者对联合贡献。欢迎通过 Issue、PR 或 Skills 扩展一起完善 MindStudio-Agent。
+本工具由华为公司的下列部门联合贡献:
+🔹 昇腾计算MindStudio开发部
+🔹 昇腾计算生态使能部
+感谢来自社区的每一个PR，欢迎贡献！

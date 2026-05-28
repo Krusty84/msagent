@@ -4,3 +4,4 @@
 
 - [许可证声明](LICENSE)
 - [安全声明](SECURITY.md)
+- [免责声明](DISCLAIMER.md)

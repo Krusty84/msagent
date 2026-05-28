@@ -17,11 +17,10 @@
 
 <span style="font-size:14px;">
 
-🔹 **[2026.05.21]**：`v26.0.0已发布，新增Icarus Agent，覆盖算子性能调优场景`。
-🔹 **[2026.04.27]**：`v26.0.0.alpha1` 发布，新增 `Accuracy` / `Zephyr` Agent，覆盖精度调优与模型量化场景。  
-🔹 **[2026.04.08]**：`v0.1.3` 发布，完成 DeepAgents 重构并增强 `Hermes` / `Minos` Agent。  
+🔹 **[2026.05.21]**：`v26.0.0已发布，新增Icarus Agent，覆盖算子性能调优场景`。<br>
+🔹 **[2026.04.27]**：`v26.0.0.alpha1` 发布，新增 `Accuracy` / `Zephyr` Agent，覆盖精度调优与模型量化场景。<br>
+🔹 **[2026.04.08]**：`v0.1.3` 发布，完成 DeepAgents 重构并增强 `Hermes` / `Minos` Agent。<br>
 🔹 **[2026.03.19]**：`mindstudio-agent` 已发布到 PyPI，推荐使用 `pip install -U mindstudio-agent` 安装。
-  
 
 </span>
 
@@ -86,9 +85,8 @@ MindStudio-Agent（简称 `msagent`）是面向昇腾 Ascend NPU 开发、调试
 
 ## 🙏 致谢
 
-本工具由华为公司下列部门联合贡献：
-
-- 昇腾计算 MindStudio 开发部
-- 昇腾计算生态使能部
+本工具由华为公司下列部门联合贡献：<br>
+🔹 昇腾计算 MindStudio 开发部<br>
+🔹 昇腾计算生态使能部
 
 感谢来自社区的每一个 PR，欢迎贡献！

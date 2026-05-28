@@ -28,18 +28,20 @@
 ## ℹ️ 简介
 
 MindStudio-Agent（简称 `msagent`）是面向昇腾 Ascend NPU 开发、调试和调优场景的 AI Agent 工作台。它将 CLI、多模型 Provider、MCP 工具、内置 Skills 与领域 Agent 组合在一起，帮助用户在性能调优、精度分析、模型量化、算子优化、文档体验与代码审查等任务中更快定位问题并形成可执行建议。
+
 <p align="center">
-  <img src="https://raw.githubusercontent.com/luelueFLY/images/main/img/msagent-hello.gif" alt="msAgent" width="720">
+  <img src="docs/images/msagent-hello.gif" alt="msAgent" width="720">
 </p>
+
 ## ⚙️ 功能介绍
 
-| 名称 | 领域定位 | 核心能力 |
-|---|---|---|
-| **Hermes** | 性能调优 | 聚焦 Ascend Profiling 分析，覆盖单卡、多卡、集群等场景，擅长快慢卡、慢节点、MFU、通信瓶颈、算子热点、下发调度等性能问题定位与优化建议。 |
-| **Accuracy** | 精度调优 | 聚焦 Ascend 精度分析与优化，覆盖 RL 训推一致性分析、loss / gnorm NaN 分析等常见精度问题。 |
-| **Zephyr** | 模型量化 | 聚焦 msModelSlim 量化与压缩场景，协助完成模型适配可行性、结构风险评估与基础适配器开发。 |
-| **Icarus** | 算子调优 | 聚焦 Ascend NPU 算子性能调优，包括算子性能深度分析、端到端算子性能优化，辅助提升调优效率并降低开发难度。 |
-| **Minos** | 文档体验与代码审查 | 聚焦 README 走查、安装流程验证、Quick Start 体验、新手 onboarding、文档可用性评估，以及 GitCode PR 审查与评审意见整理。 |
+| 名称 |  核心能力 |
+|---|---|
+| **Hermes** | **【性能调优】**  聚焦 Ascend Profiling 分析，覆盖单卡、多卡、集群等场景，擅长快慢卡、慢节点、MFU、通信瓶颈、算子热点、下发调度等性能问题定位与优化建议。 |
+| **Accuracy** | **【精度调优】** 聚焦 Ascend 精度分析与优化，覆盖 RL 训推一致性分析、loss / gnorm NaN 分析等常见精度问题。 |
+| **Zephyr** | **【模型量化】**  聚焦 msModelSlim 量化与压缩场景，协助完成模型适配可行性、结构风险评估与基础适配器开发。 |
+| **Icarus** | **【算子调优】**  聚焦 Ascend NPU 算子性能调优，包括算子性能深度分析、端到端算子性能优化，辅助提升调优效率并降低开发难度。 |
+| **Minos** | **【文档体验与代码审查】**  聚焦 README 走查、安装流程验证、Quick Start 体验、新手 onboarding、文档可用性评估，以及 GitCode PR 审查与评审意见整理。 |
 
 ## 🚀 快速入门
 快速体验核心功能，请参见[msAgent快速入门](docs/zh/quick_start/quick_start.md)。
@@ -50,15 +52,7 @@ MindStudio-Agent（简称 `msagent`）是面向昇腾 Ascend NPU 开发、调试
 
 ## 📘 使用指南
 工具的详细使用方法，请参见[msAgent使用指南](docs/zh/user_guide/usemap.md)
-
-## 📚 API 参考
-MindStudio-Agent 当前主要通过 CLI、配置文件和 Skills 扩展机制使用。开发与扩展相关参考如下：
-
-🔹 [《Agent / Tool / Skill 过滤规则》](docs/zh/user_guide/agent-tool-skill-filter-rules.md)  
-🔹 [《上下文压缩指南》](docs/zh/user_guide/context-compaction-guide.md)  
-🔹 [《Retry Middleware 指南》](docs/zh/user_guide/retry-middleware-guide.md)  
-🔹 [《架构概览》](docs/zh/developer_guide/arch_overview.md)  
-
+ 
 ## ❓ FAQ
 
 常见问题与排查入口请参见 [《FAQ》](docs/zh/user_guide/faq.md)。

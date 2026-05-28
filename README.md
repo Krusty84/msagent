@@ -71,13 +71,14 @@ uv run msagent
 msagent --version
 ```
 
-开启详细日志：
+开启详细日志（终端显示更详细）：
 
 ```bash
 msagent -v
 ```
 
-启用后日志会写入当前工作目录下的 `./.msagent/logs/app.log`，同时终端会提示日志文件位置。
+日志默认会写入当前工作目录下的 `./.msagent/logs/app.log`。  
+使用 `-v` 时，终端会额外提示日志文件位置并输出更详细日志。
 
 #### 日志级别环境变量
 
@@ -269,11 +270,11 @@ msagent web --no-ui
 | `/hotkeys` | 查看键盘快捷键说明。 |
 | `/agents` | 打开 Agent 选择器。 |
 | `/model` | 打开模型选择器。 |
-| `/threads` | 浏览并恢复历史会话线程。 |
+| `/threads` | 浏览并恢复历史会话线程；已执行过 offload 的线程会显示 `[history offloaded]`。 |
 | `/tools` | 查看当前可用工具。 |
 | `/skills` | 浏览当前可用 Skills。 |
 | `/mcp` | 管理 MCP 服务启用状态。 |
-| `/offload` | 压缩并卸载较早的会话消息。 |
+| `/offload` | 压缩并卸载较早的会话消息；原始历史会写入 `./.msagent/conversation_history/<thread_id>.md`。 |
 | `/tool-output` | 打开最近一次可展开的工具输出。 |
 | `/clear` | 清屏并开启新线程。 |
 | `/exit` | 退出当前会话。 |

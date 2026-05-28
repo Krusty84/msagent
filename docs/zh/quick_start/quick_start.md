@@ -90,4 +90,4 @@ msagent --agent Icarus
 
 - 常见问题见 [FAQ](../user_guide/faq.md)
 - 本地配置、MCP 和 Skills 说明见 [配置与扩展](../user_guide/configuration-and-extension.md)
-- 各 Agent 的能力说明见 [中文文档首页](../index.md)
+- 各 Agent 的能力说明见 [文档首页](../../index.md)

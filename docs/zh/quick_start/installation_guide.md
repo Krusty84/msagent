@@ -33,30 +33,6 @@ uv run msagent
 
 源码运行时，后续示例中的 `msagent` 可以替换为 `uv run msagent`。
 
-## Web UI 运行时
-
-Web UI 仍处于 Beta 阶段。通过 wheel 安装后，运行时需要本机已安装 `node`；源码运行时同样可以使用 `uv run msagent web`。
-
-```bash
-msagent web
-```
-
-默认地址：
-
-```text
-UI:  http://127.0.0.1:3000
-API: http://127.0.0.1:2024
-```
-
-常用参数：
-
-```bash
-msagent web --host 127.0.0.1 --port 2024 --ui-port 3000
-msagent web --port 2025 --ui-port 3001
-msagent web --no-open
-msagent web --no-ui
-```
-
 ## 日志与版本检查
 
 检查版本：
@@ -84,4 +60,6 @@ msagent -v
 
 ## 下一步
 
-完成安装后，继续阅读 [快速入门指导](op_tool_quick_start.md)，配置 LLM 并启动第一个 Agent 会话。
+🔹 **构建与打包**：需要生成 wheel 或检查构建产物时，请参见 [《编译与打包》](docs/zh/developer_guide/build-and-package.md)。  
+🔹 **版本与兼容性**：Python 版本、Provider 支持和内置 MCP 版本说明，请参见 [《版本与兼容性》](docs/zh/developer_guide/version-and-compatibility.md)。  
+🔹 **完整安装说明**：日志与版本检查等更多内容，请参见 [《入门安装指南》](docs/zh/quick_start/installation_guide.md)。

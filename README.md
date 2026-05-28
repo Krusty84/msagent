@@ -1,16 +1,15 @@
-<h1 align="center">🚀 MindStudio-Agent</h1>
+<h1 align="center" >MindStudio Agent</h1>
 
 <div align="center">
 <p><b><span style="font-size:24px;">面向 Ascend NPU 场景的一站式调试调优 Agent</span></b></p>
 
-[![PyPI](https://badgen.net/pypi/v/mindstudio-agent?label=PyPI)](https://pypi.org/project/mindstudio-agent/)
-[![Python](https://badgen.net/badge/Python/3.11%2B/blue)](pyproject.toml)
+
 [![快速入门](https://badgen.net/badge/快速入门/QuickStart/blue)](#-快速入门)
+[![精确搜索](https://badgen.net/badge/精确搜索/ReadTheDocs/blue)](https://mindstudio-agent.readthedocs.io/zh-cn/latest/)
+[![安装指南](https://badgen.net/badge/安装指南/Install/blue)](#-安装指南)
 [![配置文档](https://badgen.net/badge/配置文档/Docs/blue)](docs/zh/user_guide/configuration-and-extension.md)
 [![昇腾社区](https://badgen.net/badge/昇腾社区/Community/blue)](https://www.hiascend.com/cn/developer/software/mindstudio)
 [![报告问题](https://badgen.net/badge/报告问题/Issues/blue)](https://gitcode.com/Ascend/msagent/issues)
-
-<img src="https://raw.githubusercontent.com/luelueFLY/images/main/img/msagent-hello.gif" alt="MindStudio-Agent 演示" width="720">
 
 </div>
 
@@ -18,183 +17,42 @@
 
 <span style="font-size:14px;">
 
-🔹 **[2026.04.27]**：`v26.1.0.alpha1` 发布，新增 `Accuracy` / `Zephyr` Agent，覆盖精度调优与模型量化场景。  
-🔹 **[2026.04.08]**：`v0.1.3` 发布，完成 DeepAgents 重构并增强 `Hermes` / `Minos` Agent，新增 `msagent web` 能力。  
-🔹 **[2026.03.19]**：`mindstudio-agent` 已发布到 PyPI，推荐使用 `pip install -U mindstudio-agent` 安装。  
+🔹 **[2026.05.21]**：`v26.0.0已发布，新增Icarus Agent，覆盖算子性能调优场景`。
+🔹 **[2026.04.27]**：`v26.0.0.alpha1` 发布，新增 `Accuracy` / `Zephyr` Agent，覆盖精度调优与模型量化场景。  
+🔹 **[2026.04.08]**：`v0.1.3` 发布，完成 DeepAgents 重构并增强 `Hermes` / `Minos` Agent。  
+🔹 **[2026.03.19]**：`mindstudio-agent` 已发布到 PyPI，推荐使用 `pip install -U mindstudio-agent` 安装。
+  
 
 </span>
 
 ## ℹ️ 简介
 
-MindStudio-Agent（简称 `msagent`）是面向昇腾 Ascend NPU 开发、调试和调优场景的 AI Agent 工作台。它将 CLI / Web UI、多模型 Provider、MCP 工具、内置 Skills 与领域 Agent 组合在一起，帮助用户在性能调优、精度分析、模型量化、算子优化、文档体验与代码审查等任务中更快定位问题并形成可执行建议。
+MindStudio-Agent（简称 `msagent`）是面向昇腾 Ascend NPU 开发、调试和调优场景的 AI Agent 工作台。它将 CLI、多模型 Provider、MCP 工具、内置 Skills 与领域 Agent 组合在一起，帮助用户在性能调优、精度分析、模型量化、算子优化、文档体验与代码审查等任务中更快定位问题并形成可执行建议。
+
+<p align="center">
+  <img src="docs/images/msagent-hello.gif" alt="msAgent" width="720">
+</p>
 
 ## ⚙️ 功能介绍
 
-| 形象 | 名称 | 领域定位 | 核心能力 |
-|---|---|---|---|
-| <img src="docs/zh/images/Hermes.png" alt="Hermes" width="120"> | **Hermes** | 性能调优 | 聚焦 Ascend Profiling 分析，覆盖单卡、多卡、集群等场景，擅长快慢卡、慢节点、MFU、通信瓶颈、算子热点、下发调度等性能问题定位与优化建议。 |
-| <img src="docs/zh/images/Accuracy.png" alt="Accuracy" width="120"> | **Accuracy** | 精度调优 | 聚焦 Ascend 精度分析与优化，覆盖 RL 训推一致性分析、loss / gnorm NaN 分析等常见精度问题。 |
-| <img src="docs/zh/images/Zephyr.jpg" alt="Zephyr" width="120"> | **Zephyr** | 模型量化 | 聚焦 msModelSlim 量化与压缩场景，协助完成模型适配可行性、结构风险评估与基础适配器开发。 |
-| <img src="docs/zh/images/Minos.png" alt="Minos" width="120"> | **Minos** | 文档体验与代码审查 | 聚焦 README 走查、安装流程验证、Quick Start 体验、新手 onboarding、文档可用性评估，以及 GitCode PR 审查与评审意见整理。 |
-| <img src="docs/zh/images/Icarus.png" alt="Icarus" width="120"> | **Icarus** | 算子调优 | 聚焦 Ascend NPU 算子性能调优，包括算子性能深度分析、端到端算子性能优化，辅助提升调优效率并降低开发难度。 |
+| 名称 |  核心能力 |
+|---|---|
+| **Hermes** | **【性能调优】**  聚焦 Ascend Profiling 分析，覆盖单卡、多卡、集群等场景，擅长快慢卡、慢节点、MFU、通信瓶颈、算子热点、下发调度等性能问题定位与优化建议。 |
+| **Accuracy** | **【精度调优】** 聚焦 Ascend 精度分析与优化，覆盖 RL 训推一致性分析、loss / gnorm NaN 分析等常见精度问题。 |
+| **Zephyr** | **【模型量化】**  聚焦 msModelSlim 量化与压缩场景，协助完成模型适配可行性、结构风险评估与基础适配器开发。 |
+| **Icarus** | **【算子调优】**  聚焦 Ascend NPU 算子性能调优，包括算子性能深度分析、端到端算子性能优化，辅助提升调优效率并降低开发难度。 |
+| **Minos** | **【文档体验与代码审查】**  聚焦 README 走查、安装流程验证、Quick Start 体验、新手 onboarding、文档可用性评估，以及 GitCode PR 审查与评审意见整理。 |
 
 ## 🚀 快速入门
-
-### 1. 准备环境
-
-🔹 Python `3.11+`  
-🔹 推荐使用 `uv` 管理源码运行环境  
-🔹 至少准备一个可用的 LLM API Key  
-🔹 glibc `>= 2.34`，用于满足 `msprof-mcp` 中 `trace_processor` 二进制依赖  
-
-### 2. 安装并启动
-
-推荐优先使用 PyPI 安装。如果你需要跟踪最新源码、参与开发，或同步最新内置 Skills，再使用源码运行方式。
-
-```bash
-pip install -U mindstudio-agent
-msagent
-```
-
-源码运行：
-
-```bash
-git clone https://gitcode.com/Ascend/msagent.git
-cd msagent
-uv sync
-uv run msagent
-```
-
-> 源码运行时，下文命令中的 `msagent` 可替换为 `uv run msagent`。
-
-### 3. 配置 LLM
-
-当前 `config` 子命令直接支持 `openai`、`anthropic`、`google` 三类 Provider。对于自部署服务、企业网关或代理层，请根据接口协议兼容性复用上述 Provider，并通过 `--llm-base-url` 指定服务地址。
-
-OpenAI 兼容接口示例：
-
-```bash
-export OPENAI_API_KEY="your-key"
-msagent config --llm-provider openai --llm-base-url "https://api.deepseek.com/v1" --llm-model "deepseek-chat"
-```
-
-本地 OpenAI 兼容服务示例：
-
-```bash
-export OPENAI_API_KEY="dummy"
-msagent config --llm-provider openai --llm-base-url "http://127.0.0.1:8000/v1" --llm-model "your-model"
-```
-
-Anthropic 兼容服务示例：
-
-```bash
-export ANTHROPIC_API_KEY="your-key"
-msagent config --llm-provider anthropic --llm-base-url "https://example.com/anthropic" --llm-model "claude-sonnet-4-20250514"
-```
-
-Google / Gemini 服务示例：
-
-```bash
-export GOOGLE_API_KEY="your-key"
-msagent config --llm-provider google --llm-base-url "https://example.com/google" --llm-model "gemini-2.5-pro"
-```
-
-查看当前配置：
-
-```bash
-msagent config --show
-```
-
-### 4. 选择 Agent
-
-```bash
-msagent --agent Hermes
-msagent --agent Accuracy
-msagent --agent Zephyr
-msagent --agent Minos
-msagent --agent Icarus
-```
-
-### 5. 启动 Web UI（可选）
-
-Web UI 仍处于 Beta 阶段。通过 wheel 安装后，运行时需要本机已安装 `node`；源码运行时同样可以使用 `uv run msagent web`。
-
-```bash
-msagent web
-```
-
-默认地址：
-
-```text
-UI:  http://127.0.0.1:3000
-API: http://127.0.0.1:2024
-```
-
-常用参数：
-
-```bash
-msagent web --host 127.0.0.1 --port 2024 --ui-port 3000
-msagent web --port 2025 --ui-port 3001
-msagent web --no-open
-msagent web --no-ui
-```
+快速体验核心功能，请参见[《msAgent快速入门》](docs/zh/quick_start/quick_start.md)。
 
 ## 📦 安装指南
+介绍工具的环境依赖与安装方法，请参见[《msAgent安装指南》](docs/zh/quick_start/installation_guide.md)
 
-🔹 **PyPI 安装**：适合普通用户，使用 `pip install -U mindstudio-agent` 获取稳定发布版本。  
-🔹 **源码运行**：适合开发者或需要跟踪最新内置 Skills 的用户，使用 `uv sync && uv run msagent`。  
-🔹 **构建与打包**：需要生成 wheel 或检查构建产物时，请参见 [《编译与打包》](docs/zh/developer_guide/build-and-package.md)。  
-🔹 **版本与兼容性**：Python 版本、Provider 支持和内置 MCP 版本说明，请参见 [《版本与兼容性》](docs/zh/developer_guide/version-and-compatibility.md)。  
 
 ## 📘 使用指南
-
-进入交互式会话后，可以直接输入问题，也可以配合 `/` 命令和快捷键提升效率。
-
-| 命令 | 说明 |
-|---|---|
-| `/help` | 查看当前支持的命令列表。 |
-| `/agents` | 打开 Agent 选择器。 |
-| `/model` | 打开模型选择器。 |
-| `/threads` | 浏览并恢复历史会话线程。 |
-| `/tools` | 查看当前可用工具。 |
-| `/skills` | 浏览当前可用 Skills。 |
-| `/mcp` | 管理 MCP 服务启用状态。 |
-| `/tool-output` | 打开最近一次可展开的工具输出。 |
-| `/clear` | 清屏并开启新线程。 |
-| `/exit` | 退出当前会话。 |
-
-| 快捷键 | 说明 |
-|---|---|
-| `Ctrl+C` | 有输入时清空输入框；连续按两次退出会话。 |
-| `Ctrl+J` | 插入换行，便于多行输入。 |
-| `Shift+Tab` | 循环切换审批模式。 |
-| `Ctrl+B` | 切换 bash mode。 |
-| `Ctrl+K` | 打开快捷键说明。 |
-| `Ctrl+O` | 打开最近一次可展开的工具输出。 |
-| `Tab` | 应用第一个补全项。 |
-| `Enter` | 提交输入；如果当前选中了补全项，则先应用补全。 |
-
-更多配置、MCP、Skills 与加载顺序说明，请参见 [《配置与扩展》](docs/zh/user_guide/configuration-and-extension.md)。
-
-## 💡 典型案例
-
-| 场景 | 推荐入口 |
-|---|---|
-| Ascend Profiling 性能调优、集群快慢卡定位、通信瓶颈分析 | [《Hermes Agent 说明》](docs/zh/agent_guide/Hermes.md) |
-| RL 训推一致性、loss / gnorm NaN、精度异常定位 | [《Accuracy Agent 说明》](docs/zh/agent_guide/Accuracy.md) |
-| msModelSlim 模型量化、压缩与适配风险评估 | [《Zephyr Agent 说明》](docs/zh/agent_guide/Zephyr.md) |
-| README 体验评估、安装流程验证、GitCode PR 审查 | [《Minos Agent 说明》](docs/zh/agent_guide/Minos.md) |
-| Ascend C 算子性能分析与端到端优化 | [《Icarus Agent 说明》](docs/zh/agent_guide/Icarus.md) |
-
-## 📚 API 参考
-
-MindStudio-Agent 当前主要通过 CLI、Web UI、配置文件和 Skills 扩展机制使用。开发与扩展相关参考如下：
-
-🔹 [《Agent / Tool / Skill 过滤规则》](docs/zh/user_guide/agent-tool-skill-filter-rules.md)  
-🔹 [《上下文压缩指南》](docs/zh/user_guide/context-compaction-guide.md)  
-🔹 [《Retry Middleware 指南》](docs/zh/user_guide/retry-middleware-guide.md)  
-🔹 [《架构概览》](docs/zh/developer_guide/arch_overview.md)  
-
+工具的详细使用方法，请参见[《msAgent使用指南》](docs/zh/user_guide/usemap.md)
+ 
 ## ❓ FAQ
 
 常见问题与排查入口请参见 [《FAQ》](docs/zh/user_guide/faq.md)。
@@ -202,28 +60,35 @@ MindStudio-Agent 当前主要通过 CLI、Web UI、配置文件和 Skills 扩展
 ## 🌌 智能检索
 
 为提升文档查阅效率，建议优先通过以下入口定位信息：  
-🔹 [中文文档首页](docs/zh/index.md)：按快速入门、用户指南、Agent 指南和开发指南组织内容。  
-🔹 [配置与扩展](docs/zh/user_guide/configuration-and-extension.md)：查询本地配置目录、MCP 配置、Skills 扩展与加载顺序。  
-🔹 [版本与兼容性](docs/zh/developer_guide/version-and-compatibility.md)：查询版本要求、兼容策略与内置依赖。  
+🔹 [《中文文档首页》](docs/index.md)：按快速入门、用户指南、Agent 指南和开发指南组织内容。  
+🔹 [《配置与扩展》](docs/zh/user_guide/configuration-and-extension.md)：查询本地配置目录、MCP 配置、Skills 扩展与加载顺序。  
+🔹 [《版本与兼容性》](docs/zh/developer_guide/version-and-compatibility.md)：查询版本要求、兼容策略与内置依赖。  
 🔹 会话内直接询问 `msagent`：让对应 Agent 结合仓库文档、配置和上下文辅助定位问题。  
 
 ## 🛠️ 贡献指南
 
-欢迎提交 Issue、PR 或补充新的领域 Skills。开始贡献前，建议先阅读 [《编译与打包》](docs/zh/developer_guide/build-and-package.md)、[《配置与扩展》](docs/zh/user_guide/configuration-and-extension.md) 与 [《Agent / Tool / Skill 过滤规则》](docs/zh/user_guide/agent-tool-skill-filter-rules.md)。
+欢迎提交 Issue、PR 或补充新的领域 Skills。完整流程、开发自检与各类贡献指引见 [《贡献指南》](docs/zh/developer_guide/contributing.md)。
 
 ## ⚖️ 相关说明
 
 🔹 [《版本与兼容性》](docs/zh/developer_guide/version-and-compatibility.md)  
-🔹 [《配置与扩展》](docs/zh/user_guide/configuration-and-extension.md)  
-🔹 [Mulan PSL v2 许可证](http://license.coscl.org.cn/MulanPSL2)  
-🔹 [提交问题与建议](https://gitcode.com/Ascend/msagent/issues)  
+🔹 [《安全声明》](docs/zh/legal/SECURITY.md)  
+🔹 [《免责声明》](docs/zh/legal/DISCLAIMER.md)  
+🔹 [《许可证声明》](http://license.coscl.org.cn/MulanPSL2)  
 
 ## 🤝 建议与交流
 
-| 技术交流 | 问题反馈 | 社区入口 |
-|:---:|:---:|:---:|
-| <a href="https://applink.feishu.cn/client/chat/chatter/add_by_link?link_token=854v5833-c03a-484e-8aac-0637f0303dc4&qr_code=true"><img src="https://img.shields.io/badge/Feishu-3370FF?style=for-the-badge&logo=lark&logoColor=white" alt="Feishu Group"></a><br><sub>加入飞书群交流使用体验与问题定位</sub> | [![Issues](https://badgen.net/badge/GitCode/Issues/blue)](https://gitcode.com/Ascend/msagent/issues)<br><sub>提交 Bug、需求和文档建议</sub> | [![Community](https://badgen.net/badge/Ascend/Community/blue)](https://www.hiascend.com/cn/developer/software/mindstudio)<br><sub>了解 MindStudio 与昇腾开发者资源</sub> |
+欢迎大家为社区做贡献。如果有任何疑问或建议，请提交 [Issues](https://gitcode.com/Ascend/msagent/issues)，我们会尽快回复。感谢您的支持。
+
+| 即时互动（飞书群） | 交流说明 |
+|:--:|:--|
+| [![Feishu](https://img.shields.io/badge/Feishu-3370FF?style=for-the-badge&logo=lark&logoColor=white)](https://applink.feishu.cn/client/chat/chatter/add_by_link?link_token=854v5833-c03a-484e-8aac-0637f0303dc4&qr_code=true)<br><sub>*点击蓝色按钮加入技术交流群*</sub> | 加入飞书群，直达 MindStudio 用户与开发者交流平台：<br> **快速提问：** 与社区小伙伴即时探讨技术问题<br>**掌握动态：** 第一时间获取版本发布与功能更新通知<br> **经验共享：** 与广大开发者交流最佳实践与实战心得 |
 
 ## 🙏 致谢
 
-感谢 MindStudio 相关团队、Ascend 生态伙伴以及社区开发者对项目能力、文档体验和使用反馈的持续贡献。欢迎通过 Issue、PR 或 Skills 扩展一起完善 MindStudio-Agent。
+本工具由华为公司下列部门联合贡献：
+
+- 昇腾计算 MindStudio 开发部
+- 昇腾计算生态使能部
+
+感谢来自社区的每一个 PR，欢迎贡献！

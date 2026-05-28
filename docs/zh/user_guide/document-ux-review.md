@@ -22,7 +22,7 @@
 
 `document-ux-review` 属于内置 skill。大多数情况下，只要 `msagent` 已正确安装、LLM 已配置完成，就可以直接使用，不需要在这里重复维护单独的安装步骤。
 
-具体安装、LLM 配置和启动方式请直接参考[快速入门指导](../quick_start/op_tool_quick_start.md)。
+具体安装、LLM 配置和启动方式请直接参考[快速入门指导](../quick_start/quick_start.md)。
 
 ### ✅ 使用前确认
 

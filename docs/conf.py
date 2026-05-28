@@ -95,7 +95,7 @@ def _copy_extra_assets(app, exception):
     if exception is not None or app.builder.format != 'html':
         return
 
-    for relative_dir in ('zh/images', 'zh/example'):
+    for relative_dir in ('zh/figures', 'zh/example'):
         src = Path(app.confdir) / relative_dir
         dst = Path(app.outdir) / relative_dir
         if src.exists():

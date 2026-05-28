@@ -6,13 +6,13 @@ from pathlib import Path
 from statistics import mean
 from typing import Any
 
-from .claude_cli import ClaudeCliAgent, ClaudeCliJudge
-from .codex_cli import CodexCliAgent, CodexCliJudge
-from .judge import MockLLMJudge, normalized_judge_score
-from .metrics import build_case_metrics
-from .msagent_cli import MsagentCliAgent, MsagentCliJudge
-from .mock_agent import MockBenchmarkAgent
-from .schema import BenchmarkCase, load_suite
+from third_party.claude_cli import ClaudeCliAgent, ClaudeCliJudge
+from third_party.codex_cli import CodexCliAgent, CodexCliJudge
+from judge import MockLLMJudge, normalized_judge_score
+from metrics import build_case_metrics
+from msagent_cli import MsagentCliAgent, MsagentCliJudge
+from mock_agent import MockBenchmarkAgent
+from schema import BenchmarkCase, load_suite
 
 
 def run(

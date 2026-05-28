@@ -4,7 +4,7 @@ import json
 from time import perf_counter
 from typing import Any
 
-from .schema import BenchmarkCase
+from schema import BenchmarkCase
 
 
 class MockLLMJudge:

@@ -5,8 +5,8 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any
 
-from .schema import BenchmarkCase
-from .trace import TraceBuilder
+from schema import BenchmarkCase
+from trace import TraceBuilder
 
 
 class MockBenchmarkAgent:
@@ -29,7 +29,7 @@ class MockBenchmarkAgent:
         trace.tool_result("summarize_input_data", input_summary, self._elapsed_ms(started))
         trace.observation(
             f"Input data contains {input_summary['file_count']} files; "
-            "using case metadata to exercise the judge contract."
+            "using sampled input text to exercise the judge contract."
         )
 
         trace.final_answer(self._build_final_answer(case, input_summary))
@@ -52,7 +52,7 @@ class MockBenchmarkAgent:
             if path.is_file() and not path.is_symlink()
         ]
         text_sample = ""
-        for relative_file in files:
+        for relative_file in self._prioritized_text_files(files):
             text_sample = self._sample_text(input_path / relative_file)
             if text_sample:
                 break
@@ -69,6 +69,25 @@ class MockBenchmarkAgent:
         except UnicodeDecodeError:
             return ""
         return " ".join(text.split())[:1000]
+
+    def _prioritized_text_files(self, files: list[str]) -> list[str]:
+        suffix_rank = {
+            ".md": 0,
+            ".txt": 1,
+            ".csv": 2,
+            ".jsonl": 3,
+            ".json": 4,
+        }
+        preferred = [
+            path
+            for path in files
+            if Path(path).suffix.lower() in suffix_rank
+        ]
+        other = [path for path in files if path not in set(preferred)]
+        return sorted(
+            preferred,
+            key=lambda path: (suffix_rank[Path(path).suffix.lower()], path),
+        ) + other
 
     def _build_final_answer(
         self,

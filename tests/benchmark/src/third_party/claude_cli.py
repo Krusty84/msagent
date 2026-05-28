@@ -9,7 +9,7 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any
 
-from .codex_cli import (
+from third_party.codex_cli import (
     AGENT_OUTPUT_SCHEMA,
     JUDGE_OUTPUT_SCHEMA,
     build_agent_prompt,
@@ -23,8 +23,8 @@ from .codex_cli import (
     trim_event_text,
     trim_text,
 )
-from .schema import BenchmarkCase
-from .trace import TraceBuilder
+from schema import BenchmarkCase
+from trace import TraceBuilder
 
 
 class ClaudeCliUnavailableError(RuntimeError):

@@ -19,9 +19,10 @@ benchmarks/
   *.yaml                     # 每个文件一个 benchmark case
 data/
   */                         # case 输入数据
-src/benchmark_builder/
-  codex_cli.py               # Codex CLI Agent 和 judge adapter
-  claude_cli.py              # Claude CLI Agent 和 judge adapter
+src/
+  third_party/
+    codex_cli.py             # Codex CLI Agent 和 judge adapter
+    claude_cli.py            # Claude CLI Agent 和 judge adapter
   msagent_cli.py             # msAgent CLI Agent 和 judge adapter
   judge.py                   # 本地 heuristic judge，仅用于 smoke test
   metrics.py                 # token、耗时和 tool call 聚合
@@ -45,7 +46,7 @@ src/benchmark_builder/
 示例：
 
 ```yaml
-input_data_path: ../data/cases/example
+input_data_path: ../data/cases/mock_agent_smoke
 prompt: >
   请根据 input_data 中的数据回答问题。
 must_include:
@@ -143,7 +144,7 @@ benchmark-builder --config benchmarks --out runs/codex-run
 不安装，直接用 `PYTHONPATH`：
 
 ```bash
-PYTHONPATH=src python3 -m benchmark_builder.run_benchmark \
+PYTHONPATH=src python3 -m run_benchmark \
   --config benchmarks \
   --out runs/codex-run
 ```
@@ -151,7 +152,7 @@ PYTHONPATH=src python3 -m benchmark_builder.run_benchmark \
 本地 smoke test，不调用真实模型：
 
 ```bash
-PYTHONPATH=src python3 -m benchmark_builder.run_benchmark \
+PYTHONPATH=src python3 -m run_benchmark \
   --config benchmarks \
   --out runs/smoke \
   --agent heuristic \
@@ -161,8 +162,8 @@ PYTHONPATH=src python3 -m benchmark_builder.run_benchmark \
 使用 Codex CLI：
 
 ```bash
-PYTHONPATH=src python3 -m benchmark_builder.run_benchmark \
-  --config benchmarks/example.yaml \
+PYTHONPATH=src python3 -m run_benchmark \
+  --config benchmarks/mock_agent_smoke.yaml \
   --out runs/codex-cli \
   --agent codex-cli \
   --judge codex-cli
@@ -171,8 +172,8 @@ PYTHONPATH=src python3 -m benchmark_builder.run_benchmark \
 使用 Claude CLI：
 
 ```bash
-PYTHONPATH=src python3 -m benchmark_builder.run_benchmark \
-  --config benchmarks/example.yaml \
+PYTHONPATH=src python3 -m run_benchmark \
+  --config benchmarks/mock_agent_smoke.yaml \
   --out runs/claude-cli \
   --agent claude-cli \
   --judge claude-cli
@@ -181,8 +182,8 @@ PYTHONPATH=src python3 -m benchmark_builder.run_benchmark \
 使用 msAgent：
 
 ```bash
-PYTHONPATH=src python3 -m benchmark_builder.run_benchmark \
-  --config benchmarks/example.yaml \
+PYTHONPATH=src python3 -m run_benchmark \
+  --config benchmarks/mock_agent_smoke.yaml \
   --out runs/msagent-cli \
   --agent msagent-cli \
   --judge msagent-cli \
@@ -193,8 +194,8 @@ PYTHONPATH=src python3 -m benchmark_builder.run_benchmark \
 
 ```bash
 MSAGENT_CLI="uv --project /path/to/msagent run msagent" \
-PYTHONPATH=src python3 -m benchmark_builder.run_benchmark \
-  --config benchmarks/example.yaml \
+PYTHONPATH=src python3 -m run_benchmark \
+  --config benchmarks/mock_agent_smoke.yaml \
   --out runs/msagent-cli \
   --agent msagent-cli \
   --judge msagent-cli

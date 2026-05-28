@@ -37,6 +37,7 @@ zh/user_guide/agent-tool-skill-filter-rules
 :maxdepth: 2
 :caption: 开发指南
 
+zh/developer_guide/contributing
 zh/developer_guide/build-and-package
 zh/developer_guide/version-and-compatibility
 zh/developer_guide/arch_overview
@@ -66,4 +67,4 @@ zh/legal/SECURITY
 
 新用户建议先阅读 [入门安装指南](zh/quick_start/installation_guide.md)，完成安装后再按 [快速入门指导](zh/quick_start/quick_start.md) 配置模型并启动会话。
 
-日常使用中，优先从 [FAQ](zh/user_guide/faq.md) 和 [配置与扩展](zh/user_guide/configuration-and-extension.md) 定位常见问题；需要参与开发、发布或本地验证文档时，再进入开发指南。
+日常使用中，优先从 [FAQ](zh/user_guide/faq.md) 和 [配置与扩展](zh/user_guide/configuration-and-extension.md) 定位常见问题；需要参与开发、发布或本地验证文档时，再进入 [贡献指南](zh/developer_guide/contributing.md) 与开发指南。

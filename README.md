@@ -67,7 +67,7 @@ MindStudio-Agent（简称 `msagent`）是面向昇腾 Ascend NPU 开发、调试
 
 ## 🛠️ 贡献指南
 
-欢迎提交 Issue、PR 或补充新的领域 Skills。开始贡献前，建议先阅读 [《编译与打包》](docs/zh/developer_guide/build-and-package.md)、[《配置与扩展》](docs/zh/user_guide/configuration-and-extension.md) 与 [《Agent / Tool / Skill 过滤规则》](docs/zh/user_guide/agent-tool-skill-filter-rules.md)。
+欢迎提交 Issue、PR 或补充新的领域 Skills。完整流程、开发自检与各类贡献指引见 [《贡献指南》](docs/zh/developer_guide/contributing.md)。
 
 ## ⚖️ 相关说明
 
@@ -84,4 +84,4 @@ MindStudio-Agent（简称 `msagent`）是面向昇腾 Ascend NPU 开发、调试
 
 ## 🙏 致谢
 
-感谢 MindStudio 相关团队、Ascend 生态伙伴以及社区开发者对项目能力、文档体验和使用反馈的持续贡献。欢迎通过 Issue、PR 或 Skills 扩展一起完善 MindStudio-Agent。
+本工具由昇腾计算MindStudio开发部、Ascend 生态伙伴以及社区开发者对联合贡献。欢迎通过 Issue、PR 或 Skills 扩展一起完善 MindStudio-Agent。

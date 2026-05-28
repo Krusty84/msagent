@@ -51,10 +51,14 @@ description: 为 msModelSlim 适配流程注入反量化能力。先识别模型
 
 按 FP8 模式创建脚本，最小要求：
 
-- 提供 `convert_*` 主转换函数（带进度与异常提示）
+- 提供 `convert_*` 主转换函数（必须带可见进度条与异常提示）
 - 脚本只需覆盖当前模型确认的量化模式（可仅实现 per-block）
 - 将结果统一转换到 `torch.bfloat16`（或项目默认浮点 dtype）
 - 对 index 与 safetensors 不匹配场景给出 warning 并安全跳过
+- 进度条要求：
+  - 必须使用 `tqdm`（或等价方案）显示转换进度，禁止仅打印日志让用户等待
+  - `total` 必须可追踪（例如按待转换参数个数/层数），并实时更新 `desc`（如当前层名）
+  - 长耗时阶段（扫描权重、逐层反量化、保存结果）至少覆盖主耗时环节中的一个；优先覆盖逐层反量化主循环
 
 建议函数骨架：
 
@@ -88,6 +92,13 @@ def decode_fp8_per_block(weight: torch.Tensor, scale: torch.Tensor, block_size: 
 
 在适配器中注入反量化调用，要求：
 
+- 在调用 transformers 加载模型前，先检查模型目录 `config.json` 是否包含量化字段（如 `quantization_config`、`quant_method`、`fmt`、`weight_block_size`、`modules_to_not_convert` 等）
+- 若检测到量化字段，必须主动删除这些字段后再进行加载，避免 transformers 按量化方式装载权重
+- 删除原因必须在日志中说明：昇腾当前不支持 FP8 量化权重直载，若不清理配置会导致错误加载路径
+- 可接受实现方式：
+  - 直接修改模型目录下 `config.json` 后加载；或
+  - 生成去量化字段的临时 `config` 并确保后续加载明确使用该配置
+- 无论采用哪种方式，都必须保证“最终传给 transformers 的 config 不包含量化相关字段”
 - 在模型权重可用后、量化流程前调用 `convert_*_to_bf16`
 - 仅对命中的量化子模块执行，避免全模型无谓遍历
 - 转换失败不应静默吞掉；至少记录 warning 与原因

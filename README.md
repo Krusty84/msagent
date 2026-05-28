@@ -5,7 +5,7 @@
 
 
 [![快速入门](https://badgen.net/badge/快速入门/QuickStart/blue)](#-快速入门)
-[![文档](https://readthedocs.org/projects/mindstudio-agent/badge/?version=latest)](https://mindstudio-agent.readthedocs.io/zh-cn/latest/)
+[![精确搜索](https://badgen.net/badge/精确搜索/ReadTheDocs/blue)](https://mindstudio-agent.readthedocs.io/zh-cn/latest/)
 [![安装指南](https://badgen.net/badge/安装指南/Install/blue)](#-安装指南)
 
 [![配置文档](https://badgen.net/badge/配置文档/Docs/blue)](docs/zh/user_guide/configuration-and-extension.md)

@@ -1,7 +1,7 @@
 # Accuracy 精度调试
 
 <p align="center">
-  <img src="../images/Accuracy.png" alt="Hermes" width="220">
+  <img src="../figures/Accuracy.png" alt="Hermes" width="220">
 </p>
 
 
@@ -27,5 +27,5 @@
 
 | 场景             | 示例提示词 | 效果展示 |
 |----------------|---|--|
-| RL训推不一致分析      | `请基于输入的训练和推理dump数据，分析训推的差异来源，给出可能原因。` | <img src="../images/accuracy_rl_rca_report.jpg" alt="RL训推不一致根因分析报告" width="800"> |
-| loss/gnorm NaN溢出分析 | `请基于输入的训练dump数据，分析其中的NaN溢出，找出源卡和根因算子` | <img src="../images/nan_overflow_detection_report.jpg" alt="loss/gnorm NaN溢出分析报告" width="800"> |
+| RL训推不一致分析      | `请基于输入的训练和推理dump数据，分析训推的差异来源，给出可能原因。` | <img src="../figures/accuracy_rl_rca_report.jpg" alt="RL训推不一致根因分析报告" width="800"> |
+| loss/gnorm NaN溢出分析 | `请基于输入的训练dump数据，分析其中的NaN溢出，找出源卡和根因算子` | <img src="../figures/nan_overflow_detection_report.jpg" alt="loss/gnorm NaN溢出分析报告" width="800"> |

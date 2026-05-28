@@ -10,7 +10,7 @@
 
 ## 1.1 简介
 
-本文档描述 MindStudio-Agent 的整体架构设计。MindStudio-Agent 是一个面向 Ascend NPU 场景的一站式调试调优 Agent 框架，提供性能调优、精度调优、模型量化等多个专业化 Agent，通过统一的框架支持多种交互方式（CLI、Web UI），并具备灵活的扩展能力。
+本文档描述 MindStudio-Agent 的整体架构设计。MindStudio-Agent 是一个面向 Ascend NPU 场景的一站式调试调优 Agent 框架，提供性能调优、精度调优、模型量化等多个专业化 Agent，通过统一的框架支持多种交互方式，并具备灵活的扩展能力。
 
 ## 1.2 动机
 
@@ -28,7 +28,6 @@ MindStudio-Agent 旨在通过智能化 Agent 降低这些工作的复杂度，�
 - 提供统一的 Agent 框架，支持多个专业化 Agent 的开发和管理
 - 支持灵活的 LLM 提供商接入（OpenAI、Anthropic、Google 等）
 - 提供可扩展的工具和技能系统
-- 支持多种交互方式（CLI、Web UI）
 - 实现会话记忆和上下文管理
 
 **非目标：**
@@ -46,7 +45,7 @@ MindStudio-Agent 旨在通过智能化 Agent 降低这些工作的复杂度，�
 4. **技能系统**：支持 Skills 的加载、管理和执行
 5. **MCP 支持**：集成 Model Context Protocol，支持外部工具和资源接入
 6. **会话管理**：支持会话历史保存、恢复、压缩等功能
-7. **多交互界面**：提供 CLI 和 Web UI 两种交互方式
+7. **交互界面**：提供 CLI 交互方式
 8. **配置管理**：支持灵活的配置系统，包括 Agent 配置、LLM 配置、工具配置等
 
 ## 2.2 非功能需求
@@ -67,9 +66,9 @@ MindStudio-Agent 采用模块化架构设计，基于 deepagents 运行时构建
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                        交互层                                │
-│  ┌──────────────────┐         ┌──────────────────┐          │
-│  │   CLI (msagent)  │         │    Web UI        │          │
-│  └──────────────────┘         └──────────────────┘          │
+│              ┌──────────────────┐                           │
+│              │   CLI (msagent)  │                           │
+│              └──────────────────┘                           │
 └─────────────────────────────────────────────────────────────┘
                               ↓
 ┌─────────────────────────────────────────────────────────────┐
@@ -139,11 +138,6 @@ MindStudio-Agent 采用模块化架构设计，基于 deepagents 运行时构建
   - 处理用户输入和命令执行
   - 提供补全、快捷键等交互增强功能
 
-#### 8. Web 模块
-- **职责**：
-  - 提供 Web UI 界面
-  - 提供 API 服务
-
 ### 3.1.3 核心流程
 
 #### 1. 启动流程
@@ -151,7 +145,7 @@ MindStudio-Agent 采用模块化架构设计，基于 deepagents 运行时构建
 ```mermaid
 sequenceDiagram
     participant User as 用户
-    participant CLI as CLI/Web UI
+    participant CLI as CLI
     participant Config as 配置系统
     participant Factory as AgentFactory
     participant Agent as Agent实例

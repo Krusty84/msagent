@@ -1,7 +1,7 @@
 # Icarus 算子调优
 
 <p align="center">
-  <img src="../images/Icarus.png" alt="Hermes" width="220">
+  <img src="../figures/Icarus.png" alt="Hermes" width="220">
 </p>
 `Icarus` 是面向 Ascend 算子开发性能优化场景的 Agent,负责把复杂算子性能数据优化为结构化、可分析和可执行的优化建议，并提供端到端性能优化的能力
 
@@ -29,4 +29,4 @@
 
 | 场景        | 示例提示词                             | 效果展示                                                                        |
 |-----------|-----------------------------------|-----------------------------------------------------------------------------|
-| 算子端到端性能优化 | `请基于算子目录端到端进行性能优化，算子核函数为xxx.cpp。` | <img src="../images/icarus_e2e_tuning.jpg" alt="MsOpProf 适配示例" width="800"> |
+| 算子端到端性能优化 | `请基于算子目录端到端进行性能优化，算子核函数为xxx.cpp。` | <img src="../figures/icarus_e2e_tuning.jpg" alt="MsOpProf 适配示例" width="800"> |

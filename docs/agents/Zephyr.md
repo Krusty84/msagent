@@ -47,7 +47,7 @@ spec:
   process:
     - type: "linear_quant"
       qconfig: *default_w8a8_dynamic
-      include: 
+      include:
         - "*"
       exclude:
         - "*.gate"

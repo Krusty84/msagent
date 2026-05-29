@@ -32,4 +32,4 @@
 
 | 场景 | 示例提示词 | 效果展示|
 |---|---|---|
-| 基础模型适配 | `请帮我分析 {模型路径} 的适配风险，完成 msModelSlim 对该模型的适配开发。` | <img src="../images/modelslim_adapt.jpg" alt="MsModelslim 适配示例" width="800"> |
+| 基础模型适配 | ` {模型路径} 是{模型}的权重，请完成对该模型的适配风险分析，并完成{msModelslim代码路径}项目对于该模型的适配器开发和验证工作。` | <img src="../images/modelslim_adapt.jpg" alt="MsModelslim 适配示例" width="800"> |

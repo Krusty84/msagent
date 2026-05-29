@@ -39,7 +39,7 @@ spec:
     - type: "linear_quant"
       qconfig:
         act:
-          scope: "per_tensor"
+          scope: "per_token"
           dtype: "int8"
           symmetric: false
           method: "minmax"
@@ -49,6 +49,7 @@ spec:
           symmetric: true
           method: "minmax"
       include: ["*"]
+      exclude: ["*.gate"]
   save:
     - type: "ascendv1_saver"
       part_file_size: 4

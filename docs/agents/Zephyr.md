@@ -16,7 +16,6 @@
 
 - 评估模型实现来源、结构特征及量化接入的可行性风险
 - 为 Decoder-only LLM 或理解类 VLM 创建基于 Transformers 的适配器
-- 识别并支持复杂模型结构的 MoE packed 权重拆解
 - 为超大模型提供逐层加载（懒加载）等解决方案以规避内存瓶颈
 - 严格遵循门禁规则与多步验证流程，确保结论由实际证据（配置、日志、命令输出）支撑
 
@@ -27,6 +26,39 @@
 - 在开始适配前，提供模型名称或路径，让 Zephyr 先进行模型分析和风险评估
 - 如果明确模型涉及 MoE，或在适配中由于规模过大导致 OOM，请直接向 Zephyr 提出“需要进行 MoE 权重拆解”或“实现按层加载/逐层加载”的诉求
 - 明确当前环境和任务类型，确保仅在风险评估通过的前提下，再让 Zephyr 生成适配器代码并进行验证测试
+- Agent生成模型适配器后，请重新安装msModelslim，具体操作可[安装指导](https://gitcode.com/Ascend/msmodelslim/blob/master/docs/zh/getting_started/install_guide.md)，安装完成后使用一键量化生成量化权重，具体操作可参考[一键量化使用指导](https://gitcode.com/Ascend/msmodelslim/blob/master/docs/zh/feature_guide/quick_quantization_v1/usage.md)
+- 推荐使用以下量化配置生成量化权重
+```yaml
+apiversion: modelslim_v1
+
+default_w8a8_dynamic: &default_w8a8_dynamic
+  act:
+    scope: "per_token"
+    dtype: "int8"
+    symmetric: True
+    method: "minmax"
+  weight:
+    scope: "per_channel"
+    dtype: "int8"
+    symmetric: True
+    method: "minmax"
+
+spec:
+  process:
+    - type: "linear_quant"
+      qconfig: *default_w8a8_dynamic
+      include: 
+        - "*"
+      exclude:
+        - "*.gate"
+        - "*mlp.down_proj"
+  save:
+    - type: "ascendv1_saver"
+      part_file_size: 4
+```
+
+## 使用注意
+- 当前生成的模型适配器仅支持LLM的w8a8、LLM结构中的MOE的w4a8量化等线性层量化，暂不支持离群值抑制系列算法和FA3量化等复杂算法的适配。
 
 ## 典型使用场景
 

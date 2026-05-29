@@ -41,6 +41,22 @@ description:
   - `visit` 与 `forward` 必须严格一致。
   - MoE 模型建议 unpack 为纯线性层。
   - 若原始模型存在需要保留的 buffer 权重，需在适配器中将其转换为 `nn.Parameter`；否则量化导出阶段通常不会保存 buffer 权重。
+  - **Tokenizer pad_token 兼容性必查**：若 `tokenizer.pad_token` / `pad_token_id` 为 `None`，必须在适配器中重写 `_load_tokenizer`，将 `pad_token` 回退到 `eos_token`，避免量化过程中在 `padding=True` 时直接报错。
+  - 常见报错：
+    - `ValueError: Asking to pad but the tokenizer does not have a padding token.`
+  - 根因链路：
+    - `adapter.handle_dataset(...) -> _get_tokenized_data(...) -> tokenizer(..., padding=True, ...)`
+    - 某些模型（如 MiniMax 系列）原生 tokenizer 未设置 `pad_token`。
+  - 推荐修复模板：
+    ```python
+    def _load_tokenizer(self, trust_remote_code=False):
+        """Ensure tokenizer has a pad token for quantization dataset padding."""
+        tokenizer = super()._load_tokenizer(trust_remote_code=trust_remote_code)
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+        return tokenizer
+    ```
+  - 说明：优先使用 `eos_token` 作为回退；若目标模型有更合适的专用 pad token，可按模型官方约定替换。
   - 详见：[适配器实现指南](references/implementation_guide.md)
 
 ### 4. 注册与安装

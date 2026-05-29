@@ -48,6 +48,7 @@ msmodelslim/model/<model_type>/
 - **decoder 路径不一致**：不一定是 `model.layers`，也可能是 `model.decoder.layers` 或其他路径；必须改 `_decoder_layer_prefix`。
 - **MoE packed 权重**：若为 3D packed experts，需先 unpack，再替换为线性层专家模块。
 - **非标准配置字段**：若无 `num_hidden_layers` 或字段名不同，`init_model` 要按目标 config 改写。
+- **tokenizer 无 pad_token**：若 `tokenizer.pad_token` / `pad_token_id` 为 `None`，Step2 全回退量化会在 `padding=True` 时报错。需在适配器中重写 `_load_tokenizer`，将 `pad_token` 回退为 `eos_token`（或模型官方推荐 pad token）。
 
 ### VLM 特殊情况
 

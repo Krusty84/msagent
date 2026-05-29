@@ -27,7 +27,7 @@
 - 如果明确模型涉及 MoE，或在适配中由于规模过大导致 OOM，请直接向 Zephyr 提出“需要进行 MoE 权重拆解”或“实现按层加载/逐层加载”的诉求
 - 明确当前环境和任务类型，确保仅在风险评估通过的前提下，再让 Zephyr 生成适配器代码并进行验证测试
 - Agent生成模型适配器后，请重新安装msModelslim，具体操作可[安装指导](https://gitcode.com/Ascend/msmodelslim/blob/master/docs/zh/getting_started/install_guide.md)，安装完成后使用一键量化生成量化权重，具体操作可参考[一键量化使用指导](https://gitcode.com/Ascend/msmodelslim/blob/master/docs/zh/feature_guide/quick_quantization_v1/usage.md)
-- 推荐使用以下量化配置生成量化权重
+- 推荐使用以下量化配置生成w8a8量化权重
 ```yaml
 apiversion: modelslim_v1
 

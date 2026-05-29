@@ -535,6 +535,50 @@ grep eth0 /proc/interrupts | awk '{print $1}'
 # 绑定中断到指定 CPU
 echo 56 > /proc/irq/120/smp_affinity_list
 echo 57 > /proc/irq/121/smp_affinity_list
+```
+
+##### 3.1.3.3.7 ftrace 采集事件类型
+
+基于 MindStudio 的 trace_record.py，支持以下事件类型：
+
+**CPU 调度事件**：
+
+| 事件名 | 说明 |
+|--------|------|
+| `sched:sched_switch` | 进程调度切换 |
+| `sched:sched_wakeup` | 进程唤醒 |
+| `sched:sched_waking` | 进程正在唤醒 |
+| `sched:sched_wakeup_new` | 新进程唤醒 |
+| `sched:sched_migrate_task` | 任务迁移 |
+| `sched:sched_stat_runtime` | 进程运行时间统计 |
+| `sched:sched_process_fork` | 进程 fork |
+| `sched:sched_process_exec` | 进程 exec |
+| `sched:sched_process_exit` | 进程退出 |
+
+**中断事件**：
+
+| 事件名 | 说明 |
+|--------|------|
+| `irq:irq_handler_entry` | 中断处理入口 |
+| `irq:irq_handler_exit` | 中断处理出口 |
+| `irq:softirq_raise` | 软中断触发 |
+| `irq:softirq_entry` | 软中断入口 |
+| `irq:softirq_exit` | 软中断出口 |
+
+**锁竞争事件**：
+
+| 事件名 | 说明 |
+|--------|------|
+| `syscalls:sys_enter_futex` | futex 系统调用进入 |
+| `syscalls:sys_exit_futex` | futex 系统调用退出 |
+
+**事件分类说明**：
+
+| 类别 | 默认开启 | 说明 | 性能影响 |
+|------|----------|------|----------|
+| **调度事件** | 是 | 分析进程调度行为 | 低 |
+| **中断事件** | 是 | 分析中断干扰 | 低 |
+| **锁竞争事件** | 否 | 分析锁竞争问题 | 中 |
 # ... 以此类推
 
 # 配置 RPS/RFS

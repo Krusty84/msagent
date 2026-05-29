@@ -177,6 +177,7 @@ class ThreadsHandler:
             selected[0] = True
             event.app.exit()
 
+        @kb.add(Keys.Escape)
         @kb.add(Keys.ControlC)
         def _(event) -> None:
             event.app.exit()

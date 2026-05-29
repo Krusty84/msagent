@@ -32,4 +32,4 @@
 - 优先从 `act.scope: "per_tensor"` + `weight.scope: "per_channel"` 开始。
 - 优先使用 `method: "minmax"` 作为基础配置。
 - 先用 `include: ["*"]` 验证流程，再按需增加 `exclude`。
-- 对 MoE 模型，路由器 `gate` 模块一般不量化，建议 `exclude: ["*gate*"]`。
+- 对 MoE 模型，路由器 `gate` 模块一般不量化，建议 `exclude: ["*.gate"]`。

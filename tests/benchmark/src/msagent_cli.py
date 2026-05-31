@@ -117,6 +117,7 @@ class MsagentCliAgent:
             final_answer = read_msagent_structured_final(
                 completed.stdout,
                 required_keys={"answer"},
+                msagent_events=msagent_events,
             )
             final_artifact_path.write_text(
                 json.dumps(final_answer, indent=2, ensure_ascii=False),
@@ -242,6 +243,7 @@ class MsagentCliJudge:
             judge_result = read_msagent_structured_final(
                 completed.stdout,
                 required_keys={"rubric_score"},
+                msagent_events=msagent_events,
             )
             final_artifact_path.write_text(
                 json.dumps(judge_result, indent=2, ensure_ascii=False),
@@ -449,6 +451,22 @@ def msagent_stdio_mcp_env() -> dict[str, str]:
     return {key: value for key, value in values.items() if value}
 
 
+_TILDE_NEEDING_GUARD = re.compile(r"~(?=[^\s/])")
+
+
+def sanitize_msagent_prompt(text: str) -> str:
+    """Replace tildes that msagent would treat as bogus home references.
+
+    msagent's reference resolver runs ``Path(token).expanduser()`` on every
+    whitespace-separated token. A token like ``~25`` (common in natural-language
+    approximations such as ``~25 ms``) raises ``RuntimeError`` and aborts the
+    whole turn. Only ``~/`` is a real home reference in our prompts, so we
+    rewrite every other tilde to the math operator ``∼`` (U+223C), which the
+    LLM still reads as "approximately".
+    """
+    return _TILDE_NEEDING_GUARD.sub("∼", text)
+
+
 def build_msagent_agent_prompt(
     case: BenchmarkCase,
     input_path: Path,
@@ -461,7 +479,7 @@ def build_msagent_agent_prompt(
         input_path,
         visible_input_path=visible_input_path,
     )
-    return f"""{base_prompt}
+    return sanitize_msagent_prompt(f"""{base_prompt}
 
 Output contract for msagent one-shot mode:
 - Your final response must be a single JSON object.
@@ -469,7 +487,7 @@ Output contract for msagent one-shot mode:
 - Do not include any text before or after the JSON object.
 - The JSON object must match this schema:
 {schema_text}
-"""
+""")
 
 
 def build_msagent_judge_prompt(
@@ -479,7 +497,7 @@ def build_msagent_judge_prompt(
     schema_text: str,
 ) -> str:
     base_prompt = build_judge_prompt(case, trace)
-    return f"""{base_prompt}
+    return sanitize_msagent_prompt(f"""{base_prompt}
 
 Output contract for msagent one-shot mode:
 - Your final response must be a single JSON object.
@@ -487,20 +505,38 @@ Output contract for msagent one-shot mode:
 - Do not include any text before or after the JSON object.
 - The JSON object must match this schema:
 {schema_text}
-"""
+""")
 
 
 def read_msagent_structured_final(
     stdout: str,
     *,
     required_keys: set[str],
+    msagent_events: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    candidates = extract_json_objects(strip_ansi(stdout))
-    for candidate in reversed(candidates):
+    fallback: dict[str, Any] | None = None
+    if msagent_events:
+        for event in reversed(msagent_events):
+            if event.get("type") != "assistant_message":
+                continue
+            content = event.get("content")
+            if not isinstance(content, str) or not content.strip():
+                continue
+            candidates = extract_json_objects(content)
+            for candidate in reversed(candidates):
+                if required_keys <= set(candidate):
+                    return candidate
+            if candidates and fallback is None:
+                fallback = candidates[-1]
+
+    stdout_candidates = extract_json_objects(strip_ansi(stdout))
+    for candidate in reversed(stdout_candidates):
         if required_keys <= set(candidate):
             return candidate
-    if candidates:
-        return candidates[-1]
+    if stdout_candidates:
+        return stdout_candidates[-1]
+    if fallback is not None:
+        return fallback
     raise RuntimeError(f"Could not parse structured msagent final output: {stdout[-1000:]}")
 
 

@@ -3,6 +3,7 @@
 from rich.console import Console
 
 from msagent.cli.theme.base import BaseTheme
+from msagent.cli.theme.detect import detect_rich_color_system
 
 
 class ThemedConsole:
@@ -12,7 +13,7 @@ class ThemedConsole:
         self.console = Console(
             theme=console_theme.rich_theme,
             force_terminal=True,
-            color_system="truecolor",
+            color_system=detect_rich_color_system(),
         )
 
     def print(self, *args, style: str = "default", **kwargs):

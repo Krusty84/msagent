@@ -1,9 +1,5 @@
 # Minos 文档辅助
 
-<p align="center">
-  <img src="../images/Minos.png" alt="Minos" width="220">
-</p>
-
 `Minos` 是面向文档体验与代码审查辅助场景的 Agent，负责从首次接触项目的新手视角审查 README、安装文档、Quick Start 和 onboarding 路径，也负责结合仓库上下文审查 GitCode PR 的改动风险与修改质量。
 
 ## Agent 定位
@@ -37,4 +33,4 @@
 | GitCode PR 审查 | `请 review 这个 GitCode PR，重点看行为回归、兼容性和测试覆盖。` | 输出带严重程度、证据、原因和修改建议的审查结论。 |
 | GitCode PR 评论整理 | `请检查这个 GitCode PR 链接，把需要修改的问题整理成可发布的审查意见。` | 输出可直接发布到 PR 的逐项评论建议。 |
 
-更多说明可参考 [`document-ux-review`](../document-ux-review.md) 与 `skills/gitcode-code-reviewer/SKILL.md`。
+更多说明可参考 [`document-ux-review`](../user_guide/document-ux-review.md) 与 `skills/gitcode-code-reviewer/SKILL.md`。

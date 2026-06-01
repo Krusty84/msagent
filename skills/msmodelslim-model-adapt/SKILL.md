@@ -61,6 +61,7 @@ description:
 
 ### 4. 注册与安装
 - 在 `config/config.ini` 注册模型与入口，并执行 `bash install.sh`。
+- **禁止使用 `pip install -e .` 或其他任何替代安装命令；必须且只能使用 `bash install.sh` 完成安装。**
 - 详见：[适配器注册指南](references/registration_guide.md)
 
 ### 5. 功能性验证（独立 Skill）

@@ -13,3 +13,5 @@ my_model = msmodelslim.model.my_model.model_adapter:MyModelAdapter
 ```
 
 注册完成后，务必执行 `bash install.sh` 安装更新。
+
+> **注意**：禁止使用 `pip install -e .`、`python setup.py install` 或其他任何替代命令。唯一正确的安装方式是 `bash install.sh`。

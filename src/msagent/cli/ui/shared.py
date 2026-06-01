@@ -31,7 +31,27 @@ from msagent.core.settings import settings
 from msagent.utils.cost import calculate_context_percentage, format_tokens
 from msagent.utils.version import get_version
 
-TRUE_COLOR_DEPTH = ColorDepth.TRUE_COLOR
+
+def _detect_color_depth() -> ColorDepth:
+    """Detect terminal color depth for prompt-toolkit."""
+    colorterm = os.environ.get("COLORTERM", "").lower()
+    if colorterm in ("truecolor", "24bit"):
+        return ColorDepth.TRUE_COLOR
+
+    term_program = os.environ.get("TERM_PROGRAM", "").lower()
+    if term_program in ("iterm.app", "hyper"):
+        return ColorDepth.TRUE_COLOR
+
+    term = os.environ.get("TERM", "").lower()
+    if "256color" in term:
+        return ColorDepth.DEPTH_8_BIT
+    if term in ("xterm", "screen", "vt100", "linux", "ansi"):
+        return ColorDepth.DEPTH_8_BIT
+
+    return ColorDepth.DEPTH_4_BIT
+
+
+TRUE_COLOR_DEPTH = _detect_color_depth()
 
 
 @dataclass

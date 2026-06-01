@@ -42,6 +42,7 @@ from msagent.tools.catalog import fetch_skills, fetch_tools, get_skill, get_tool
 from msagent.tools.factory import ToolFactory
 from msagent.tools.web_search import web_search
 from msagent.utils.deepagents_compat import patch_deepagents_windows_absolute_paths
+from msagent.utils.render import render_templates
 
 if TYPE_CHECKING:
     from langchain_core.tools import BaseTool
@@ -73,6 +74,31 @@ class _ToolPatternFilterMiddleware(AgentMiddleware[Any, Any, Any]):
         filtered_tools = self._filter_tools(list(getattr(request, "tools", []) or []))
         request = request.override(tools=filtered_tools)
         return await handler(request)
+
+
+class _SystemPromptRenderMiddleware(AgentMiddleware[Any, Any, Any]):
+    """Render template placeholders in the system prompt using runtime context template_vars."""
+
+    def _render(self, request):
+        runtime = getattr(request, "runtime", None)
+        context = getattr(runtime, "context", None) if runtime is not None else None
+        template_vars = getattr(context, "template_vars", None) if context is not None else None
+        if template_vars:
+            system_message = getattr(request, "system_message", None)
+            if system_message is not None:
+                content = getattr(system_message, "content", None)
+                if isinstance(content, str):
+                    rendered = str(render_templates(content, template_vars))
+                    if rendered != content:
+                        new_system_message = system_message.__class__(content=rendered)
+                        request = request.override(system_message=new_system_message)
+        return request
+
+    def wrap_model_call(self, request, handler):
+        return handler(self._render(request))
+
+    async def awrap_model_call(self, request, handler):
+        return await handler(self._render(request))
 
 
 class AgentFactory:
@@ -267,6 +293,7 @@ class AgentFactory:
                 tool_retry_kwargs["retry_on"] = retry_on
             middleware.append(ToolRetryMiddleware(**tool_retry_kwargs))
 
+        middleware.append(_SystemPromptRenderMiddleware())
         middleware.append(_ToolPatternFilterMiddleware(filter_tools=_filter_request_tools))
         if context_schema is not None:
             kwargs["context_schema"] = context_schema

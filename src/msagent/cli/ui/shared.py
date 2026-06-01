@@ -14,7 +14,6 @@ from prompt_toolkit.layout.containers import HSplit
 from prompt_toolkit.layout.containers import Window
 from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.output import DummyOutput
-from prompt_toolkit.output.color_depth import ColorDepth
 from prompt_toolkit.styles import Style
 
 if sys.platform == "win32":
@@ -26,12 +25,13 @@ else:
 
 
 from msagent.cli.theme import theme
+from msagent.cli.theme.detect import detect_prompt_toolkit_color_depth
 from msagent.configs import ApprovalMode
 from msagent.core.settings import settings
 from msagent.utils.cost import calculate_context_percentage, format_tokens
 from msagent.utils.version import get_version
 
-TRUE_COLOR_DEPTH = ColorDepth.TRUE_COLOR
+TRUE_COLOR_DEPTH = detect_prompt_toolkit_color_depth()
 
 
 @dataclass
@@ -117,7 +117,7 @@ def create_prompt_style(context, *, bash_mode: bool = False) -> Style:
             # Validation styling
             "validation-toolbar": f"{theme.error_color} bg:{theme.background_light}",
             # Selection styling
-            "selected": f"bg:{theme.selection_color}",
+            "selected": f"{theme.background} bg:{theme.selection_color}",
             # Search styling
             "search": f"{theme.accent_color} bg:{theme.background_light}",
             "search.current": f"{theme.background} bg:{theme.warning_color}",

@@ -10,6 +10,43 @@ import select
 import sys
 
 
+def is_likely_xshell() -> bool:
+    """Best-effort detection for Xshell sessions."""
+    hints = ("TERM_PROGRAM", "XTERM_PROGRAM", "LC_TERMINAL", "TERM", "COLORTERM")
+    return any("xshell" in os.environ.get(name, "").lower() for name in hints)
+
+
+def _is_likely_mobaxterm() -> bool:
+    """Best-effort detection for MobaXterm sessions."""
+    hints = ("TERM_PROGRAM", "XTERM_PROGRAM", "LC_TERMINAL", "TERM")
+    return any("mobaxterm" in os.environ.get(name, "").lower() for name in hints)
+
+
+def detect_rich_color_system() -> str | None:
+    """Detect whether Rich should be forced into truecolor mode."""
+    if is_likely_xshell():
+        return None
+
+    color_term = os.environ.get("COLORTERM", "").strip().lower()
+    if color_term in {"truecolor", "24bit"}:
+        return "truecolor"
+
+    if os.getenv("WT_SESSION"):
+        return "truecolor"
+    if os.getenv("TERM_PROGRAM") in {"vscode", "WarpTerminal"}:
+        return "truecolor"
+    if os.getenv("WSL_DISTRO_NAME"):
+        return "truecolor"
+    if _is_likely_mobaxterm():
+        return "truecolor"
+    return None
+
+
+def should_force_prompt_toolkit_true_color() -> bool:
+    """Whether prompt-toolkit should be forced into truecolor mode."""
+    return detect_rich_color_system() == "truecolor"
+
+
 def _detect_via_osc11() -> str | None:
     """Detect terminal theme using OSC 11 query.
 

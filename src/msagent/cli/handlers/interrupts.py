@@ -17,7 +17,7 @@ from typing_extensions import NotRequired, TypedDict
 from msagent.cli.bootstrap.initializer import initializer
 from msagent.cli.theme import console
 from msagent.cli.ui.shared import (
-    TRUE_COLOR_DEPTH,
+    FORCE_PROMPT_TOOLKIT_TRUE_COLOR,
     build_agent_prompt,
     create_bottom_toolbar,
     create_prompt_style,
@@ -293,19 +293,22 @@ class InterruptHandler:
                 interrupt_session.style = create_prompt_style(context, bash_mode=False)
                 event.app.invalidate()
 
-        interrupt_session: PromptSession[str] = PromptSession(
-            completer=WordCompleter(options, ignore_case=True),
-            complete_style=CompleteStyle.COLUMN,
-            complete_while_typing=False,
-            style=style,
-            color_depth=TRUE_COLOR_DEPTH,
-            key_bindings=kb,
-            bottom_toolbar=lambda: create_bottom_toolbar(
+        prompt_session_kwargs = {
+            "completer": WordCompleter(options, ignore_case=True),
+            "complete_style": CompleteStyle.COLUMN,
+            "complete_while_typing": False,
+            "style": style,
+            "key_bindings": kb,
+            "bottom_toolbar": lambda: create_bottom_toolbar(
                 context,
                 context.working_dir,
                 bash_mode=False,
             ),
-        )
+        }
+        if FORCE_PROMPT_TOOLKIT_TRUE_COLOR:
+            prompt_session_kwargs["color_depth"] = "DEPTH_24_BIT"
+
+        interrupt_session: PromptSession[str] = PromptSession(**prompt_session_kwargs)
 
         try:
             while True:

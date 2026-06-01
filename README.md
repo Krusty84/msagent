@@ -42,6 +42,10 @@ MindStudio-Agent（简称 `msagent`）是面向昇腾 Ascend NPU 开发、调试
 | [**Icarus**](docs/zh/agent_guide/Icarus.md) | **【算子调优】**  聚焦 Ascend NPU 算子性能调优，包括算子性能深度分析、端到端算子性能优化，辅助提升调优效率并降低开发难度。 |
 | [**Minos**](docs/zh/agent_guide/Minos.md) | **【文档体验与代码审查】**  聚焦 README 走查、安装流程验证、Quick Start 体验、新手 onboarding、文档可用性评估，以及 GitCode PR 审查与评审意见整理。 |
 
+## 🧩 内置技能
+
+除领域 Agent 外，`msagent` 还内置了一批可复用的 Skills，覆盖 Profiling 数据分析、算子性能调优、精度溢出检测、文档体验审查、代码审查等场景。完整技能清单、触发方式与依赖说明，请参见 [《内置技能库》](docs/zh/skills/README.md)。
+
 ## 🚀 快速入门
 快速体验核心功能，请参见[《msAgent快速入门》](docs/zh/getting_started/quick_start.md)。
 
@@ -73,7 +77,7 @@ MindStudio-Agent（简称 `msagent`）是面向昇腾 Ascend NPU 开发、调试
 🔹 [《版本与兼容性》](docs/zh/developer_guide/version-and-compatibility.md)  
 🔹 [《安全声明》](docs/zh/legal/SECURITY.md)  
 🔹 [《免责声明》](docs/zh/legal/DISCLAIMER.md)  
-🔹 [《许可证声明》](http://license.coscl.org.cn/MulanPSL2)  
+🔹 [《许可证声明》](docs/zh/legal/LICENSE)  
 
 ## 🤝 建议与交流
 

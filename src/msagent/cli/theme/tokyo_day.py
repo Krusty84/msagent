@@ -6,6 +6,7 @@ from rich.style import Style
 from rich.theme import Theme
 
 from msagent.cli.theme.base import BaseTheme
+from msagent.cli.theme.detect import is_likely_xshell
 from msagent.cli.theme.registry import register_theme
 
 
@@ -43,7 +44,29 @@ class TokyoDayTheme(BaseTheme):
 
     def __init__(self):
         self.colors = TokyoDayColors()
+        if is_likely_xshell():
+            self._apply_xshell_palette()
         self.rich_theme = self._create_rich_theme()
+
+    def _apply_xshell_palette(self) -> None:
+        """Use higher-contrast ANSI-friendly colors for Xshell selection/rendering."""
+        self.colors.light_gray = "#ffffff"
+        self.colors.off_white = "#ffffff"
+        self.colors.pale_blue = "#f5f5f5"
+        self.colors.mist = "#fafafa"
+        self.colors.deep_blue = "#000000"
+        self.colors.slate_blue = "#303030"
+        self.colors.gray_blue = "#4e4e4e"
+        self.colors.light_slate = "#808080"
+        self.colors.deep_azure = "#005faf"
+        self.colors.ocean_blue = "#008787"
+        self.colors.royal_purple = "#875fd7"
+        self.colors.forest_teal = "#00875f"
+        self.colors.amber = "#af8700"
+        self.colors.magenta = "#af005f"
+        self.colors.rust_orange = "#d75f00"
+        self.colors.sky_blue = "#0087af"
+        self.colors.steel_blue = "#808080"
 
     def _create_rich_theme(self) -> Theme:
         """Create Rich Theme with Tokyo Day colors."""

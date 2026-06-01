@@ -6,6 +6,7 @@ from rich.style import Style
 from rich.theme import Theme
 
 from msagent.cli.theme.base import BaseTheme
+from msagent.cli.theme.detect import is_likely_xshell
 from msagent.cli.theme.registry import register_theme
 
 
@@ -43,7 +44,29 @@ class TokyoNightTheme(BaseTheme):
 
     def __init__(self):
         self.colors = TokyoNightColors()
+        if is_likely_xshell():
+            self._apply_xshell_palette()
         self.rich_theme = self._create_rich_theme()
+
+    def _apply_xshell_palette(self) -> None:
+        """Use higher-contrast ANSI-friendly colors for Xshell selection/rendering."""
+        self.colors.deep_blue = "#000000"
+        self.colors.dark_blue = "#262626"
+        self.colors.navy = "#000000"
+        self.colors.slate = "#303030"
+        self.colors.light_blue_white = "#ffffff"
+        self.colors.muted_blue = "#d7d7d7"
+        self.colors.blue_gray = "#afafaf"
+        self.colors.dark_gray = "#808080"
+        self.colors.bright_blue = "#5fafff"
+        self.colors.cyan = "#5fd7ff"
+        self.colors.purple = "#af87ff"
+        self.colors.teal = "#5fd7af"
+        self.colors.yellow = "#ffd75f"
+        self.colors.pink = "#ff5faf"
+        self.colors.orange = "#ffaf5f"
+        self.colors.sky_blue = "#87d7ff"
+        self.colors.steel_blue = "#5f87af"
 
     def _create_rich_theme(self) -> Theme:
         """Create Rich Theme with Tokyo Night colors."""

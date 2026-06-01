@@ -9,6 +9,48 @@ import re
 import select
 import sys
 
+from prompt_toolkit.output.color_depth import ColorDepth
+
+
+def _is_likely_xshell() -> bool:
+    """Best-effort detection for Xshell sessions."""
+    hints = ("TERM_PROGRAM", "XTERM_PROGRAM", "LC_TERMINAL", "TERM", "COLORTERM")
+    return any("xshell" in os.environ.get(name, "").lower() for name in hints)
+
+
+def detect_rich_color_system() -> str | None:
+    """Detect a safe Rich color system for the current terminal."""
+    if _is_likely_xshell():
+        return "256"
+
+    color_term = os.environ.get("COLORTERM", "").strip().lower()
+    if color_term in {"truecolor", "24bit"}:
+        return "truecolor"
+
+    term = os.environ.get("TERM", "").strip().lower()
+    if "256color" in term:
+        return "256"
+    if term:
+        return "standard"
+    return "truecolor"
+
+
+def detect_prompt_toolkit_color_depth() -> ColorDepth:
+    """Detect a safe prompt-toolkit color depth for the current terminal."""
+    if _is_likely_xshell():
+        return ColorDepth.DEPTH_8_BIT
+
+    color_term = os.environ.get("COLORTERM", "").strip().lower()
+    if color_term in {"truecolor", "24bit"}:
+        return ColorDepth.TRUE_COLOR
+
+    term = os.environ.get("TERM", "").strip().lower()
+    if "256color" in term:
+        return ColorDepth.DEPTH_8_BIT
+    if term:
+        return ColorDepth.DEPTH_4_BIT
+    return ColorDepth.TRUE_COLOR
+
 
 def _detect_via_osc11() -> str | None:
     """Detect terminal theme using OSC 11 query.

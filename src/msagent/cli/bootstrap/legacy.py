@@ -178,6 +178,12 @@ def _add_runtime_options(parser: argparse.ArgumentParser, *, include_timer: bool
     )
     parser.add_argument("-a", "--agent", default=None, help="Agent name")
     parser.add_argument("-m", "--model", default=None, help="LLM model alias")
+    parser.add_argument(
+        "--terminal-profile",
+        choices=["auto", "truecolor", "xshell"],
+        default="auto",
+        help="Override terminal color profile detection for this run",
+    )
     parser.set_defaults(resume=False)
     if include_timer:
         parser.add_argument(

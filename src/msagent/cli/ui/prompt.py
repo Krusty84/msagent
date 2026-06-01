@@ -17,7 +17,7 @@ from prompt_toolkit.shortcuts import CompleteStyle
 from msagent.cli.completers import CompleterRouter
 from msagent.cli.core.context import Context
 from msagent.cli.ui.shared import (
-    TRUE_COLOR_DEPTH,
+    FORCE_PROMPT_TOOLKIT_TRUE_COLOR,
     build_agent_prompt,
     create_bottom_toolbar,
     create_prompt_style,
@@ -82,23 +82,26 @@ class InteractivePrompt:
             max_suggestions=settings.cli.max_autocomplete_suggestions,
         )
 
-        self.prompt_session = PromptSession(
-            history=self.history,
-            auto_suggest=AutoSuggestFromHistory(),
-            completer=self.completer,
-            complete_style=CompleteStyle.COLUMN,
-            key_bindings=kb,
-            style=style,
-            color_depth=TRUE_COLOR_DEPTH,
-            multiline=False,
-            prompt_continuation=lambda width, line_number, is_soft_wrap: " " * len(build_agent_prompt(self.context)),
-            wrap_lines=settings.cli.enable_word_wrap,
-            mouse_support=False,
-            complete_while_typing=True,
-            complete_in_thread=False,
-            placeholder=self._get_placeholder,
-            bottom_toolbar=self._get_bottom_toolbar,
-        )
+        prompt_session_kwargs = {
+            "history": self.history,
+            "auto_suggest": AutoSuggestFromHistory(),
+            "completer": self.completer,
+            "complete_style": CompleteStyle.COLUMN,
+            "key_bindings": kb,
+            "style": style,
+            "multiline": False,
+            "prompt_continuation": lambda width, line_number, is_soft_wrap: " " * len(build_agent_prompt(self.context)),
+            "wrap_lines": settings.cli.enable_word_wrap,
+            "mouse_support": False,
+            "complete_while_typing": True,
+            "complete_in_thread": False,
+            "placeholder": self._get_placeholder,
+            "bottom_toolbar": self._get_bottom_toolbar,
+        }
+        if FORCE_PROMPT_TOOLKIT_TRUE_COLOR:
+            prompt_session_kwargs["color_depth"] = "DEPTH_24_BIT"
+
+        self.prompt_session = PromptSession(**prompt_session_kwargs)
 
     def _create_key_bindings(self) -> KeyBindings:
         """Create custom key bindings."""

@@ -10,6 +10,86 @@ import select
 import sys
 
 
+def _terminal_profile_override_from_argv() -> str | None:
+    """Read terminal profile override from process argv.
+
+    This allows the override to take effect during module import, before the CLI
+    parser has fully dispatched the session startup.
+    """
+    argv = sys.argv[1:]
+    for index, arg in enumerate(argv):
+        if arg.startswith("--terminal-profile="):
+            value = arg.split("=", 1)[1].strip().lower()
+            if value in {"truecolor", "xshell", "auto"}:
+                return value
+        if arg == "--terminal-profile" and index + 1 < len(argv):
+            value = argv[index + 1].strip().lower()
+            if value in {"truecolor", "xshell", "auto"}:
+                return value
+    return None
+
+
+def _terminal_profile_override() -> str | None:
+    """Read explicit terminal profile override from environment."""
+    argv_override = _terminal_profile_override_from_argv()
+    if argv_override is not None:
+        return argv_override
+
+    value = os.environ.get("MSAGENT_TERMINAL_PROFILE", "").strip().lower()
+    if value in {"truecolor", "xshell", "auto"}:
+        return value
+    return None
+
+
+def is_likely_xshell() -> bool:
+    """Best-effort detection for Xshell sessions."""
+    override = _terminal_profile_override()
+    if override == "xshell":
+        return True
+    if override == "truecolor":
+        return False
+
+    hints = ("TERM_PROGRAM", "XTERM_PROGRAM", "LC_TERMINAL", "TERM", "COLORTERM")
+    return any("xshell" in os.environ.get(name, "").lower() for name in hints)
+
+
+def _is_likely_mobaxterm() -> bool:
+    """Best-effort detection for MobaXterm sessions."""
+    hints = ("TERM_PROGRAM", "XTERM_PROGRAM", "LC_TERMINAL", "TERM")
+    return any("mobaxterm" in os.environ.get(name, "").lower() for name in hints)
+
+
+def detect_rich_color_system() -> str | None:
+    """Detect whether Rich should be forced into truecolor mode."""
+    override = _terminal_profile_override()
+    if override == "truecolor":
+        return "truecolor"
+    if override == "xshell":
+        return None
+
+    if is_likely_xshell():
+        return None
+
+    color_term = os.environ.get("COLORTERM", "").strip().lower()
+    if color_term in {"truecolor", "24bit"}:
+        return "truecolor"
+
+    if os.getenv("WT_SESSION"):
+        return "truecolor"
+    if os.getenv("TERM_PROGRAM") in {"vscode", "WarpTerminal"}:
+        return "truecolor"
+    if os.getenv("WSL_DISTRO_NAME"):
+        return "truecolor"
+    if _is_likely_mobaxterm():
+        return "truecolor"
+    return None
+
+
+def should_force_prompt_toolkit_true_color() -> bool:
+    """Whether prompt-toolkit should be forced into truecolor mode."""
+    return detect_rich_color_system() == "truecolor"
+
+
 def _detect_via_osc11() -> str | None:
     """Detect terminal theme using OSC 11 query.
 

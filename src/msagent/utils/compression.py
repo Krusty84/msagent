@@ -20,6 +20,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, cast
 
@@ -36,6 +37,9 @@ from msagent.utils.render import render_templates
 
 if TYPE_CHECKING:
     from langchain_core.language_models import BaseChatModel
+
+
+logger = logging.getLogger(__name__)
 
 
 def calculate_message_tokens(
@@ -58,14 +62,22 @@ def calculate_message_tokens(
     try:
         cleaned_messages = [msg.model_copy(update={"content": msg.text}) for msg in messages]
         return llm.get_num_tokens_from_messages(list(cleaned_messages))
-    except (AttributeError, NotImplementedError, ImportError, TypeError):
+    except Exception as exc:
+        logger.warning(
+            "LLM-native message token counting failed; falling back to alternate token estimation: %s",
+            exc,
+        )
         # Fallback to tiktoken with cl100k_base encoding (used by GPT-4, GPT-3.5-turbo)
         try:
             encoding = tiktoken.get_encoding("cl100k_base")
             # Extract text content from messages using .text() method
             content = " ".join(msg.text for msg in messages)
             return len(encoding.encode(content))
-        except Exception:
+        except Exception as tiktoken_exc:
+            logger.warning(
+                "Failed to load tiktoken cl100k_base encoding; falling back to rough token estimation: %s",
+                tiktoken_exc,
+            )
             # Final fallback: estimate using character count
             content = " ".join(msg.text for msg in messages)
             return len(content) // 4

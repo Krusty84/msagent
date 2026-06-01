@@ -67,7 +67,7 @@ async def offload_messages_to_backend(
     if not filtered:
         return ""
 
-    timestamp = datetime.now(UTC).isoformat()
+    timestamp = datetime.now(UTC).astimezone().isoformat()
     section = f"## Offloaded at {timestamp}\n\n{get_buffer_string(filtered)}\n\n"
 
     existing_content = ""

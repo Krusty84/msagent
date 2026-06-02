@@ -28,6 +28,8 @@ Use this skill when:
    - explain why top suspects were kept or discarded
    - convert structured evidence into a task-specific narrative
    - state the most likely root cause and concrete next checks
+   - before replying that the report is ready or reusing any earlier conclusion, check in the current turn that `output_5_root_cause_report.md` really exists under `<output_dir>`
+   - if `output_5_root_cause_report.md` is missing, treat the task as not finished: rerun the fixed script as needed, then rewrite the markdown report in the current turn instead of trusting prior thread memory
 4. If the evidence points to one side having an extra activation or fused op, verify that side’s implementation/config next.
 
 ## Analysis Rules
@@ -45,6 +47,7 @@ Use this skill when:
   - `mul`
   - `activation`
 - Do not let the script author the final markdown narrative. The script should stay focused on deterministic evidence extraction, while the agent owns the final explanation.
+- The same prompt in the same thread must not be treated as proof that the previous artifact still exists; artifact presence must be verified from the filesystem in the current turn.
 
 ## Fixed Command
 
@@ -66,6 +69,8 @@ This skill expects the sibling directory `dump-module-mapping-value-compare/` to
 - `output_4_module_analysis.*`
 - `output_5_root_cause_report.json`
 - `output_5_root_cause_report.md` (agent-authored from template, not script-authored)
+
+`output_5_root_cause_report.md` is a required deliverable for completion. If it is absent at answer time, the agent must regenerate or rewrite it before claiming the report has been saved.
 
 ## Interpretation Guide
 

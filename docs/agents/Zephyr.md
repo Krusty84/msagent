@@ -21,9 +21,8 @@
 
 ## 环境准备
 
-- 需要 Python 3.8 或更高版本。
-- 请准备 vllm-ascend 运行环境，推荐直接使用镜像，安装指导：[vllm-ascend安装](https://docs.vllm.ai/projects/vllm-ascend-cn/zh-cn/latest/installation.html)
-- 请根据模型安装合适的transformers版本，无法加载模型的transformers版本可能会导致agent任务堵塞
+- 请准备 vllm-ascend 镜像，使用 Docker 安装vllm-ascend指导：[vllm-ascend安装](https://docs.vllm.ai/projects/vllm-ascend-cn/zh-cn/latest/installation.html#set-up-using-docker)，请在容器内安装msagent并使用Zephyr
+- 请根据模型安装合适的transformers版本
 
 ## 推荐使用方式
 

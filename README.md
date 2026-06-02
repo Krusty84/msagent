@@ -63,10 +63,10 @@ MindStudio-Agent（简称 `msagent`）是面向昇腾 Ascend NPU 开发、调试
 ## 🌌 智能检索
 
 为提升文档查阅效率，建议优先通过以下入口定位信息：
-🔹 [《中文文档首页》](docs/index.md)：按快速入门、用户指南、Agent 指南和开发指南组织内容。
-🔹 [《配置与扩展》](docs/zh/user_guide/configuration-and-extension.md)：查询本地配置目录、MCP 配置、Skills 扩展与加载顺序。
-🔹 [《版本与兼容性》](docs/zh/developer_guide/version-and-compatibility.md)：查询版本要求、兼容策略与内置依赖。
-🔹 会话内直接询问 `msagent`：让对应 Agent 结合仓库文档、配置和上下文辅助定位问题。
+🔹 [《中文文档首页》](docs/index.md)：按快速入门、用户指南、Agent 指南和开发指南组织内容。<br>
+🔹 [《配置与扩展》](docs/zh/user_guide/configuration-and-extension.md)：查询本地配置目录、MCP 配置、Skills 扩展与加载顺序。<br>
+🔹 [《版本与兼容性》](docs/zh/developer_guide/version-and-compatibility.md)：查询版本要求、兼容策略与内置依赖。<br>
+🔹 会话内直接询问 `msagent`：让对应 Agent 结合仓库文档、配置和上下文辅助定位问题。<br>
 
 ## 🛠️ 贡献指南
 
@@ -74,10 +74,10 @@ MindStudio-Agent（简称 `msagent`）是面向昇腾 Ascend NPU 开发、调试
 
 ## ⚖️ 相关说明
 
-🔹 [《版本与兼容性》](docs/zh/developer_guide/version-and-compatibility.md)
-🔹 [《安全声明》](docs/zh/legal/SECURITY.md)
-🔹 [《免责声明》](docs/zh/legal/DISCLAIMER.md)
-🔹 [《许可证声明》](docs/zh/legal/LICENSE)
+🔹 [《版本与兼容性》](docs/zh/developer_guide/version-and-compatibility.md)<br>
+🔹 [《安全声明》](docs/zh/legal/SECURITY.md)<br>
+🔹 [《免责声明》](docs/zh/legal/DISCLAIMER.md)<br>
+🔹 [《许可证声明》](docs/zh/legal/LICENSE_intro.md)<br>
 
 ## 🤝 建议与交流
 

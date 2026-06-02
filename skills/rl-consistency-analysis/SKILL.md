@@ -28,6 +28,9 @@ Use this skill when:
    - explain why top suspects were kept or discarded
    - convert structured evidence into a task-specific narrative
    - state the most likely root cause and concrete next checks
+   - use the file-writing tool to write `<output_dir>/output_5_root_cause_report.md`; do not stop at only showing the markdown in chat
+   - after writing, verify the file exists by reading it back from the same path before claiming it was saved
+   - if the write or verification step fails, explicitly say the markdown report was not saved successfully
 4. If the evidence points to one side having an extra activation or fused op, verify that side’s implementation/config next.
 
 ## Analysis Rules
@@ -65,7 +68,15 @@ This skill expects the sibling directory `dump-module-mapping-value-compare/` to
 - `output_3_value_compare.*`
 - `output_4_module_analysis.*`
 - `output_5_root_cause_report.json`
-- `output_5_root_cause_report.md` (agent-authored from template, not script-authored)
+- `output_5_root_cause_report.md` (agent-authored from template, not script-authored, and must be written and verified before mentioning the saved path)
+
+## Persistence Rules
+
+- Treat `output_5_root_cause_report.md` as a required output artifact, not an optional chat-only summary.
+- Before telling the user `saved to <path>`, first complete both steps:
+  - write the markdown file to disk
+  - read the same file path back successfully
+- If only `output_5_root_cause_report.json` exists, do not imply the markdown report already exists.
 
 ## Interpretation Guide
 

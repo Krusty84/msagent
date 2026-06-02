@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+from difflib import SequenceMatcher
 import hashlib
 import json
+import re
 import time
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -41,7 +44,7 @@ from msagent.core.constants import OS_VERSION, PLATFORM
 from msagent.core.logging import get_logger
 from msagent.middlewares.token_cost import extract_usage_counts
 from msagent.utils.compression import should_auto_compress
-from msagent.utils.render import TOOL_TIMING_RESPONSE_METADATA_KEY
+from msagent.utils.render import OUTPUT_PATHS_METADATA_KEY, TOOL_TIMING_RESPONSE_METADATA_KEY
 
 if TYPE_CHECKING:
     from rich.console import Console, ConsoleOptions, RenderResult
@@ -175,10 +178,15 @@ class MessageDispatcher:
         self.message_builder = MessageContentBuilder(Path(session.context.working_dir))
         self._pending_compression = False
         self._pending_tool_headers: dict[str, DeferredToolHeader] = {}
+        self._current_request_paths: set[str] = set()
+        self._recent_output_paths: list[str] = []
 
     async def dispatch(self, content: str) -> None:
         """Dispatch user message and get AI response."""
         try:
+            await self._start_fresh_thread_for_repeated_file_backed_request(content)
+            self._current_request_paths = self._extract_local_paths(content)
+            await self._hydrate_recent_output_paths_from_thread()
             reference_mapping = self.session.prefilled_reference_mapping.copy()
             self.session.prefilled_reference_mapping.clear()
 
@@ -217,6 +225,137 @@ class MessageDispatcher:
             console.print_error(f"Error processing message: {error_msg}")
             console.print("")
             await self._log_processing_error(e)
+
+    async def _start_fresh_thread_for_repeated_file_backed_request(self, content: str) -> None:
+        """Start a fresh thread when the user repeats a file-backed standalone task."""
+        if not await self._should_force_fresh_thread(content):
+            return
+
+        new_thread_id = str(uuid.uuid4())
+        self.session.update_context(
+            thread_id=new_thread_id,
+            current_input_tokens=None,
+            current_output_tokens=None,
+        )
+        self.session.clear_tool_output()
+        self._pending_tool_headers.clear()
+        self._current_request_paths.clear()
+        self._recent_output_paths.clear()
+        logger.info("Started fresh thread for repeated file-backed request: %s", new_thread_id)
+
+    async def _should_force_fresh_thread(self, content: str) -> bool:
+        """Detect repeated file-backed standalone tasks that should rerun from scratch."""
+        current_paths = self._extract_local_paths(content)
+        if not current_paths:
+            return False
+
+        current_text = self._normalize_prompt_for_rerun_match(content)
+        if not current_text:
+            return False
+
+        for previous_text in await self._load_prior_human_texts():
+            if not previous_text:
+                continue
+            if not (current_paths & self._extract_local_paths(previous_text)):
+                continue
+            similarity = SequenceMatcher(
+                None,
+                self._normalize_prompt_for_rerun_match(previous_text),
+                current_text,
+            ).ratio()
+            if similarity >= 0.72:
+                return True
+        return False
+
+    async def _load_prior_human_texts(self) -> list[str]:
+        """Load prior user messages from the current thread for rerun detection."""
+        if self.session.graph is None:
+            return []
+
+        ctx = self.session.context
+        snapshot = await self.session.graph.aget_state(
+            RunnableConfig(configurable={"thread_id": ctx.thread_id})
+        )
+        state_values = getattr(snapshot, "values", {}) or {}
+        messages = list(state_values.get("messages", []) or [])
+
+        texts: list[str] = []
+        for message in messages:
+            if not isinstance(message, HumanMessage):
+                continue
+            text = self._message_text_for_rerun_match(message)
+            if text:
+                texts.append(text)
+        return texts
+
+    async def _hydrate_recent_output_paths_from_thread(self) -> None:
+        """Hydrate structured output paths from the latest tool message in the thread."""
+        if self._recent_output_paths or self.session.graph is None:
+            return
+
+        ctx = self.session.context
+        snapshot = await self.session.graph.aget_state(
+            RunnableConfig(configurable={"thread_id": ctx.thread_id})
+        )
+        state_values = getattr(snapshot, "values", {}) or {}
+        messages = list(state_values.get("messages", []) or [])
+
+        for message in reversed(messages):
+            if not isinstance(message, ToolMessage):
+                continue
+            output_paths = self._extract_output_paths_from_message(message)
+            if output_paths:
+                self._recent_output_paths = output_paths
+                return
+
+    @classmethod
+    def _extract_local_paths(cls, content: str) -> set[str]:
+        """Extract likely local filesystem paths from free-form user text."""
+        path_patterns = (
+            r"[A-Za-z]:[\\/][^\s\"'<>|]+",
+            r"(?:^|[\s:=])(/[^ \t\r\n\"'<>|]+)",
+            r"(?:^|[\s:=])(\.[\\/][^ \t\r\n\"'<>|]+)",
+        )
+        paths: set[str] = set()
+        for pattern in path_patterns:
+            for match in re.finditer(pattern, content):
+                candidate = next((group for group in match.groups() if group), match.group(0))
+                cleaned = candidate.strip().strip("`'\"<>[](){}.,;:!?\u3002\uff0c")
+                if cleaned:
+                    paths.add(cls._normalize_path_token(cleaned))
+        return paths
+
+    @staticmethod
+    def _normalize_path_token(path_text: str) -> str:
+        """Normalize a path token for stable comparisons across repeated prompts."""
+        return re.sub(r"[\\/]+", "/", path_text).casefold()
+
+    @staticmethod
+    def _normalize_prompt_for_rerun_match(content: str) -> str:
+        """Normalize prompt text for fuzzy repeated-request matching."""
+        return re.sub(r"\s+", " ", content).strip().casefold()
+
+    @classmethod
+    def _message_text_for_rerun_match(cls, message: HumanMessage) -> str:
+        """Extract readable text content from a prior human message."""
+        short_content = getattr(message, "short_content", None)
+        if isinstance(short_content, str) and short_content.strip():
+            return short_content
+
+        content = message.content
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts: list[str] = []
+            for block in content:
+                if isinstance(block, str):
+                    parts.append(block)
+                elif isinstance(block, dict) and block.get("type") == "text":
+                    text = block.get("text")
+                    if isinstance(text, str):
+                        parts.append(text)
+            return "\n".join(part for part in parts if part.strip())
+        return ""
 
     async def _build_agent_context(self) -> AgentContext:
         """Build runtime context injected into prompt templates and middleware."""
@@ -389,9 +528,12 @@ class MessageDispatcher:
         messages = result.get("messages", [])
         for message in reversed(messages):
             if isinstance(message, (AIMessage, ToolMessage)):
-                self.session.renderer.render_message(message)
                 if isinstance(message, ToolMessage):
+                    self._record_recent_output_paths(message)
+                    self.session.renderer.render_tool_message(message, indent_level=0)
                     self._remember_expandable_tool_output(message, indent_level=0)
+                else:
+                    self._render_assistant_with_deferred_tools(message, indent_level=0)
                 break
 
     async def _log_processing_error(self, error: Exception) -> None:
@@ -1320,6 +1462,7 @@ class MessageDispatcher:
                 message,
                 indent_level=indent_level,
             )
+            self._record_recent_output_paths(message)
             self.session.renderer.render_tool_message(message, indent_level=indent_level)
             self._remember_expandable_tool_output(
                 message,
@@ -1387,6 +1530,7 @@ class MessageDispatcher:
 
     def _render_assistant_with_deferred_tools(self, message: AIMessage, indent_level: int) -> None:
         """Render assistant content now and defer tool call headers until results arrive."""
+        message = self._annotate_missing_output_paths(message)
         if message.tool_calls:
             self._remember_tool_headers(message, indent_level)
             self.session.renderer.render_assistant_message(
@@ -1400,6 +1544,136 @@ class MessageDispatcher:
             message,
             indent_level=indent_level,
         )
+
+    def _annotate_missing_output_paths(self, message: AIMessage) -> AIMessage:
+        """Append a structured warning when referenced tool output paths are missing."""
+        if not self._recent_output_paths or not self._current_request_paths:
+            return message
+        if not self._paths_related(self._current_request_paths, self._recent_output_paths):
+            return message
+
+        missing_paths = [path for path in self._recent_output_paths if not Path(path).exists()]
+        if not missing_paths:
+            return message
+
+        warning_text = self._build_missing_output_paths_warning(missing_paths)
+        updated_content = self._append_text_notice(message.content, warning_text)
+        if updated_content is message.content:
+            return message
+        return message.model_copy(update={"content": updated_content})
+
+    @staticmethod
+    def _build_missing_output_paths_warning(paths: list[str]) -> str:
+        """Build a concise warning for missing structured output paths."""
+        unique_paths: list[str] = []
+        seen: set[str] = set()
+        for path in paths:
+            normalized = re.sub(r"[\\/]+", "/", str(path)).casefold()
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            unique_paths.append(str(path))
+
+        lines = ["● 以下预期输出文件当前未检测到："]
+        lines.extend(f"  - {path}" for path in unique_paths)
+        return "\n".join(lines)
+
+    @classmethod
+    def _append_text_notice(
+        cls,
+        content: str | list[str | dict[str, Any]],
+        notice: str,
+    ) -> str | list[str | dict[str, Any]]:
+        if isinstance(content, str):
+            if notice in content:
+                return content
+            base = content.rstrip()
+            separator = "\n\n" if base else ""
+            return f"{base}{separator}{notice}"
+        if isinstance(content, list):
+            for block in content:
+                if isinstance(block, str) and notice in block:
+                    return content
+                if isinstance(block, dict) and block.get("type") == "text" and notice in str(block.get("text", "")):
+                    return content
+            return [*content, {"type": "text", "text": notice}]
+        return content
+
+    def _extract_output_paths_from_message(self, message: ToolMessage) -> list[str]:
+        """Extract structured output path metadata from a tool message."""
+        candidates: list[Any] = []
+        additional_kwargs = getattr(message, "additional_kwargs", {}) or {}
+        response_metadata = getattr(message, "response_metadata", {}) or {}
+
+        if isinstance(additional_kwargs, dict):
+            candidates.extend(
+                [
+                    additional_kwargs.get(OUTPUT_PATHS_METADATA_KEY),
+                    additional_kwargs.get("output_paths"),
+                    additional_kwargs.get("file_paths"),
+                    additional_kwargs.get("file_path"),
+                ]
+            )
+        if isinstance(response_metadata, dict):
+            candidates.extend(
+                [
+                    response_metadata.get(OUTPUT_PATHS_METADATA_KEY),
+                    response_metadata.get("output_paths"),
+                    response_metadata.get("file_paths"),
+                    response_metadata.get("file_path"),
+                ]
+            )
+        return self._normalize_output_path_values(candidates)
+
+    def _record_recent_output_paths(self, message: ToolMessage) -> None:
+        """Remember the latest structured tool output paths for the current thread."""
+        output_paths = self._extract_output_paths_from_message(message)
+        if output_paths:
+            self._recent_output_paths = output_paths
+
+    @classmethod
+    def _normalize_output_path_values(cls, values: list[Any]) -> list[str]:
+        """Normalize structured output path metadata into a unique string list."""
+        normalized_paths: list[str] = []
+        seen: set[str] = set()
+
+        def visit(value: Any) -> None:
+            if value is None:
+                return
+            if isinstance(value, (list, tuple, set)):
+                for item in value:
+                    visit(item)
+                return
+            if isinstance(value, Path):
+                text = str(value)
+            else:
+                text = str(value).strip()
+            if not text:
+                return
+            normalized_key = re.sub(r"[\\/]+", "/", text).casefold()
+            if normalized_key in seen:
+                return
+            seen.add(normalized_key)
+            normalized_paths.append(text)
+
+        for value in values:
+            visit(value)
+        return normalized_paths
+
+    @staticmethod
+    def _paths_related(request_paths: set[str], output_paths: list[str]) -> bool:
+        """Return whether request paths and output paths point into the same tree."""
+        normalized_outputs = [re.sub(r"[\\/]+", "/", path).casefold().rstrip("/") for path in output_paths]
+        normalized_requests = [path.rstrip("/") for path in request_paths]
+        for request_path in normalized_requests:
+            for output_path in normalized_outputs:
+                if (
+                    output_path == request_path
+                    or output_path.startswith(f"{request_path}/")
+                    or request_path.startswith(f"{output_path}/")
+                ):
+                    return True
+        return False
 
     def _render_pending_tool_header(self, message: ToolMessage, indent_level: int) -> DeferredToolHeader | None:
         """Render the deferred tool header immediately before its result."""

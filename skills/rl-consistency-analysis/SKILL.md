@@ -67,6 +67,14 @@ This skill expects the sibling directory `dump-module-mapping-value-compare/` to
 - `output_5_root_cause_report.json`
 - `output_5_root_cause_report.md` (agent-authored from template, not script-authored)
 
+## Persistence Rules
+
+- Treat `output_5_root_cause_report.md` as a required output artifact, not an optional chat-only summary.
+- Before telling the user `saved to <path>`, first complete both steps:
+  - write the markdown file to disk
+  - read the same file path back successfully
+- If only `output_5_root_cause_report.json` exists, do not imply the markdown report already exists.
+
 ## Interpretation Guide
 
 - `structural_false_positive`

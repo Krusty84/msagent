@@ -21,7 +21,7 @@
 
 ## 环境准备
 
-- 请准备 vllm-ascend 镜像，使用 Docker 安装vllm-ascend指导：[vllm-ascend安装](https://docs.vllm.ai/projects/vllm-ascend-cn/zh-cn/latest/installation.html#set-up-using-docker)，请在容器内安装msagent并使用Zephyr
+- 请准备推理运行环境，推荐使用 vllm-ascend 镜像，使用 Docker 安装vllm-ascend指导：[vllm-ascend安装](https://docs.vllm.ai/projects/vllm-ascend-cn/zh-cn/latest/installation.html#set-up-using-docker)，推荐在容器内安装msagent并使用Zephyr
 - 请根据模型安装合适的transformers版本
 
 ## 推荐使用方式
@@ -64,7 +64,7 @@ spec:
 
 ## 使用注意
 - 当前生成的模型适配器仅支持LLM的w8a8、LLM结构中的MOE的w4a8量化等线性层量化，暂不支持离群值抑制系列算法和FA3量化等复杂算法的适配。
-- Agent在模型分析过程若发现较难适配的风险点，会在开发适配器前提前告知风险，若不存在风险，可能跳过生成分析报告，直接开始模型适配流程。
+- Agent在模型分析过程若发现较难适配的风险点，会中断开发适配器，提前告知风险，需要用户确认风险，并告知继续开发适配器后，才会继续开发模型适配器。
 
 ## 典型使用场景
 

@@ -4,7 +4,7 @@
   <img src="../images/Zephyr.jpg" alt="Zephyr" width="220">
 </p>
 
-`Zephyr` 是面向 msModelSlim 模型分析与适配场景的 Agent，负责协助用户完成接入量化/压缩流程前的可行性评估、实现来源与结构性风险排查，并在分析通过后按约定完成模型适配器（Model Adapter）的开发与验证。
+`Zephyr` 是面向 msModelSlim 模型分析与适配场景的 Agent，负责协助用户完成新模型接入量化/压缩流程前的可行性评估、实现来源与结构性风险排查，并在分析通过后按约定完成模型适配器（Model Adapter）的开发与验证。
 
 ## Agent 定位
 
@@ -29,9 +29,8 @@
 - 开始前请先下载 [msModelSlim 代码仓](https://gitcode.com/Ascend/msmodelslim)
 - 模型权重请用户自行准备并下载到本地可访问路径，再将模型名称或路径提供给 Zephyr
 - 在开始适配前，提供模型名称或路径，让 Zephyr 先进行模型分析和风险评估
-- 如果明确模型涉及 MoE，或在适配中由于规模过大导致 OOM，请直接向 Zephyr 提出“需要进行 MoE 权重拆解”或“实现按层加载/逐层加载”的诉求
-- 明确当前环境和任务类型，确保仅在风险评估通过的前提下，再让 Zephyr 生成适配器代码并进行验证测试
-- Agent生成模型适配器后，请重新安装msModelSlim，具体操作可[安装指导](https://gitcode.com/Ascend/msmodelslim/blob/master/docs/zh/getting_started/install_guide.md)，安装完成后使用一键量化生成量化权重，具体操作可参考[一键量化使用指导](https://gitcode.com/Ascend/msmodelslim/blob/master/docs/zh/feature_guide/quick_quantization_v1/usage.md)
+- Agent生成模型适配器后，请重新源码安装msModelSlim，执行install.sh安装脚本，具体操作可参考[安装指导](https://gitcode.com/Ascend/msmodelslim/blob/master/docs/zh/getting_started/install_guide.md#23-%E6%BA%90%E7%A0%81%E5%AE%89%E8%A3%85)，安装完成后使用一键量化生成量化权重，具体操作可参考[一键量化使用指导](https://gitcode.com/Ascend/msmodelslim/blob/master/docs/zh/feature_guide/quick_quantization_v1/usage.md)
+- 若量化过程出现报错，可以将报错信息复制给agent，由agent定位并解决问题
 - 推荐使用以下量化配置生成w8a8量化权重
 ```yaml
 apiversion: modelslim_v1

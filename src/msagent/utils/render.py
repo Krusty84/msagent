@@ -21,6 +21,7 @@ import json
 import re
 import shutil
 import uuid
+from pathlib import Path
 from typing import Any, TypeAlias
 
 from langchain_core.messages import AIMessage, ToolMessage
@@ -31,6 +32,7 @@ from msagent.cli.theme import theme
 TemplateData: TypeAlias = dict[str, "TemplateData"] | list["TemplateData"] | str | Any
 
 TOOL_TIMING_RESPONSE_METADATA_KEY = "msagent_tool_timing"
+OUTPUT_PATHS_METADATA_KEY = "msagent_output_paths"
 
 
 def render_templates(data: TemplateData, context: dict[str, Any] | None) -> TemplateData:
@@ -93,6 +95,83 @@ def format_tool_response(data: Any) -> tuple[str, str | None]:
 
     else:
         return str(data), None
+
+
+def extract_output_paths(data: Any) -> list[str]:
+    """Extract structured output file paths from tool-oriented data."""
+    collected: list[str] = []
+    seen: set[str] = set()
+
+    def add_path(value: str | Path) -> None:
+        text = str(value).strip().strip("`'\"<>[](){}.,;:!?\u3002\uff0c")
+        if not _looks_like_local_path(text):
+            return
+        normalized = _normalize_output_path(text)
+        if normalized in seen:
+            return
+        seen.add(normalized)
+        collected.append(text)
+
+    def visit(node: Any) -> None:
+        if node is None:
+            return
+        if isinstance(node, ToolMessage):
+            visit(getattr(node, "additional_kwargs", None))
+            visit(getattr(node, "response_metadata", None))
+            visit(node.content)
+            return
+        if isinstance(node, Path):
+            add_path(node)
+            return
+        if isinstance(node, str):
+            stripped = node.strip()
+            if not stripped:
+                return
+            if stripped.startswith(("{", "[")):
+                try:
+                    visit(json.loads(stripped))
+                    return
+                except json.JSONDecodeError:
+                    return
+            add_path(stripped)
+            return
+        if isinstance(node, dict):
+            for key, value in node.items():
+                key_name = str(key).strip().lower()
+                if key_name == OUTPUT_PATHS_METADATA_KEY.lower():
+                    visit(value)
+                    continue
+                if key_name.endswith("_path") or key_name.endswith("_paths"):
+                    visit(value)
+            return
+        if isinstance(node, (list, tuple, set)):
+            for item in node:
+                visit(item)
+            return
+
+        for attr_name in ("output_paths", "output_path", "file_paths", "file_path", "report_path"):
+            if hasattr(node, attr_name):
+                visit(getattr(node, attr_name))
+
+    visit(data)
+    return collected
+
+
+def _looks_like_local_path(text: str) -> bool:
+    """Return whether a string resembles a local filesystem path."""
+    if not text or "\n" in text or "\r" in text:
+        return False
+    return (
+        re.match(r"^[A-Za-z]:[\\/]", text) is not None
+        or text.startswith(("/", "./", "../", ".\\", "..\\"))
+        or ("\\" in text and " " not in text)
+        or ("/" in text and " " not in text)
+    )
+
+
+def _normalize_output_path(text: str) -> str:
+    """Normalize a path string for stable deduplication."""
+    return re.sub(r"[\\/]+", "/", text).casefold()
 
 
 def truncate_text(text: str, max_length: int) -> str:
@@ -165,6 +244,21 @@ def create_tool_message(
     if not isinstance(base_response_metadata, dict):
         base_response_metadata = {}
 
+    merged_additional_kwargs = {**base_additional_kwargs, **(additional_kwargs or {})}
+    merged_response_metadata = {**base_response_metadata, **(response_metadata or {})}
+
+    output_paths = extract_output_paths(
+        [
+            result,
+            merged_additional_kwargs.get(OUTPUT_PATHS_METADATA_KEY),
+            merged_additional_kwargs.get("output_paths"),
+            merged_response_metadata.get(OUTPUT_PATHS_METADATA_KEY),
+            merged_response_metadata.get("output_paths"),
+        ]
+    )
+    if output_paths:
+        merged_additional_kwargs[OUTPUT_PATHS_METADATA_KEY] = output_paths
+
     return ToolMessage(
         id=str(uuid.uuid4()),
         name=tool_name,
@@ -173,8 +267,8 @@ def create_tool_message(
         short_content=final_short_content,
         is_error=final_is_error,
         return_direct=final_return_direct,
-        additional_kwargs={**base_additional_kwargs, **(additional_kwargs or {})},
-        response_metadata={**base_response_metadata, **(response_metadata or {})},
+        additional_kwargs=merged_additional_kwargs,
+        response_metadata=merged_response_metadata,
     )
 
 

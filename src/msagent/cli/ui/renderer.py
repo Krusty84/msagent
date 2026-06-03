@@ -40,17 +40,16 @@ except ImportError:  # pragma: no cover - graceful fallback when dependency isn'
 
 WELCOME_TITLE = "* Welcome to msAgent"
 WELCOME_ASCII_FONT = "ansi_shadow"
-WELCOME_ASCII_COLOR = "#0b1f5e"
 WELCOME_ASCII_PALETTE = [
-    WELCOME_ASCII_COLOR,
-    WELCOME_ASCII_COLOR,
-    WELCOME_ASCII_COLOR,
-    WELCOME_ASCII_COLOR,
-    WELCOME_ASCII_COLOR,
-    WELCOME_ASCII_COLOR,
-    WELCOME_ASCII_COLOR,
-    WELCOME_ASCII_COLOR,
-]
+     "#0b1f5e",
+     "#123b8d",
+     "#1d4ed8",
+     "#2563eb",
+     "#3b82f6",
+     "#4f8ff7",
+     "#6ea8fb",
+     "#8bb8f8",
+ ]
 
 
 def _render_welcome_ascii(
@@ -88,12 +87,12 @@ def _render_welcome_ascii(
         return out
 
     if Figlet is None:
-        return Text(text, style=Style(color=WELCOME_ASCII_COLOR, bold=True))
+        return Text(text, style="accent")
 
     try:
         lines = Figlet(font=font).renderText(text).rstrip("\n").splitlines()
     except Exception:  # pragma: no cover - invalid font or partial install should not break startup
-        return Text(text, style=Style(color=WELCOME_ASCII_COLOR, bold=True))
+        return Text(text, style="accent")
 
     while lines and not lines[-1].strip():
         lines.pop()
@@ -372,7 +371,7 @@ class ChatWelcomeBanner:
         ascii_art = _render_welcome_ascii()
 
         welcome = Text()
-        welcome.append("msAgent", style=Style(color=WELCOME_ASCII_COLOR, bold=True))
+        welcome.append("msAgent", style="accent")
         welcome.append(
             " 是 MindStudio 一站式调试调优 Agent，支持性能、精度、算子等场景问题定位。",
             style="secondary",

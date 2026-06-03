@@ -579,7 +579,93 @@ echo 57 > /proc/irq/121/smp_affinity_list
 | **调度事件** | 是 | 分析进程调度行为 | 低 |
 | **中断事件** | 是 | 分析中断干扰 | 低 |
 | **锁竞争事件** | 否 | 分析锁竞争问题 | 中 |
-# ... 以此类推
+
+##### 3.1.3.3.8 ftrace 配置备份与恢复
+
+为确保 ftrace 采集不会影响系统原有配置，脚本在采集前后会自动进行配置备份与恢复：
+
+**备份的配置项**：
+
+| 配置项 | 路径 | 说明 |
+|--------|------|------|
+| `tracing_on` | `/sys/kernel/tracing/tracing_on` | 追踪开关状态 |
+| `buffer_size_kb` | `/sys/kernel/tracing/buffer_size_kb` | 缓冲区大小 |
+| `tracing_cpumask` | `/sys/kernel/tracing/tracing_cpumask` | CPU 掩码 |
+| `trace_clock` | `/sys/kernel/tracing/trace_clock` | 追踪时钟 |
+| `current_tracer` | `/sys/kernel/tracing/current_tracer` | 当前追踪器 |
+| `set_event` | `/sys/kernel/tracing/set_event` | 已启用事件列表 |
+| `events/enable` | `/sys/kernel/tracing/events/enable` | 事件全局开关 |
+
+**恢复机制**：
+
+```mermaid
+flowchart TD
+    A[开始采集] --> B[备份原始配置]
+    B --> C[保存到 backup/original_config.txt]
+    C --> D[配置采集参数]
+    D --> E[开始采集]
+    E --> F{正常结束?}
+    F -->|是| G[停止采集]
+    F -->|否| H[收到信号/异常]
+    H --> I[停止采集]
+    I --> J[恢复原始配置]
+    G --> J
+    J --> K[清理完成]
+```
+
+**异常处理**：
+
+| 异常类型 | 处理方式 | 恢复行为 |
+|----------|----------|----------|
+| **Ctrl+C 中断** | 捕获 INT 信号 | 停止采集并恢复配置 |
+| **TERM 终止信号** | 捕获 TERM 信号 | 停止采集并恢复配置 |
+| **HUP 挂起信号** | 捕获 HUP 信号 | 停止采集并恢复配置 |
+| **QUIT 退出信号** | 捕获 QUIT 信号 | 停止采集并恢复配置 |
+| **权限不足** | 启动前检查 | 退出并提示错误 |
+| **debugfs 未挂载** | 自动尝试挂载 | 挂载失败则退出 |
+| **追踪目录不存在** | 启动前检查 | 退出并提示错误 |
+| **数据丢失** | 采集后检查 | 输出警告信息 |
+
+**信号处理流程**：
+
+```bash
+# 信号捕获配置
+trap 'cleanup 1' INT TERM HUP QUIT
+
+# 清理函数
+cleanup() {
+    # 1. 如果正在采集，先停止
+    if [ $COLLECTING -eq 1 ]; then
+        echo 0 > "$TRACE_ROOT/tracing_on"
+    fi
+
+    # 2. 恢复原始配置
+    restore_original_config
+
+    # 3. 退出
+    exit $1
+}
+```
+
+**数据完整性检查**：
+
+采集完成后会检查是否有数据丢失：
+
+```bash
+# 检查 per_cpu 统计
+total_lost=0
+for cpu_dir in "$TRACE_ROOT/per_cpu"/cpu*; do
+    if [ -f "$cpu_dir/stats" ]; then
+        lost=$(grep -E "overrun|dropped events" "$cpu_dir/stats" | awk '{sum+=$1} END {print sum}')
+        total_lost=$((total_lost + lost))
+    fi
+done
+
+if [ $total_lost -gt 0 ]; then
+    echo "警告: 检测到 $total_lost 个丢失的事件"
+    echo "建议: 增大缓冲区大小 (--buffer-size 参数)"
+fi
+```
 
 # 配置 RPS/RFS
 echo ffffffff > /sys/class/net/eth0/queues/rx-0/rps_cpus

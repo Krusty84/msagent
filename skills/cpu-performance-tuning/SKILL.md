@@ -199,6 +199,26 @@ cat /sys/kernel/debug/tracing/trace
 | 中断事件 | 是 | 低 |
 | 锁竞争事件 | 否 | 中 |
 
+**配置备份与恢复**：
+
+采集脚本会自动备份和恢复 ftrace 配置，确保不会影响系统原有状态：
+
+| 配置项 | 说明 |
+|--------|------|
+| `tracing_on` | 追踪开关状态 |
+| `buffer_size_kb` | 缓冲区大小 |
+| `tracing_cpumask` | CPU 掩码 |
+| `trace_clock` | 追踪时钟 |
+| `current_tracer` | 当前追踪器 |
+| `set_event` | 已启用事件列表 |
+
+**异常处理**：
+
+- **信号处理**：支持 INT、TERM、HUP、QUIT 信号，收到信号后会停止采集并恢复配置
+- **权限检查**：启动前检查 root 权限
+- **数据完整性**：采集完成后检查是否有数据丢失
+- **备份位置**：配置备份保存到 `output_dir/backup/original_config.txt`
+
 ## 五、输出格式
 
 ### 5.1 绑核方案格式

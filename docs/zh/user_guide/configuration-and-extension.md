@@ -163,7 +163,7 @@ resources/configs/default/skills/
 
 因此源码运行和安装运行共用同一份 Skills 内容，不再需要额外执行 `git submodule` 同步。
 
-<a id="custom-skill-guide"></a>
+(custom-skill-guide)=
 ## 添加自定义 Skill
 
 如果你希望在当前项目里扩展一个新的 Skill，推荐直接放在仓库根目录：
@@ -268,7 +268,7 @@ skills:
 /skills profiling/my-skill
 ```
 
-<a id="custom-skill-faq"></a>
+(custom-skill-faq)=
 ## Skill 常见问题
 
 ### `/skills` 看不到新 Skill

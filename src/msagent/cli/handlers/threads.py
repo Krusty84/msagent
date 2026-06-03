@@ -83,18 +83,14 @@ class ThreadsHandler:
                     thread_ids = [row[0] async for row in cursor]
 
                 for thread_id in thread_ids:
-                    entry = await self._build_entry_from_tuple(
-                        checkpointer, thread_id
-                    )
+                    entry = await self._build_entry_from_tuple(checkpointer, thread_id)
                     if entry is not None:
                         entries.append(entry)
             else:
                 # Fallback for InMemorySaver (no raw connection available).
                 seen_thread_ids: set[str] = set()
                 async for checkpoint_tuple in checkpointer.alist(None):
-                    thread_id = str(
-                        checkpoint_tuple.config.get("configurable", {}).get("thread_id", "")
-                    )
+                    thread_id = str(checkpoint_tuple.config.get("configurable", {}).get("thread_id", ""))
                     if not thread_id or thread_id == ctx.thread_id or thread_id in seen_thread_ids:
                         continue
                     entry = self._entry_from_checkpoint_tuple(checkpoint_tuple)
@@ -106,9 +102,7 @@ class ThreadsHandler:
 
     async def _build_entry_from_tuple(self, checkpointer, thread_id: str) -> "ThreadEntry | None":
         """Fetch the latest checkpoint tuple for a thread and build a ThreadEntry."""
-        checkpoint_tuple = await checkpointer.aget_tuple(
-            RunnableConfig(configurable={"thread_id": thread_id})
-        )
+        checkpoint_tuple = await checkpointer.aget_tuple(RunnableConfig(configurable={"thread_id": thread_id}))
         if checkpoint_tuple is None:
             return None
         return self._entry_from_checkpoint_tuple(checkpoint_tuple)
@@ -116,9 +110,7 @@ class ThreadsHandler:
     @staticmethod
     def _entry_from_checkpoint_tuple(checkpoint_tuple) -> "ThreadEntry | None":
         """Build a ThreadEntry from a CheckpointTuple, or None if it has no messages."""
-        thread_id = str(
-            checkpoint_tuple.config.get("configurable", {}).get("thread_id", "")
-        )
+        thread_id = str(checkpoint_tuple.config.get("configurable", {}).get("thread_id", ""))
         if not thread_id:
             return None
 
@@ -137,9 +129,7 @@ class ThreadsHandler:
             thread_id=thread_id,
             preview=ThreadsHandler._build_preview(messages),
             timestamp=str(checkpoint.get("ts", "")),
-            pending_interrupts=ThreadsHandler._extract_interrupts(
-                checkpoint_tuple.pending_writes or []
-            ),
+            pending_interrupts=ThreadsHandler._extract_interrupts(checkpoint_tuple.pending_writes or []),
             offloaded_path=offloaded_path,
         )
 

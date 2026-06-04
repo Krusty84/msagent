@@ -41,15 +41,15 @@ except ImportError:  # pragma: no cover - graceful fallback when dependency isn'
 WELCOME_TITLE = "* Welcome to msAgent"
 WELCOME_ASCII_FONT = "ansi_shadow"
 WELCOME_ASCII_PALETTE = [
-     "#0b1f5e",
-     "#123b8d",
-     "#1d4ed8",
-     "#2563eb",
-     "#3b82f6",
-     "#4f8ff7",
-     "#6ea8fb",
-     "#8bb8f8",
- ]
+    "#0b1f5e",
+    "#123b8d",
+    "#1d4ed8",
+    "#2563eb",
+    "#3b82f6",
+    "#4f8ff7",
+    "#6ea8fb",
+    "#8bb8f8",
+]
 
 
 def _render_welcome_ascii(

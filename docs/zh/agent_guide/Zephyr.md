@@ -28,6 +28,7 @@
 - Agent生成模型适配器后，请重新源码安装msModelSlim，执行install.sh安装脚本，具体操作可参考[安装指导](https://gitcode.com/Ascend/msmodelslim/blob/master/docs/zh/getting_started/install_guide.md#23-%E6%BA%90%E7%A0%81%E5%AE%89%E8%A3%85)，安装完成后使用一键量化生成量化权重，具体操作可参考[一键量化使用指导](https://gitcode.com/Ascend/msmodelslim/blob/master/docs/zh/feature_guide/quick_quantization_v1/usage.md)
 - 若量化过程出现报错，可以将报错信息复制给agent，由agent定位并解决问题
 - 推荐使用以下量化配置生成w8a8量化权重
+
 ```yaml
 apiversion: modelslim_v1
 
@@ -58,6 +59,7 @@ spec:
 ```
 
 ## 使用注意
+
 - 当前生成的模型适配器仅支持LLM的w8a8、LLM结构中的MOE的w4a8量化等线性层量化，暂不支持离群值抑制系列算法和FA3量化等复杂算法的适配。
 - Agent在模型分析过程若发现较难适配的风险点，会中断开发适配器，提前告知风险，需要用户确认风险，并告知继续开发适配器后，才会继续开发模型适配器。
 
@@ -65,4 +67,4 @@ spec:
 
 | 场景 | 示例提示词 | 效果展示|
 |---|---|---|
-| 基础模型适配 | ` {模型路径} 是{模型}的权重，请完成对该模型的适配风险分析，并完成{msModelSlim代码路径}项目对于该模型的适配器开发和验证工作。` | <img src="../figures/modelslim_adapt.jpg" alt="MsModelslim 适配示例" width="800"> |
+| 基础模型适配 | `{模型路径} 是{模型}的权重，请完成对该模型的适配风险分析，并完成{msModelSlim代码路径}项目对于该模型的适配器开发和验证工作。` | <img src="../figures/modelslim_adapt.jpg" alt="MsModelslim 适配示例" width="800"> |

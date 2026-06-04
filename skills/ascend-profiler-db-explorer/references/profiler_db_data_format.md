@@ -1,16 +1,16 @@
-﻿## msprof导出db格式数据说明
+﻿﻿# msprof导出db格式数据说明
 
 msprof命令执行完成后，会生成一个汇总所有性能数据的msprof\_\{时间戳\}.db表结构文件，该文件推荐使用MindStudio Insight工具查看，也可以使用Navicat Premium等数据库开发工具直接打开。当前db文件汇总的性能数据如下：
 
 >[!NOTE] 说明 
->db文件均以表格形式展示性能数据，且所有数据均以数字映射（例如opName字段下的算子名显示为194），数字与名称的映射表为[STRING\_IDS](#zh-cn_topic_0000002076410600_section116561584178)。
+>db文件均以表格形式展示性能数据，且所有数据均以数字映射（例如opName字段下的算子名显示为194），数字与名称的映射表为STRING\_IDS。
 
 **单位相关**
 
-1. 时间相关，统一使用纳秒（ns），且为本地Unix时间。
-2. 内存相关，统一使用字节（Byte）。
-3. 带宽相关，统一使用Byte/s。
-4. 频率相关，统一使用MHz。
+- 时间相关，统一使用纳秒（ns），且为本地Unix时间。
+- 内存相关，统一使用字节（Byte）。
+- 带宽相关，统一使用Byte/s。
+- 频率相关，统一使用MHz。
 
 **ENUM\_API\_TYPE**
 
@@ -979,5 +979,3 @@ rankId和deviceId的映射关系数据。
 |--|--|--|
 |rankId|INTEGER|取值固定为-1。|
 |deviceId|INTEGER|节点上的设备ID，显示为-1时表示未采集到deviceId。|
-
-

@@ -19,7 +19,6 @@
 
 更完整的目录说明见 [配置与扩展](configuration-and-extension.md)。
 
-
 ## 2. 如何打开或关闭 MCP 服务？
 
 有两种常见方式：
@@ -56,7 +55,7 @@
 - 当前 Agent 的 `skills.patterns` 是否允许该 Skill
 - 是否被更高优先级目录中的同名 Skill 覆盖
 
-加载自定义 Skill，可参考[添加自定义 Skill](configuration-and-extension.md#custom-skill-guide)
+加载自定义 Skill，可参考[添加自定义 Skill](configuration-and-extension.md#添加自定义-skill)
 
 ## 3. 运行日志在哪里看？
 

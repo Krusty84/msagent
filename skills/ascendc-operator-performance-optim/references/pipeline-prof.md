@@ -5,7 +5,7 @@
 将算子划分为三级流水任务，使用 `TQue` 进行级间同步。不同阶段映射到独立的
 硬件指令队列（MTE2/MTE3 搬运、V 矢量、M 矩阵），可并行执行。
 
-```
+```bash
 CopyIn  → AllocTensor + DataCopy(GM→Local) + EnQue     [MTE2 队列]
 Compute → DeQue + Vector/Cube 运算 + EnQue              [V / M 队列]
 CopyOut → DeQue + DataCopy(Local→GM) + FreeTensor       [MTE3 队列]
@@ -76,6 +76,7 @@ for (uint32_t index = 0; index < round; ++index) {
 ```
 
 **注意事项**：
+
 - 内存开销翻倍（每个队列分配 2 块 buffer）。
 - 循环次数须 >= 2 才能获益。
 - 当计算时间远大于搬运时间时，搬运已被隐藏，double buffer 收益有限。
@@ -91,14 +92,14 @@ AIC（Cube 核）之间发送同步消息。同步模式控制消息频率：
 
 **同步模式** — 每次迭代都有消息开销：
 
-```
+```bash
 AIV: send_msg → wait → send_msg → wait → send_msg → wait
 AIC:           exec →           exec →           exec
 ```
 
 **异步模式** — 仅首次发消息：
 
-```
+```bash
 AIV: send_msg → continue → continue → continue
 AIC:           exec     → exec     → exec
 ```

@@ -53,13 +53,13 @@ pip3 show mindstudio-probe || pip3 install mindstudio-probe --pre
 
 根据第 1 步输出的 level 选择对应分支。比对等待时间最长为 600 秒。
 
-##### 3.1 level="L1"
+#### 3.1 level="L1"
 
 ```shell
 msprobe compare -tp <target_path> -gp <golden_path> -o <output_path>
 ```
 
-##### 3.2 level="mix"
+#### 3.2 level="mix"
 
 ```shell
 msprobe graph_visualize -tp <target_path> -gp <golden_path> -o <output_path>
@@ -78,6 +78,7 @@ python3 "<skill_root>/scripts/find_first_diff_api_L1.py" <output_path>
 ```
 
 分析特点：
+
 - 无 Module 层级信息，仅有 API 级 md5 比对
 - 找不到问题 API 时自动检测"状态跳变边界"，提示可能漏采的位置
 - 支持 `--exclude-api "API名称"` 排除误检后重新分析
@@ -89,6 +90,7 @@ python3 "<skill_root>/scripts/find_first_diff_api_mix.py" <output_path>/compare_
 ```
 
 分析特点：
+
 - 包含 API 和 Module 两级分析，展示父子层级链路
 - 当 API 级找不到结果、但 Module 级发现异常时，提示可能漏采的 API
 - 支持 `--exclude-api "API名称"` 排除误检后重新分析
@@ -117,7 +119,7 @@ python3 "<skill_root>/scripts/find_first_diff_api_L1.py" <csv_xlsx_path>
 
 展示首个输入一致输出不一致的 API，包括其 Module 层级链路（仅 mix）和 md5 比对详情：
 
-```
+```text
 +----------------------+------------------------------------------+
 |                     Rank 0                              |
 +----------------------+------------------------------------------+
@@ -137,7 +139,7 @@ python3 "<skill_root>/scripts/find_first_diff_api_L1.py" <csv_xlsx_path>
 
 #### 5.2 未找到问题 API（状态跳变）
 
-```
+```text
 +----------------------+------------------------------------------+
 | 首个问题API           | 无                                       |
 +----------------------+------------------------------------------+
@@ -180,7 +182,7 @@ python3 "<skill_root>/scripts/find_first_diff_api_L1.py" <csv_xlsx_path>
 
 ### 多卡场景
 
-```
+```text
 dump_path
 └── step0
     ├── rank0
@@ -204,7 +206,7 @@ dump_path
 
 ### 单卡场景
 
-```
+```text
 dump_path
 └── step0
     └── proc{pid}
@@ -218,5 +220,6 @@ dump_path
 ```
 
 ### 比对说明
+
 - level="mix"，调用`msprobe graph_visualize`，用户可以传入路径`dump_path`、`dump_path/step{n}`、`dump_path/step{n}/rank{n}`或者`dump_path/step{n}/proc{pid}`。
 - level="L1"，调用`msprobe compare`，用户可以传入路径`dump_path/step{n}`、`dump_path/step{n}/rank{n}`或者`dump_path/step{n}/proc{pid}`，不支持比对`dump_path`。如果用户传入`dump_path`，默认比对`dump_path/step0`。

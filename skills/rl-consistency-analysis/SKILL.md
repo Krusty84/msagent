@@ -6,6 +6,7 @@ description: 训练与推理数据不一致的端到端根因分析。当模块�
 # 数据不一致根因分析器
 
 使用此技能的场景：
+
 - 训推模块不一致时需要进行模块匹配并比对
 - 需要区分真正的根因与融合/非融合结构不匹配
 - 需要一份解释最可能分歧边界、缺失或多余操作以及实现不匹配的报告
@@ -89,5 +90,6 @@ python3 "<skill_root>/scripts/run_root_cause_analysis.py" \
 ## 参考资料
 
 有关此技能背后的具体推理模式，请阅读：
+
 - `references/manual_case_pattern.md`
 - `references/report_template.md`

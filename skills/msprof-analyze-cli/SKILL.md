@@ -31,7 +31,7 @@ description: MindStudio Profiler Analyze（msprof-analyze）是面向 AI 训练�
 
 ### 典型决策流程
 
-```
+```text
 用户提出分析需求
         │
         ▼
@@ -81,6 +81,7 @@ description: MindStudio Profiler Analyze（msprof-analyze）是面向 AI 训练�
 ## 能力一：集群综合分析 (Cluster)
 
 ### 1.1 技能目标
+
 在 Ascend 多卡/集群场景下，利用 msprof-analyze 的 `-m` 参数指定分析能力，对集群训练数据进行综合分析。用户只需说明要分析什么，系统自动选择对应的 `-m` 参数执行分析。
 
 ### 1.2 分析模式选择 (-m 参数)
@@ -106,6 +107,7 @@ msprof-analyze -m <mode> -d <cluster_data_path> [-o <output_path>] [--force] --a
 ```
 
 命令示例：
+
 ```bash
 msprof-analyze -m cluster_time_summary -d ./cluster_data -o ./output --agent
 msprof-analyze -m free_analysis -d ./cluster_data -o ./output --agent
@@ -192,6 +194,7 @@ msprof-analyze -d ./cluster_data -o ./output --agent # 默认为all
 ## 能力二：专家建议分析 (Advisor)
 
 ### 2.1 技能目标
+
 基于 Ascend PyTorch Profiler 或 MindSpore Profiler 采集的性能数据，使用 msprof-analyze advisor 功能进行自动分析，并输出性能调优建议。
 
 ### 2.2 分析模式
@@ -242,6 +245,7 @@ msprof-analyze advisor <subcommand> -d <profiling_path> [-o <output_path>] [-bp 
 ```
 
 命令示例：
+
 ```bash
 # 单卡场景）
 msprof-analyze advisor all -d ./profiling_data -o ./output --force --agent

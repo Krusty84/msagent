@@ -5,17 +5,20 @@
 矢量计算 API 提供三种调用方式：
 
 ### 1. 整个 Tensor 参与计算（运算符重载）
+
 ```cpp
 dstLocal = src0Local + src1Local;  // Add
 dstLocal = src0Local < src1Local;  // Compare
 ```
 
 ### 2. Tensor 前 n 个数据计算
+
 ```cpp
 AscendC::Add(dstLocal, src0Local, src1Local, count);
 ```
 
 ### 3. Tensor 高维切分计算
+
 ```cpp
 // 连续模式
 AscendC::Add(dstLocal, src0Local, src1Local, mask, repeatTime, repeatParams);
@@ -43,23 +46,27 @@ uint64_t mask[2] = {UINT64_MAX, UINT64_MAX};  // 处理全部128个元素
 ## repeatParams 参数
 
 ### BinaryRepeatParams（双源操作数）
+
 ```cpp
 AscendC::BinaryRepeatParams {dstBlkStride, src0BlkStride, src1BlkStride,
                               dstRepStride, src0RepStride, src1RepStride};
 ```
 
 ### UnaryRepeatParams（单源操作数）
+
 ```cpp
 AscendC::UnaryRepeatParams {dstBlkStride, srcBlkStride, dstRepStride, srcRepStride};
 ```
 
 **常用配置**：连续数据处理
+
 - half: `{1, 1, 1, 8, 8, 8}`
 - float: `{1, 1, 8, 8}` (UnaryRepeatParams)
 
 ## 基础算术 API
 
 ### 二元运算
+
 ```cpp
 // Add, Sub, Mul, Div, Max, Min
 AscendC::Add(dstLocal, src0Local, src1Local, count);
@@ -72,12 +79,14 @@ dstLocal = src0Local + src1Local;
 **支持类型**：half, int16_t, int32_t, float
 
 ### 一元运算
+
 ```cpp
 // Abs, Exp, Ln, Sqrt, Rsqrt, Reciprocal, Relu, LeakyRelu, Tanh
 AscendC::Exp(dstLocal, srcLocal, count);
 ```
 
 ### 标量运算（优先使用）
+
 ```cpp
 // Adds, Muls, Maxs, Mins — 直接对每个元素做标量操作
 AscendC::Adds(dstLocal, srcLocal, scalarValue, count);
@@ -106,6 +115,7 @@ AscendC::Sub(dst, src0, src1, mask, repeatTime,
 ```
 
 **⚠️ repeatTime 限制**: repeatTime 参数类型为 `uint8_t`，最大值 255。超过需分批处理:
+
 ```cpp
 while (remaining > 0) {
     uint8_t batch = static_cast<uint8_t>(std::min(remaining, (int64_t)255));
@@ -122,6 +132,7 @@ AscendC::Cast(dstLocal, srcLocal, AscendC::RoundMode::CAST_RINT, count);
 ```
 
 ### RoundMode 舍入模式
+
 | 模式 | 说明 |
 |------|------|
 | CAST_NONE | 不舍入（无精度损失时） |
@@ -133,8 +144,9 @@ AscendC::Cast(dstLocal, srcLocal, AscendC::RoundMode::CAST_RINT, count);
 | CAST_ODD | 最近邻奇数舍入 |
 
 ### 常用转换组合
-| 源类型 | 目的类型 | 推荐 RoundMode | 场景 |
-|--------|----------|----------------|------|
+
+| 源类型 | 目的类型 | 推荐 RoundMode |
+|--------|----------|----------------|
 | half → float | CAST_NONE | 升精度（无损） |
 | bfloat16 → float | CAST_NONE | 升精度（无损） |
 | float → half | CAST_ROUND | 降精度（通用） |
@@ -161,6 +173,7 @@ AscendC::Cast(outLocal[rowIdx * alignedCols], workLocal, RoundMode::CAST_ROUND, 
 ```
 
 ### 高维切分示例
+
 ```cpp
 // half -> int32_t
 uint64_t mask = 64;  // 以int32_t为准
@@ -183,6 +196,7 @@ AscendC::ReduceMax(dstLocal, srcLocal, sharedTmpBuffer, count);
 - `dst` **不能**与 `tmpBuffer` 指向同一块内存
 
 ### tmpBuffer 大小计算
+
 ```cpp
 int elementsPerBlock = 32 / sizeof(T);      // half:16, float:8
 int elementsPerRepeat = 256 / sizeof(T);    // half:128, float:64
@@ -210,6 +224,7 @@ AscendC::ReduceMax(dstLocal, srcLocal, sharedTmpBuffer,
 | srcInnerPad | A2/A3 平台必须为 `true` |
 
 **tmpBuffer 大小**: 使用 `GetReduceMaxMaxMinTmpSize` / `GetReduceSumTmpSize` 计算:
+
 ```cpp
 uint32_t tmpSize = AscendC::GetReduceMaxMaxMinTmpSize<T>(srcShape);
 pipe.InitBuffer(tmpBuf, tmpSize);
@@ -220,6 +235,7 @@ pipe.InitBuffer(tmpBuf, tmpSize);
 ### WholeReduceSum / BlockReduceSum
 
 硬件指令，性能更优但限制更多:
+
 ```cpp
 AscendC::WholeReduceSum(dstLocal, srcLocal, count);
 ```
@@ -227,6 +243,7 @@ AscendC::WholeReduceSum(dstLocal, srcLocal, count);
 ## 比较与选择 API
 
 ### Compare
+
 ```cpp
 // 运算符重载
 dstLocal = src0Local < src1Local;
@@ -240,6 +257,7 @@ AscendC::Compare(dstLocal, src0Local, src1Local, AscendC::CMPMODE::LT, count);
 **输出**：uint8_t 类型，按 bit 位存储结果
 
 **⚠️ 256 字节对齐约束**: Compare API 要求参与比较的数据区域是 **256 字节的整数倍**。非对齐时需要 padding:
+
 ```cpp
 // 不足 256B 的部分填充 ±inf / FLT_MAX，确保 padding 区不影响结果
 uint32_t alignedCount = ((count * sizeof(T) + 255) / 256) * (256 / sizeof(T));
@@ -248,6 +266,7 @@ AscendC::Compare(dst, src0, src1, CMPMODE::LT, alignedCount);
 ```
 
 ### Select
+
 ```cpp
 // 模式0：两个tensor选取（selMask有位数限制）
 AscendC::Select(dstLocal, maskLocal, src0Local, src1Local,
@@ -289,6 +308,7 @@ AscendC::Axpy(dstLocal, aLocal, xLocal, yLocal, count);
 ## 常用代码模式
 
 ### 元素级运算
+
 ```cpp
 __aicore__ inline void Compute()
 {
@@ -305,6 +325,7 @@ __aicore__ inline void Compute()
 ```
 
 ### 升精度计算（FP16 -> FP32）
+
 ```cpp
 __aicore__ inline void Compute()
 {
@@ -329,6 +350,7 @@ __aicore__ inline void Compute()
 ```
 
 ### 条件选择
+
 ```cpp
 __aicore__ inline void Compute()
 {

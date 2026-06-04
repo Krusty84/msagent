@@ -262,6 +262,7 @@ uint32_t tileRows = ubSize / (alignedCols * sizeof(T) * bufferCount);
 ### DataCopyPad blockCount 限制
 
 `DataCopyExtParams.blockCount` 最大值为 **4095**。当 `tileRows > 4095` 时需要分批:
+
 ```cpp
 tileRows = std::min(tileRows, (uint32_t)4095);
 ```

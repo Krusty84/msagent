@@ -22,7 +22,8 @@ GitCode API 同时支持 GitLab v4 API 和 GitHub v5 API 格式。
 ### 使用 Token
 
 在请求头中添加：
-```
+
+```bash
 PRIVATE-TOKEN: YOUR_TOKEN
 ```
 
@@ -31,11 +32,13 @@ PRIVATE-TOKEN: YOUR_TOKEN
 ### PR 相关
 
 #### 获取 PR 详情
-```
+
+```bash
 GET /repos/{owner}/{repo}/pulls/{number}
 ```
 
 响应示例：
+
 ```json
 {
   "id": 12345,
@@ -54,26 +57,31 @@ GET /repos/{owner}/{repo}/pulls/{number}
 ```
 
 #### 获取 PR 文件列表
-```
+
+```bash
 GET /repos/{owner}/{repo}/pulls/{number}/files
 ```
 
 #### 获取 PR Diff
-```
+
+```bash
 GET /repos/{owner}/{repo}/pulls/{number}/diff
 ```
 
 #### 获取 PR 评论
-```
+
+```bash
 GET /repos/{owner}/{repo}/pulls/{number}/comments
 ```
 
 #### 创建 PR 普通评论
-```
+
+```bash
 POST /repos/{owner}/{repo}/pulls/{number}/comments
 ```
 
 请求体：
+
 ```json
 {
   "body": "Comment text"
@@ -81,11 +89,13 @@ POST /repos/{owner}/{repo}/pulls/{number}/comments
 ```
 
 #### 创建 PR Review
-```
+
+```bash
 POST /repos/{owner}/{repo}/pulls/{number}/reviews
 ```
 
 请求体：
+
 ```json
 {
   "body": "Review summary",
@@ -101,19 +111,21 @@ POST /repos/{owner}/{repo}/pulls/{number}/reviews
 
 GitCode 使用 GitLab v4 API 的 Discussions 功能来创建行级评论。
 
-```
+```bash
 POST /projects/{encoded_project}/merge_requests/{mr_iid}/discussions
 ```
 
 **URL 编码**: 项目路径 `owner/repo` 需要进行 URL 编码，例如 `Ascend/msprof` → `Ascend%2Fmsprof`
 
 **Headers**:
-```
+
+```bash
 PRIVATE-TOKEN: your_token
 Content-Type: application/json
 ```
 
 **请求体**:
+
 ```json
 {
   "body": "**严重程度：** 建议\n\n**问题：** 此处存在不必要的空格。\n\n**原因：** `node = int (node_str)` 不符合 PEP 8，降低可读性，也容易让后续风格检查失败。\n\n**怎么改：**\n```python\nnode = int(node_str)\n```",

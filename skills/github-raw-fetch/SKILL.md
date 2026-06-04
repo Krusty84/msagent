@@ -192,9 +192,9 @@ curl.exe -L "https://raw.githubusercontent.com/actioncloud/github-raw-url/master
 
 1. 先读取：
 
-```text
-https://raw.githubusercontent.com/kali20gakki/msprof/master/agent_router.md
-```
+    ```text
+    https://raw.githubusercontent.com/kali20gakki/msprof/master/agent_router.md
+    ```
 
 2. 根据 router 判断 `xxx.md` 的真实位置
 3. 再对真实路径执行：

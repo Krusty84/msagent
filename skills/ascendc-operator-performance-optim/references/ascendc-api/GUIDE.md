@@ -20,6 +20,7 @@
 **特征**: 逐元素操作，输入输出 shape 相同，一维切分
 
 **必须加载**:
+
 - `basic-data-structures-api.md` — GlobalTensor/LocalTensor 用法
 - `resource-management-api.md` — TPipe/TQue/TBuf 初始化、Double Buffer
 - `data-copy-api.md` — DataCopyPad 连续搬运
@@ -27,6 +28,7 @@
 - `kernel-constraints.md` — 禁止 std::、repeatTime 限制
 
 **不需要加载**:
+
 - `sync-control-api.md` — 元素级算子无核间依赖，EnQue/DeQue 已在资源管理中说明
 
 ### 场景 2: 归约/归一化类算子（LayerNorm、Softmax、BatchNorm 等）
@@ -34,6 +36,7 @@
 **特征**: 包含 ReduceSum/ReduceMax、按行/维度切分、可能需要 FP32 中间精度
 
 **必须加载**:
+
 - `basic-data-structures-api.md` — GlobalTensor/LocalTensor
 - `resource-management-api.md` — TPipe/TQue/TBuf、UB 容量计算、blockCount 限制
 - `data-copy-api.md` — DataCopyPad 多行搬运、rLength/rLengthAlign 用法、Stride 单位
@@ -41,6 +44,7 @@
 - `kernel-constraints.md` — repeatTime≤255 分批、Compare 对齐
 
 **不需要加载**:
+
 - `sync-control-api.md` — 行级独立归约无核间依赖
 
 ### 场景 3: 池化类算子（AvgPool、MaxPool 等）
@@ -48,6 +52,7 @@
 **特征**: 滑动窗口操作，多维度遍历，核内有复杂循环结构
 
 **必须加载**:
+
 - `basic-data-structures-api.md` — GlobalTensor/LocalTensor
 - `resource-management-api.md` — TPipe/TQue/TBuf、accumBuf 等多临时缓冲区
 - `data-copy-api.md` — 多次 DataCopyPad 搬入不同行/位置
@@ -55,6 +60,7 @@
 - `kernel-constraints.md` — 通用 Kernel 限制
 
 **不需要加载**:
+
 - `sync-control-api.md` — 各 slice 独立处理
 
 ### 场景 4: 需要核间同步的算子（AllReduce、全局归约等）
@@ -62,6 +68,7 @@
 **特征**: 多核之间存在数据依赖，需要先局部计算再全局合并
 
 **全部加载**:
+
 - `basic-data-structures-api.md`
 - `resource-management-api.md` — 需要 Workspace 管理（GM + UB workspace）
 - `data-copy-api.md`
@@ -72,6 +79,7 @@
 ### 场景 5: 仅修改已有算子（bug 修复、小范围改动）
 
 **按需加载**: 只加载与修改相关的文档。例如：
+
 - 修改计算逻辑 → `vector-compute-api.md` + `kernel-constraints.md`
 - 修改数据搬运 → `data-copy-api.md`
 - 修改资源分配 → `resource-management-api.md`
@@ -80,6 +88,7 @@
 ### 场景 6: 性能优化
 
 **必须加载**:
+
 - `resource-management-api.md` — Double Buffer 原理、UB 利用率
 - `vector-compute-api.md` — 标量优化（Adds/Muls 代替 Duplicate+运算）、多行广播、Pattern 归约
 - `kernel-constraints.md` — repeatTime 分批优化

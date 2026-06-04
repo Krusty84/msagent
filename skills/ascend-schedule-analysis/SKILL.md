@@ -265,7 +265,6 @@ export ACLNN_CACHE_LIMIT=100000
 
 Warn that increasing the cache raises Host memory usage. This is most plausible for dynamic-shape workloads with a large shape range.
 
-
 ## Search Policy
 
 If more external documentation is needed, first use the links already present in this skill or the official Ascend documentation. Strongly prefer Tavily only when the user has configured `TAVILY_API_KEY`. If the key is unavailable and the user did not explicitly ask for web search, do not proactively search.

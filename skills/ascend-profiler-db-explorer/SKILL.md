@@ -41,6 +41,7 @@ keywords: [db, sqlite, sql, table, schema, ascend-pytorch-profiler-db, ascend_py
 - `TopK 算子` / `通信耗时` / `下发分析` / `调度瓶颈`
 
 ## 强制限制
+
 - 主查询必须满足以下至少一项：
   - 包含聚合函数（如 `SUM`, `AVG`, `COUNT` 等），或
   - 明确加上 `ORDER BY ... LIMIT 20`（或更小的 LIMIT）。
@@ -60,7 +61,6 @@ keywords: [db, sqlite, sql, table, schema, ascend-pytorch-profiler-db, ascend_py
 3. **拼接主查询**
    - 在复制的 `WITH ... AS (...)` 之后，针对对应视图（如 `compute_view`、`comm_view`、`dispatch_view`）编写 `SELECT` 查询。
    - 示例：`SELECT op_name, SUM(duration_ns) AS total_ns FROM compute_view GROUP BY op_name ORDER BY total_ns DESC LIMIT 20;`
-
 
 ## Track B：底层文档 / profiler_db_data_format.md（仅限长尾问题）
 

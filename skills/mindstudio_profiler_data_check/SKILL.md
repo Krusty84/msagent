@@ -9,6 +9,7 @@ keywords: [profiler, 性能分析, 数据检查]
 ## 技能目标
 
 在深入性能分析前，对 profiler 数据进行「体检」，确保：
+
 - 正确识别数据类型（框架 profiler / msprof）
 - 采集过程正常结束（流程正常 Stop）
 - 数据已解析，关键交付件存在
@@ -69,7 +70,8 @@ keywords: [profiler, 性能分析, 数据检查]
 本技能为**前置校验**，**不必每次都输出完整报告**：
 
 - **用户明确要求**「检查数据」「看校验结果」时，输出**简洁结构化报告**，按以下格式（每项一行，无则略过）：
-  ```
+
+  ```text
   【类型】框架 profiler (PyTorch/MindSpore) 或 msprof 命令行采集 | 单卡/多卡
   【状态】valid / invalid / unparsed
   【配置】level、with_stack、profile_memory、采集步数等关键项（仅框架 profiler）
@@ -77,6 +79,7 @@ keywords: [profiler, 性能分析, 数据检查]
   【建议】需解析 / 检查 profiler.stop / 无
   【下一步】推荐的分析技能或操作
   ```
+
 - **前置调用**（用户在做 Timeline / 算子分析等）：
   - `invalid`（未 Stop）→ 必须告知并终止
   - `unparsed`（未解析）→ 告知需先解析并询问是否协助

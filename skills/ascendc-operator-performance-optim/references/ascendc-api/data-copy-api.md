@@ -78,6 +78,7 @@ AscendC::DataCopy(dstLocal, srcLocal, count);
 ```
 
 **参数**：
+
 - `count`: 元素个数，`count * sizeof(T)` 需32字节对齐
 
 ### 非连续搬运 (DataCopyParams)
@@ -93,7 +94,8 @@ AscendC::DataCopy(dstLocal, srcGlobal, params);
 ```
 
 **示意图**：
-```
+
+```bash
 blockCount=2, blockLen=8, srcGap=0, dstGap=1
 源: [====8块====][====8块====]
 目的: [====8块====][gap][====8块====]
@@ -110,6 +112,7 @@ AscendC::DataCopy(dstLocal, srcGlobal, dstSliceInfo, srcSliceInfo, dimValue);
 ```
 
 **SliceInfo 结构**：
+
 | 参数 | 含义 |
 |------|------|
 | startIndex | 切片起始位置 |
@@ -131,6 +134,7 @@ AscendC::DataCopyPad(dstGlobal, srcLocal, copyParams);
 ```
 
 **DataCopyExtParams**：
+
 | 参数 | 含义 | 单位 |
 |------|------|------|
 | blockCount | 连续数据块个数 | - |
@@ -139,6 +143,7 @@ AscendC::DataCopyPad(dstGlobal, srcLocal, copyParams);
 | dstStride | 目的相邻块间隔 | GM:字节, UB:DataBlock |
 
 **DataCopyPadExtParams**：
+
 | 参数 | 含义 |
 |------|------|
 | isPad | 是否填充自定义值 |
@@ -154,6 +159,7 @@ AscendC::Copy(dstLocal, srcLocal, mask, repeatTime, {dstStride, srcStride, dstRe
 ```
 
 **CopyRepeatParams**：
+
 | 参数 | 含义 |
 |------|------|
 | dstStride/srcStride | 同一迭代内DataBlock步长 |
@@ -175,6 +181,7 @@ AscendC::DataCopy(dstLocal, srcLocal, intriParams, enhancedParams);
 ```
 
 **blockMode 模式**：
+
 | 模式 | 传输单位 | 适用通路 |
 |------|----------|----------|
 | BLOCK_MODE_MATRIX | 16×16 cube | CO1 -> CO2 |
@@ -182,6 +189,7 @@ AscendC::DataCopy(dstLocal, srcLocal, intriParams, enhancedParams);
 | BLOCK_MODE_NORMAL | 32B | 通用通路 |
 
 **量化模式 (deqScale)**：
+
 | 模式 | 说明 |
 |------|------|
 | DEQ | int32 -> half，使用deqValue |

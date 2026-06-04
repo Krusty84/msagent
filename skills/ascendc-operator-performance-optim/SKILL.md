@@ -7,7 +7,7 @@ description: 基于 msprof op 工具的端到端 Ascend NPU 算子性能调优�
 
 对 Ascend NPU 上的单算子，基于 **msprof op** 性能采集工具，skill 不仅排查性能问题，还负责 **修改代码并验证优化效果**，输出优化前后的性能对比报告，完整流程为：
 
-```
+```text
 Phase 1: 排查 — 代码与设计文档审查，发现优化点
 Phase 2: 基线 — 保存当前算子性能数据，并识别关键瓶颈，基于msopprof 工具获取
 Phase 3: 优化 — 学习知识后，在备份的文件夹下优化代码，不要修改原工程目录下的任何文件
@@ -44,7 +44,7 @@ Phase 5: 性能 — 优化前后性能对比，落盘比对报告
 按以下顺序逐阶段审查算子代码。对每个阶段，加载对应的 reference 文件，逐项
 对照代码检查。
 
-```
+```text
 - [ ] 1. Tiling    — 数据在多核与 L2Cache 间的切分策略
 - [ ] 2. 搬运      — DataCopy 的带宽利用率
 - [ ] 3. API 使用  — Ascend C API 的高效用法
@@ -142,16 +142,17 @@ Phase 5: 性能 — 优化前后性能对比，落盘比对报告
   `Iterate<false>()`/`IterateAll<false>()` 避免每次迭代的 AIC/AIV 同步开销？
 
 #### 6. 标量  
+>
 > 详细示例：[references/scalar-prof.md](references/scalar-prof.md)
 排查项：
-- [ ]**6.1 one-hot**：使用 `for` 循环逐元素操作？
 
+- [ ]**6.1 one-hot**：使用 `for` 循环逐元素操作？
 
 ### 1.3 输出排查报告
 
 排查完所有阶段后，按以下格式输出汇总：
 
-```
+```text
 ## 优化排查报告
 
 ### 发现的问题（按预期收益排序）
@@ -179,13 +180,15 @@ Phase 5: 性能 — 优化前后性能对比，落盘比对报告
 2. 备份原始文件加目录位置：当前算子工程上一层级目录
 3. 命名时可以通过增加时间戳信息来命名，命名格式：原目录名称+时间戳
 
-
 ### 2.2 性能评估分析报告
+
 **MUST** 调用 **`msot-msopprof-operator-profiler`** skill 完成完整性能评估
+
 1. 进入到 **2.1** 备份文件夹目录
 2. 读取 `msot-msopprof-operator-profiler` SKILL.md
 3. 按照其流程进行性能优化前评估，识别性能瓶颈
-4. 将当前性能报告备份为基线文件，命名为 `算子名 ` + `_baseline_report.md`
+4. 将当前性能报告备份为基线文件，命名为 `算子名` + `_baseline_report.md`
+
 ---
 
 ## Phase 3: 优化 — 学习知识后修改代码
@@ -208,6 +211,7 @@ Phase 5: 性能 — 优化前后性能对比，落盘比对报告
 | `kernel-constraints.md` | Kernel 编程约束与常见陷阱 |
 
 根据 Phase 1 和 Phase2 发现的优化点，选择性加载相关 reference。例如：
+
 - 优化搬运 → 加载 `data-copy-api.md`
 - 优化流水 → 加载 `sync-control-api.md` + `resource-management-api.md`
 - 优化计算 → 加载 `vector-compute-api.md`
@@ -222,10 +226,10 @@ Phase 5: 性能 — 优化前后性能对比，落盘比对报告
 2. 在备份文件夹下实施代码修改
 3. 重新编译运行验证,确认输出包含 **"pass"** 或者无 **"error"** 信息或者开发者提供的精度正常标识，验证优化后功能正确性
 
-
 按照修改方案逐一修改代码。修改时遵守以下规则：
 
 **MUST 遵守 ascendc-api 反模式清单**：
+
 - **NEVER** 让 FP16/BF16 直接参与复杂数学计算，必须先 Cast 到 FP32
 - **NEVER** 在 EXEC_KERNEL_CMD 中传右值
 - **NEVER** 对 GM↔UB 搬运使用 DataCopy，必须用 DataCopyPad
@@ -253,35 +257,44 @@ Phase 5: 性能 — 优化前后性能对比，落盘比对报告
 ## Phase 5: 性能验证 — 确认优化效果
 
 ### 5.1 运行同 case 性能测试
+
 调用 **`msot-msopprof-operator-profiler`** skill 重新执行性能评估。
 
 关键要求：
+
 - **MUST** 使用与基线完全相同的用例shape
-- **MUST** 生成新的  `算子名 ` + `_optim_report.md`
+- **MUST** 生成新的  `算子名` + `_optim_report.md`
 - **MUST** 在当前对话中展示对比表、汇总与结论
 
 ### 阶段五：优化效果验证
 
 #### 步骤 5.1：重新采集上板性能数据
+
 1. 清理旧的 msprof 输出：`rm -rf {operator_dir}/OPPROF_*`
 2. 执行上板采集命令：
+
    ```bash
    cd {operator_dir} && msprof op {算子执行命令}
    ```
+
    或使用辅助脚本：
+
    ```bash
    bash {skill_dir}/scripts/e2e_profile_onboard.sh {operator_dir} {batch_size} {num_class}
    ```
+
 3. 找到新生成的 `OPPROF_*` 目录
 
 #### 步骤 5.2：对比分析
 
 使用辅助脚本生成对比报告（参考资源）：
+
 ```bash
 bash {skill_dir}/scripts/e2e_compare.sh {优化前_OPPROF_目录} {优化后_OPPROF_目录}
 ```
 
 ##### 5.2.1 总耗时对比
+
 - 优化前总耗时：从优化前的 `OpBasicInfo.csv` 读取 `Task Duration(us)`
 - 优化后总耗时：从优化后的 `OpBasicInfo.csv` 读取 `Task Duration(us)`
 - 计算加速比：`(优化前耗时 - 优化后耗时) / 优化前耗时 * 100%`
@@ -297,6 +310,7 @@ bash {skill_dir}/scripts/e2e_compare.sh {优化前_OPPROF_目录} {优化后_OPP
 | UB 读写带宽 | | | |
 
 ##### 5.2.3 流水线利用率对比
+
 - 优化前 vs 优化后的 `PipeUtilization.csv`
 - 检查 MTE1/MTE2/Cube/Vector 利用率变化
 
@@ -306,7 +320,7 @@ bash {skill_dir}/scripts/e2e_compare.sh {优化前_OPPROF_目录} {优化后_OPP
 
 参考按以下格式输出完整优化报告：
 
-```
+```text
 ================================================================
               基于 msprof op 的算子性能优化报告
 ================================================================
@@ -348,23 +362,27 @@ bash {skill_dir}/scripts/e2e_compare.sh {优化前_OPPROF_目录} {优化后_OPP
 ```
 
 #### 步骤 6.2：保存优化后代码
+
 1. 确保优化后的代码已保存到核函数文件
 2. 备份文件保留在重命名核函数文件
 
 ## 6. 执行规范
 
 ### 6.1 安全操作规范
+
 - 必须备份原算子工程目录后，再对备份的算子代码进行修改，严禁直接修改用户提供目录代码
 - 每次修改后必须验证功能正确性（检查 "pass"）
 - 性能采集前后必须清理旧的 `OPPROF_*` 目录
 - 性能报告结束后，清理产生的`OPPROF_*` 目录
 
 ### 6.2 数据管理规范
+
 - 优化前的性能数据目录：记录路径，用于对比
 - 优化后的性能数据目录：记录路径，用于对比
 - 每次优化迭代保存一份性能数据快照
 
 ### 6.3 错误处理
+
 | 错误类型           | 处理方法 |
 |----------------|----------|
 | 编译失败           | 检查编译错误输出，修复后重试 |
@@ -374,45 +392,51 @@ bash {skill_dir}/scripts/e2e_compare.sh {优化前_OPPROF_目录} {优化后_OPP
 | OPPROF_* 目录未生成 | 确认 msprof op 命令正确执行，检查输出日志 |
 
 ### 6.4 msprof op 采集说明
+
 - **上板采集**需要算子已在 NPU 上编译运行通过
 - **仿真采集**需要链接 simulator 库
 - 仿真采集的 `--soc-version` 需根据实际硬件型号设置（当前为 Ascend910B1）
 
-
 ## 检查清单（助手自检）
 
 ### Phase 1: 排查
+
 - [ ] 已读取完整源码
 - [ ] 已逐阶段加载 reference 并逐项排查
 - [ ] 已输出排查报告，优化点按预期收益排序
 
 ### Phase 2: 基线
+
 - [ ] 已保存基线快照（`_baseline_report.md`）
 
 ### Phase 3: 优化
+
 - [ ] 已加载 ascendc-api reference（修改前必读）
 - [ ] 代码修改遵守反模式清单
 - [ ] 编译安装成功
 
 ### Phase 4: 精度
+
 - [ ] 精度验证通过
 
 ### Phase 5: 性能
+
 - [ ] 已在对话中展示性能对比数据
 - [ ] 已判定是否提升
 
 ### 输出
+
 - [ ] **已在当前对话中展示**排查总结、性能对比、≥3 条结论
 - [ ] **NEVER** 仅输出文件路径
-
-
 
 ## 核心参考资源
 
 ### 算子源码
+
 - **算子目录**：由用户提供
 
 ### 编译运行脚本
+
 - **上板编译运行**：由用户提供
 - **仿真编译**：由用户提供
 - **算子执行命令**：由用户提供，或基于用户提供的readme文档提取
@@ -420,24 +444,30 @@ bash {skill_dir}/scripts/e2e_compare.sh {优化前_OPPROF_目录} {优化后_OPP
 ### 性能采集命令
 
 #### 上板采集
+
 ```bash
 cd {operator_dir} && rm -rf OPPROF_* && msprof op {算子执行命令}
 ```
 
 #### 仿真采集
+
 ```bash
 cd {operator_dir} && rm -rf OPPROF_* && msprof op simulator --soc-version=Ascend910B1 {算子执行命令}
 ```
 
 ### 算子执行参数
+
 - 算子执行命令：用户提供
 
-###  前置技能
+### 前置技能
+
 - **msot-msopprof-operator-profiler**：用于对采集到的 msprof op 性能数据进行深度分析
 - **ascendc-operator-performance-optim**：用于算子性能优化
 
 ### 辅助脚本(参考编译)
+
 本 skill 提供以下辅助脚本（位于 `{skill_dir}/scripts/`）：
+
 - `e2e_compile_run.sh` - 编译并运行算子（基准版本）
 - `e2e_profile_onboard.sh` - 编译 + 上板运行 + msprof op 性能采集
 - `e2e_profile_simulator.sh` - 编译 + 仿真运行 + msprof op simulator 性能采集

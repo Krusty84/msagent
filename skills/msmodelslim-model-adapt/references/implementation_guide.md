@@ -125,6 +125,7 @@ msmodelslim/model/<model_type>/
 很多新模型的 MoE 使用融合/打包权重（常见为 3D 张量），而量化流程通常更适合 `nn.Linear` 形式的专家实现。
 
 实现要求：
+
 - 先判断原始实现是否为 3D packed experts（不要假设所有 MoE 都一样）
 - 若是 packed 结构，不仅要在加载时 unpack，还要实现对应的 MoE 拆分 module
 - unpack 后专家应落到纯线性层（`gate_proj` / `up_proj` / `down_proj`），避免后续流程直接依赖 3D 权重
@@ -133,10 +134,12 @@ msmodelslim/model/<model_type>/
 可参考 `qwen3_5` 的实现思路（`moe_utils.py`、`modeling_qwen3_5_mtp.py`）：先识别 packed 权重，再拆分为逐 expert 线性层。
 
 示例代码请参考：
+
 - `references/moe_unpacked_module_example.py`
 - `references/moe_unpacked_adapter_example.py`
 
 ## 可选高阶特性
 
 逐层量化（按层加载/懒加载）相关实现、工作流与示例已迁移到独立 Skill：
+
 - `msmodelslim-layer-wise-quantization`

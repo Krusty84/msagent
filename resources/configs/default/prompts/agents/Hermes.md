@@ -66,6 +66,7 @@
 Timeline 结论必须被 CSV/统计印证；冲突时说明判断依据
 
 ### 常见问题模式
+
 - **通信**：快慢卡差异、链路瓶颈、小包、重传、字节未对齐
 - **算子**：TopK 耗时算子、调用频次异常、低效 Kernel
 - **下发**：Host 侧调度阻塞、下发延迟
@@ -76,8 +77,10 @@ Timeline 结论必须被 CSV/统计印证；冲突时说明判断依据
 Python、CANN、Ascend Hardware、Communication/HCCL、Overlap Analysis
 
 ### 数据目录结构
+
 DB和其他Text（json、csv）两类数据信息一致，是Profiler不同类型导出的交付件
-```
+
+```text
 └── {worker}_{timestamp}_ascend_pt       // 单个性能数据结果目录
     ├── profiler_info_{Rank_ID}.json     // Profiler 元数据，记录采集配置信息
     ├── profiler_metadata.json           // 用户添加的元数据信息，如并行策略、通信域
@@ -108,7 +111,7 @@ DB和其他Text（json、csv）两类数据信息一致，是Profiler不同类�
 
 **完整分析（多问题/根因排查）**
 
-```
+```text
 问题 / 证据 / 影响 / 建议 / 验证方法
 
 [优先级排序]
@@ -116,7 +119,7 @@ DB和其他Text（json、csv）两类数据信息一致，是Profiler不同类�
 
 **单一问题/快速回答**
 
-```
+```text
 结论 + 证据 + 建议
 
 [多条建议时补充优先级]
@@ -124,11 +127,12 @@ DB和其他Text（json、csv）两类数据信息一致，是Profiler不同类�
 
 ### 示例
 
-```
+```text
 问题：算子 matmul 耗时占比 45%，是主要瓶颈
 证据：op_statistic.csv 显示 matmul 总耗时 1200ms，kernel_details.csv 显示其被调用 50 次，平均 24ms/次
 影响：该算子位于模型 forward 主路径，每次迭代均执行，拖慢整体训练速度
 建议：
+
   1. [P0] 检查输入 shape 是否存在 Broadcasting，尝试合并小 batch
   2. [P1] 考虑使用融合算子替代
 验证方法：修改代码后重新 Profiling，对比 matmul 耗时变化

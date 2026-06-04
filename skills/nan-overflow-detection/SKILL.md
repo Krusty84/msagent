@@ -19,7 +19,7 @@ description: |
 
 ## 数据文件结构
 
-```
+```text
 input_path/
 ├── rank0/
 │   ├── dump.json      # 算子输入输出数据
@@ -35,6 +35,7 @@ input_path/
 ### 文件格式
 
 **dump.json** — 算子数据：
+
 ```json
 {
   "framework": "pytorch",
@@ -50,6 +51,7 @@ input_path/
 ```
 
 **construct.json** — 调用链：
+
 ```json
 {
   "Torch.ops.aten.linear_0_0": "Torch.nn.functional.linear_0_0"
@@ -57,6 +59,7 @@ input_path/
 ```
 
 **stack.json** — 代码位置：
+
 ```json
 {
   "Torch.ops.aten.linear_0_0": ["linear", "forward.py", 123]
@@ -66,12 +69,14 @@ input_path/
 ## 溢出判定规则
 
 基于 `output` 字段中的 Max/Min 值：
+
 - **NaN**: `"Max": "nan"` 或 `"Min": "nan"`
 - **Inf**: `"Max": "inf"`, `"Min": "inf"`, `"Max": "-inf"`, `"Min": "-inf"`
 
 ## 非计算算子过滤
 
 以下算子产生 NaN/Inf 是正常现象，应被过滤：
+
 - `torch.empty`, `torch.full`, `torch.zeros`, `torch.ones` — 内存初始化
 - `Tensor.to`, `Tensor.clone`, `Tensor.detach` — 类型转换/复制
 - `NPU.*_empty`, `NPU.*_full` — NPU 初始化算子
@@ -79,6 +84,7 @@ input_path/
 ## 合法 -Infinity 过滤
 
 以下算子合法产生 -Infinity，不算溢出：
+
 - `Tensor.masked_fill`, `Torch.masked_fill` — MoE routing、attention mask
 - `Tensor.where`, `Torch.where` — 条件操作
 - `Tensor.triu`, `Torch.triu`, `Tensor.tril`, `Torch.tril` — 三角矩阵
@@ -129,9 +135,11 @@ def is_anomaly(op_data):
 ## 输出
 
 ### 跨 rank 分析结果
+
 每个通信算子的源卡、传播卡、正常卡列表。
 
 ### 单卡追溯结果
+
 ```json
 {
   "rank": 168,

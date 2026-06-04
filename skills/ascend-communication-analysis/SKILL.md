@@ -54,7 +54,6 @@ Common cluster-analysis tables:
 | `ClusterCommunicationBandwidth` | Cluster-wide communication bandwidth table. It records op name, group name, rank, step, link/band type, transit size, transit time, bandwidth, and large-packet ratio. | Use later only for selected candidate ops when checking real communication bottlenecks.                                                   |
 | `ClusterCommunicationMatrix` | Cluster-wide communication matrix table. It records source/destination rank pairs, communication group, transport/link type, transit size/time, and bandwidth. | Use after candidate selection to inspect link-level route, rank-pair imbalance, local/global rank interpretation, and SDMA/RDMA evidence. |
 
-
 ## Collection Level Rules
 
 Determine collection level from `profiler_info.json`, using its `profiler_level`-related field(s) as the source of truth.
@@ -116,7 +115,6 @@ Use DB artifacts as the source of truth. For any SQL query or schema inspection,
 
 Do not invoke the local `sqlite3` CLI, Python `sqlite3`, or shell commands that open DB files for ad hoc querying when `msprof_mcp-execute_sql` is available. Only fall back to local DB querying if `msprof_mcp-execute_sql` is unavailable, cannot access the target DB, or fails on the required query.
 
-
 ## Script Tools
 
 Use bundled scripts for deterministic extraction when they cover the needed evidence. For fields not covered by scripts, use `msprof_mcp-execute_sql`; do not use local SQLite querying as the normal path.
@@ -170,21 +168,21 @@ During the workflow, surface key intermediate results to the user as soon as the
    - Use `--step-id` when needed to limit the analysis to a specific step.
    - The agent decides from the evidence whether high duration is wait-caused, straggler-related, or insufficient evidence.
 
-Example:
-```bash
-python3 skills/ascend-communication-analysis/scripts/collect_wait_evidence.py \
-  --db cluster_analysis_output/cluster_analysis.db \
-  --op-name hcom_allReduce__123_0_1 \
-  --op-name hcom_allGather__318_0_1 \
-  --op-name hcom_reduceScatter__456_0_1 \
-  --output-csv timing_evidence.csv
-```
+      Example:
+
+      ```bash
+      python3 skills/ascend-communication-analysis/scripts/collect_wait_evidence.py \
+      --db cluster_analysis_output/cluster_analysis.db \
+      --op-name hcom_allReduce__123_0_1 \
+      --op-name hcom_allGather__318_0_1 \
+      --op-name hcom_reduceScatter__456_0_1 \
+      --output-csv timing_evidence.csv
+      ```
 
 8. **Gate on wait diagnosis result**: After Step 7, classify each selected communication instance as `wait-caused`, `real-transfer-slow-suspected`, or `insufficient-evidence`. If the evidence clearly shows the long duration is caused by inter-rank waiting, stop the diagnosis for that instance and do not continue into retry, relay, bandwidth, or fault-mode checks.
 9. **Collect transfer evidence only for non-wait cases**: For each `real-transfer-slow-suspected` instance, choose the concrete communication op on the rank with the longest duration. Use `msprof_mcp-execute_sql` on `ClusterCommunicationBandwidth`, rank-level `analysis.db`, and when needed `ClusterCommunicationMatrix` to collect transfer size, transit time, bandwidth, link/band type, and rank-pair imbalance. Read the corresponding row in rank-level `ascend_pytorch_profiler_{rank_id}.db` `COMMUNICATION_OP` for `relay` and `retry`.
 10. **Compare peer and baseline behavior**: For each transfer-slow case, compare the longest rank with peer ranks in the same communication instance, and compare against same communication type / similar transfer size / same communication group or link type when available. Optional checks include whether memory-intensive compute overlaps the same time window on that rank, whether a no-overlap same-shape communication instance provides a baseline, and whether the corresponding communication small tasks show abnormal decomposition or timing.
 11. **Produce evidence-backed gated diagnosis**: For `wait-caused` instances, report only the wait chain and supporting timing fields. For `real-transfer-slow-suspected` instances, map the collected transfer evidence to the handbook fault modes when possible. For `insufficient-evidence`, state the missing DB tables, fields, or comparison samples. Every conclusion must cite the DB table / DB field / script output field that supports it, and separate overview facts from candidate-selection reasoning and later deep-dive conclusions.
-
 
 ## Wait Diagnosis
 

@@ -29,7 +29,7 @@ make -C docs html
 
 构建完成后，在浏览器中打开：
 
-```
+```text
 <项目根目录>/docs/_build/html/index.html
 ```
 

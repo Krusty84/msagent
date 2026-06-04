@@ -40,12 +40,14 @@ Kernel 中**禁止**使用任何动态内存分配:
 **静默截断**: 传入 256 会被截断为 0，导致**不执行任何计算**且无报错。
 
 ### Host 端防护
+
 ```cpp
 // Tiling 阶段限制最大行数
 tileRows = std::min(tileRows, static_cast<uint32_t>(255));
 ```
 
 ### Kernel 端分批
+
 ```cpp
 int64_t remaining = rowCount;
 int64_t offset = 0;
@@ -64,6 +66,7 @@ while (remaining > 0) {
 ## Compare API 256 字节对齐
 
 Compare 要求参与比较的数据区域为 **256 字节整数倍**。不足部分需 padding:
+
 - ArgMax → padding 填 `-inf` 或 `-FLT_MAX`
 - ArgMin → padding 填 `+inf` 或 `FLT_MAX`
 
@@ -90,6 +93,7 @@ if (alignedCount > count) {
 | `DataCopy(GM↔UB)` | 无法处理非对齐数据 | `DataCopyPad` |
 
 仅允许调试时使用:
+
 ```cpp
 AscendC::printf("debug: xGm[0]=%f\n", xGm.GetValue(0));  // 仅调试
 ```

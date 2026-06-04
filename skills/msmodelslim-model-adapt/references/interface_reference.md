@@ -22,6 +22,7 @@ class IModel:
 ```
 
 实现要求：
+
 - `model_type`：返回模型类型标识。
 - `model_path`：返回模型目录路径。
 - `trust_remote_code`：返回是否允许远程代码。
@@ -56,6 +57,7 @@ class PipelineInterface(IModel):
 ```
 
 实现重点：
+
 - `generate_model_visit` 与 `generate_model_forward` 的层顺序必须严格一致。
 - `handle_dataset` 输出必须可直接用于前向。
 - `init_model` 返回可执行前向且可被逐层访问的模型。
@@ -73,6 +75,7 @@ def get_model_type(self) -> str
 ```
 
 说明：
+
 - 该接口通常与 `TransformersModel + ModelSlimPipelineInterfaceV1` 组合使用。
 - 若你的适配流程或导出流程依赖模型家族信息，建议实现。
 

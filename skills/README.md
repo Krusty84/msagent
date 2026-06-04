@@ -3,6 +3,7 @@
 一个面向支持 `SKILL.md` 约定的 AI Agent 的技能仓库，当前重点覆盖 **Ascend / MindStudio Profiling 分析**，并补充文档体验审查、GitCode PR 审查等通用辅助技能。
 
 这个仓库的目标不是堆积提示词，而是把可复用的诊断经验、明确的 SOP、以及必要的脚本工具收敛到同一个技能目录里，让 Agent 在合适场景下稳定触发、稳定执行、稳定输出。
+
 ## 快速使用
 
 ### 1. 选择一个 skill
@@ -124,7 +125,6 @@
 ├── op-mfu-calculator/
 │   └── SKILL.md
 ```
-
 
 ## Skill 设计约定
 

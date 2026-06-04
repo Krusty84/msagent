@@ -352,6 +352,7 @@ msprof op simulator --soc-version=Ascend910B4 --export=./dump_dir --output=./out
 | `BasicInfo` | 只采集基础信息 | `OpBasicInfo.csv` | 轻量模式 |
 
 > 说明：
+> 
 > - 如果用户既要 `TimelineDetail` 又要常规 CSV / 计算内存热力图，通常需要显式带上 `Default`。
 > - `TimelineDetail` / `Source` / `MemoryDetail` 与 `range replay` 不能共存。
 

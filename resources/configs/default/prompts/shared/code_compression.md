@@ -85,7 +85,7 @@ If there is a next step, include direct quotes from the most recent conversation
 
 Here's an example of how your output should be structured:
 
-```
+```text
 <analysis>
 [Your thought process, ensuring all points are covered thoroughly and accurately]
 </analysis>
@@ -146,13 +146,15 @@ There may be additional summarization instructions provided in the included cont
 ### Examples of Additional Instructions
 
 **Example 1: Compact Instructions**
-```
+
+```text
 ## Compact Instructions
 When summarizing the conversation focus on typescript code changes and also remember the mistakes you made and how you fixed them.
 ```
 
 **Example 2: Summary Instructions**
-```
+
+```text
 # Summary instructions
 When you are using compact - please focus on test output and code changes. Include file reads verbatim.
 ```

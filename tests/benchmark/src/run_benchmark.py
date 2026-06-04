@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
 from statistics import mean
 from typing import Any
@@ -63,7 +64,7 @@ def run(
         trace_path = traces_dir / f"{case.id}.trace.json"
         trace_path.write_text(json.dumps(trace, indent=2, ensure_ascii=False), encoding="utf-8")
 
-        judge_result = _normalize_judge_result(case, judge.judge(case, trace))
+        judge_result = _normalize_judge_result(case, judge.judge(case, trace), trace)
         judge_path = judge_dir / f"{case.id}.judge.json"
         judge_path.write_text(
             json.dumps(judge_result, indent=2, ensure_ascii=False),
@@ -193,13 +194,13 @@ def _build_judge(
 def _normalize_judge_result(
     case: BenchmarkCase,
     judge_result: dict[str, Any],
+    trace: dict[str, Any],
 ) -> dict[str, Any]:
     normalized = dict(judge_result)
     normalized["rubric_score"] = _clamp_score(normalized.get("rubric_score", 0.0))
     normalized["must_include_results"] = _normalize_must_include_results(case, normalized)
-    normalized["must_include_pass"] = all(
-        item["covered"] for item in normalized["must_include_results"]
-    )
+    normalized["must_include_results"].extend(_regex_must_include_results(case, trace))
+    normalized["must_include_pass"] = all(item["covered"] for item in normalized["must_include_results"])
     return normalized
 
 
@@ -224,18 +225,61 @@ def _normalize_must_include_results(
         if raw is None and index < len(raw_items):
             raw = raw_items[index]
         if raw is None:
-            normalized.append({
-                "item": required_item,
-                "covered": False,
-                "reason": "Judge did not return a result for this required item.",
-            })
+            normalized.append(
+                {
+                    "item": required_item,
+                    "covered": False,
+                    "reason": "Judge did not return a result for this required item.",
+                }
+            )
             continue
-        normalized.append({
-            "item": required_item,
-            "covered": bool(raw.get("covered")),
-            "reason": str(raw.get("reason", "")).strip(),
-        })
+        normalized.append(
+            {
+                "item": required_item,
+                "covered": bool(raw.get("covered")),
+                "reason": str(raw.get("reason", "")).strip(),
+            }
+        )
     return normalized
+
+
+def _regex_must_include_results(
+    case: BenchmarkCase,
+    trace: dict[str, Any],
+) -> list[dict[str, Any]]:
+    if not case.must_include_regex:
+        return []
+
+    answer_text = _final_answer_text(trace)
+    results = []
+    for pattern in case.must_include_regex:
+        covered = re.search(pattern, answer_text, re.IGNORECASE | re.MULTILINE) is not None
+        results.append(
+            {
+                "item": pattern,
+                "covered": covered,
+                "reason": (
+                    "Regex pattern matched the final answer text."
+                    if covered
+                    else "Regex pattern did not match the final answer text."
+                ),
+            }
+        )
+    return results
+
+
+def _final_answer_text(trace: dict[str, Any]) -> str:
+    for event in reversed(trace.get("events", [])):
+        if event.get("type") != "final_answer":
+            continue
+        answer = event.get("answer")
+        if not isinstance(answer, dict):
+            return ""
+        raw_answer = answer.get("answer", "")
+        if isinstance(raw_answer, str):
+            return raw_answer
+        return json.dumps(raw_answer, ensure_ascii=False)
+    return ""
 
 
 def _clamp_score(value: Any) -> float:
@@ -269,11 +313,7 @@ def _render_markdown_report(report: dict[str, Any]) -> str:
         "| --- | ---: | ---: | --- | --- |",
     ]
     for item in report["scores"]:
-        missing_items = [
-            result["item"]
-            for result in item.get("must_include_results", [])
-            if not result.get("covered")
-        ]
+        missing_items = [result["item"] for result in item.get("must_include_results", []) if not result.get("covered")]
         lines.append(
             "| {case_id} | {score:.4f} | {judge_score:.2f} | {must_include} | {missing} |".format(
                 case_id=item["case_id"],
@@ -346,8 +386,7 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["codex-cli", "claude-cli", "msagent-cli", "heuristic"],
         default="codex-cli",
         help=(
-            "Agent adapter to run. codex-cli, claude-cli, and msagent-cli are real CLI agents; "
-            "heuristic is local-only."
+            "Agent adapter to run. codex-cli, claude-cli, and msagent-cli are real CLI agents; heuristic is local-only."
         ),
     )
     parser.add_argument(
@@ -355,8 +394,7 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["codex-cli", "claude-cli", "msagent-cli", "heuristic"],
         default="codex-cli",
         help=(
-            "Judge adapter to run. codex-cli, claude-cli, and msagent-cli are real LLM judges; "
-            "heuristic is local-only."
+            "Judge adapter to run. codex-cli, claude-cli, and msagent-cli are real LLM judges; heuristic is local-only."
         ),
     )
     parser.add_argument("--model", help="Model for the selected real CLI agent.")
@@ -381,10 +419,7 @@ def main() -> None:
         timeout_seconds=args.timeout_seconds,
         msagent_agent=args.msagent_agent,
     )
-    print(
-        f"Ran {report['case_count']} cases from {report['suite']}; "
-        f"average_score={report['average_score']:.4f}"
-    )
+    print(f"Ran {report['case_count']} cases from {report['suite']}; average_score={report['average_score']:.4f}")
 
 
 if __name__ == "__main__":

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -42,9 +43,7 @@ def _load_simple_case_yaml(text: str, path: Path) -> dict[str, Any]:
         if value in {">", "|"}:
             block_lines: list[str] = []
             index += 1
-            while index < len(lines) and (
-                lines[index].startswith((" ", "\t")) or not lines[index].strip()
-            ):
+            while index < len(lines) and (lines[index].startswith((" ", "\t")) or not lines[index].strip()):
                 block_lines.append(lines[index].strip())
                 index += 1
             result[key] = "\n".join(block_lines) if value == "|" else " ".join(block_lines)
@@ -53,9 +52,7 @@ def _load_simple_case_yaml(text: str, path: Path) -> dict[str, Any]:
         if value == "":
             list_items: list[str] = []
             index += 1
-            while index < len(lines) and (
-                lines[index].startswith((" ", "\t")) or not lines[index].strip()
-            ):
+            while index < len(lines) and (lines[index].startswith((" ", "\t")) or not lines[index].strip()):
                 item = lines[index].strip()
                 if item.startswith("- "):
                     list_items.append(item[2:].strip().strip("\"'"))
@@ -82,16 +79,13 @@ class BenchmarkCase:
     input_data_path: str
     prompt: str
     must_include: list[str]
+    must_include_regex: list[str]
     scoring_prompt: str
     source_path: Path = field(repr=False)
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any], source_path: Path) -> "BenchmarkCase":
-        missing = [
-            key
-            for key in ("input_data_path", "prompt", "must_include", "scoring_prompt")
-            if key not in raw
-        ]
+        missing = [key for key in ("input_data_path", "prompt", "must_include", "scoring_prompt") if key not in raw]
         if missing:
             raise ValueError(f"{source_path} is missing required field(s): {', '.join(missing)}")
 
@@ -99,11 +93,19 @@ class BenchmarkCase:
         if not scoring_prompt:
             raise ValueError(f"{source_path} scoring_prompt must not be empty.")
 
+        must_include_regex = _normalize_string_list(
+            raw.get("must_include_regex", []),
+            source_path,
+            "must_include_regex",
+        )
+        _validate_regex_list(must_include_regex, source_path)
+
         return cls(
             id=str(raw.get("id") or source_path.stem),
             input_data_path=str(raw["input_data_path"]),
             prompt=str(raw["prompt"]),
             must_include=_normalize_string_list(raw["must_include"], source_path, "must_include"),
+            must_include_regex=must_include_regex,
             scoring_prompt=scoring_prompt,
             source_path=source_path,
         )
@@ -157,3 +159,11 @@ def _normalize_string_list(value: Any, source_path: Path, field_name: str) -> li
     if isinstance(value, list):
         return [str(item).strip() for item in value if str(item).strip()]
     raise ValueError(f"{source_path} {field_name} must be a list of strings.")
+
+
+def _validate_regex_list(patterns: list[str], source_path: Path) -> None:
+    for pattern in patterns:
+        try:
+            re.compile(pattern, re.IGNORECASE | re.MULTILINE)
+        except re.error as exc:
+            raise ValueError(f"{source_path} must_include_regex contains invalid regex {pattern!r}: {exc}") from exc

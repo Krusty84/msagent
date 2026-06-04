@@ -10,6 +10,8 @@
 4. 要求 Agent 输出统一 JSON 答案。
 5. 将 Agent trace、最终答案、`must_include` 和 `scoring_prompt` 交给 judge。
 6. judge 判断答案是否覆盖 `must_include`，并按 `scoring_prompt` 给出 0 到 5 分。
+   如 case 配置了 `must_include_regex`，benchmark 会额外用正则确定性校验最终
+   `answer` 文本。
 7. 输出 trace、judge、metrics、scores 和 Markdown report。
 
 ## 目录结构
@@ -39,6 +41,9 @@ src/
 - `input_data_path`：case 数据目录或数据文件路径。相对路径按 YAML 文件所在目录解析。
 - `prompt`：给被测 Agent 的任务说明。
 - `must_include`：答案必须语义覆盖的内容列表。judge 会逐项判断是否覆盖。
+- `must_include_regex`：可选。最终 `answer` 文本必须匹配的正则表达式列表。
+  使用 Python `re.search`，默认 flags 为 `re.IGNORECASE | re.MULTILINE`，不启用
+  `DOTALL`。
 - `scoring_prompt`：judge 的评分标准 prompt，用于给出 0 到 5 分。
 
 `id` 是可选字段；缺省时使用 YAML 文件名作为 case id。
@@ -52,6 +57,8 @@ prompt: >
 must_include:
   - 必须覆盖的事实或结论 A
   - 必须覆盖的事实或结论 B
+must_include_regex:
+  - "rank\\s*3"
 scoring_prompt: >
   按 0-5 分评价答案质量，重点看结论是否准确、证据是否充分、推理是否清晰。
 ```
@@ -84,10 +91,11 @@ judge 有两个职责：
 1. 对 `must_include` 中的每一项判断 `covered=true/false`，使用语义覆盖标准，允许同义表达和合理改写。
 2. 根据 `scoring_prompt` 给出 `rubric_score`，范围为 0 到 5。
 
-最终分数规则：
+`must_include_regex` 不交给 LLM judge；它会在 judge 结果归一化时追加到
+`must_include_results`。最终分数规则：
 
 ```text
-if any must_include item is missing:
+if any must_include or must_include_regex item is missing:
   score = 0
 else:
   score = rubric_score / 5

@@ -31,6 +31,7 @@ from deepagents.middleware import (
     SkillsMiddleware,
 )
 from langchain.agents.middleware import TodoListMiddleware
+from msagent.middlewares.llm_retry import LLMRetryMiddleware
 from msagent.middlewares.tool_result_eviction import ToolResultEvictionMiddleware
 
 __all__ = [
@@ -38,5 +39,6 @@ __all__ = [
     "TodoListMiddleware",
     "SkillsMiddleware",
     "MemoryMiddleware",
+    "LLMRetryMiddleware",
     "ToolResultEvictionMiddleware",
 ]

@@ -89,6 +89,25 @@ class ModelRetryConfig(BaseModel):
             "init_chat_model(timeout=...). If null, use LLM config timeout."
         ),
     )
+    backoff_factor: float = Field(
+        default=2.0,
+        ge=0,
+        description="Backoff multiplier for msagent-managed LLM retries.",
+    )
+    initial_delay: float = Field(
+        default=1.0,
+        ge=0,
+        description="Initial retry delay in seconds for msagent-managed LLM retries.",
+    )
+    max_delay: float = Field(
+        default=60.0,
+        ge=0,
+        description="Maximum retry delay in seconds for msagent-managed LLM retries.",
+    )
+    jitter: bool = Field(
+        default=True,
+        description="Whether to apply jitter to msagent-managed LLM retries.",
+    )
 
 
 class ToolRetryConfig(BaseModel):
@@ -352,6 +371,10 @@ class BaseAgentConfig(VersionedConfig):
                     "enabled": True,
                     "max_retries": 3,
                     "timeout": None,
+                    "backoff_factor": 2.0,
+                    "initial_delay": 1.0,
+                    "max_delay": 60.0,
+                    "jitter": True,
                 },
                 "tool": {
                     "enabled": True,

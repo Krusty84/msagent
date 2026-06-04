@@ -38,6 +38,7 @@ from langchain.agents.middleware.types import AgentMiddleware
 from msagent.agents.local_context import ensure_local_context_prompt
 from msagent.core.constants import CONFIG_CONVERSATION_HISTORY_DIR
 from msagent.llms.factory import LLMFactory
+from msagent.middlewares.llm_retry import LLMRetryMiddleware
 from msagent.middlewares.tool_result_eviction import ToolResultEvictionMiddleware
 from msagent.tools.catalog import fetch_skills, fetch_tools, get_skill, get_tool, run_tool
 from msagent.tools.factory import ToolFactory
@@ -183,15 +184,28 @@ class AgentFactory:
         tool_retry_cfg = getattr(retry_cfg, "tool", None) if retry_cfg is not None else None
         llm_max_retries: int | None = None
         llm_timeout_seconds: float | None = None
+        llm_retry_middleware: LLMRetryMiddleware | None = None
         if retry_cfg is not None and retry_cfg.enabled:
             model_enabled = getattr(model_retry_cfg, "enabled", True) if model_retry_cfg is not None else True
             if model_enabled:
-                llm_max_retries = int(getattr(model_retry_cfg, "max_retries", 0))
+                model_max_retries = int(getattr(model_retry_cfg, "max_retries", 0))
+                # Disable provider-level automatic retries when msagent manages
+                # LLM retries itself, so delays and user-facing notices stay
+                # consistent and we do not double-retry the same request.
+                llm_max_retries = 0
                 llm_timeout_seconds = (
                     float(getattr(model_retry_cfg, "timeout"))
                     if model_retry_cfg is not None and getattr(model_retry_cfg, "timeout", None) is not None
                     else None
                 )
+                if model_max_retries > 0:
+                    llm_retry_middleware = LLMRetryMiddleware(
+                        max_retries=model_max_retries,
+                        backoff_factor=float(getattr(model_retry_cfg, "backoff_factor", 2.0)),
+                        initial_delay=float(getattr(model_retry_cfg, "initial_delay", 1.0)),
+                        max_delay=float(getattr(model_retry_cfg, "max_delay", 60.0)),
+                        jitter=bool(getattr(model_retry_cfg, "jitter", True)),
+                    )
             else:
                 llm_max_retries = 0
         elif retry_cfg is not None and not retry_cfg.enabled:
@@ -294,6 +308,8 @@ class AgentFactory:
                     tool_token_limit_before_evict=tool_output_max_tokens,
                 )
             )
+        if llm_retry_middleware is not None:
+            middleware.append(llm_retry_middleware)
         middleware.append(_SystemMessageMiddleware())
 
         raw_system_prompt = config.prompt

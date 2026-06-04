@@ -3,79 +3,6 @@
 一个面向支持 `SKILL.md` 约定的 AI Agent 的技能仓库，当前重点覆盖 **Ascend / MindStudio Profiling 分析**，并补充文档体验审查、GitCode PR 审查等通用辅助技能。
 
 这个仓库的目标不是堆积提示词，而是把可复用的诊断经验、明确的 SOP、以及必要的脚本工具收敛到同一个技能目录里，让 Agent 在合适场景下稳定触发、稳定执行、稳定输出。
-
-## 特点
-
-- 聚焦真实问题场景，而不是抽象能力描述
-- 每个 skill 都有清晰的触发条件、边界和输出要求
-- 复杂流程优先固化为脚本，减少 Agent 临场发挥带来的不确定性
-- 保持轻量目录结构，便于直接复制、组合或迁移到其他 skill 仓库
-
-## 当前技能
-
-| Skill | 说明                                                                                                    | 典型输入                                                                                     | 依赖                                                                     |
-| --- |-------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------|------------------------------------------------------------------------|
-| [`ascend-profiler-db-explorer`](./ascend-profiler-db-explorer/SKILL.md) | 面向 Ascend PyTorch Profiler / msprof 数据库的 SQL 分析技能，把自然语言问题转成安全可执行 SQL，并结合表结构输出诊断结论                     | `ascend_pytorch_profiler*.db` / `msprof_*.db` 路径，或“TopK 算子 / 通信耗时 / 下发分析 / schema 查询”等问题 | `sqlite3`、Python                                                       |
-| [`cluster-fast-slow-rank-detector`](./cluster-fast-slow-rank-detector/SKILL.md) | 面向 Ascend 集群 Profiling 的快慢卡诊断，区分 Host 下发慢、计算慢、通信慢等瓶颈类型                                                | 集群 profiling 根目录、慢卡/快卡分析诉求                                                               | `msprof-analyze-advisor`、Python、`pandas`                               |
-| [`document-ux-review`](./document-ux-review/SKILL.md) | 像第一次接触项目的人一样按 README / quick start 真跑一遍，判断新人是否能走通并输出文档体验问题报告                                          | 仓库链接或本地仓库路径，以及“按 README 试一下 / 帮我检查文档能不能跑通”这类请求                                           | 目标项目所需运行环境、Shell、包管理工具                                                 |
-| [`gitcode-code-reviewer`](./gitcode-code-reviewer/SKILL.md) | 审查 GitCode PR，结合 PR metadata、diff 和仓库上下文给出深度审查结论，并可按需发布逐行评论                                           | GitCode PR 链接，或“review this PR / 检视这个 PR / 检查 PR”这类请求                                    | Python、`git`、`GITCODE_TOKEN` 或 `git config --global gitcode.token ...` |
-| [`mindstudio_profiler_data_check`](./mindstudio_profiler_data_check/SKILL.md) | 对 MindStudio profiler / msprof 采集结果做前置体检，判断是否可进入后续分析                                                  | profiler 结果目录                                                                            | `msprof`，离线解析时依赖 `torch_npu` 或 `mindspore`                             |
-| [`op-mfu-calculator`](./op-mfu-calculator/SKILL.md) | 计算 matmul / GEMM / FlashAttention 等算子的 MFU，并给出推导过程                                                    | 算子类型、shape、执行时间、峰值算力                                                                     | 无额外脚本依赖                                                                |
-| [`msprof-analyze-cli`](./msprof-analyze-cli/SKILL.md) | 面向 Ascend 性能数据的综合分析，涵盖【集群分析】和【专家建议】两大能力。 | 集群 profiling 路径、性能瓶颈/调优建议诉求                                              | `msprof-analyze`，Python                                                   |
-| [`github-raw-fetch`](./github-raw-fetch/SKILL.md) | 读取 GitHub 仓库中的源码、配置、README、Markdown 与 docs；普通文件自动将 `blob` 链接转换为 raw，docs 场景会先读取同仓库同 `ref` 的 `agent_router.md` 再定位真实路径 | GitHub `blob` / raw 文件链接，或“读取某仓库某篇 docs”这类请求                                             | 支持网络抓取的 Agent / 工具，推荐 `curl` / `curl.exe`                              |
-| [`ascendc-operator-performance-optim`](./ascendc-operator-performance-optim/SKILL.md) | 基于 msprof op 性能数据诊断 AscendC 算子性能瓶颈，给出代码优化建议，并参考 AscendC 高阶 API 文档生成优化后的代码                             | msprof op 性能数据目录、算子源码路径、AscendC API 文档链接                                                 | Python3                                                                |
-| [`msot-msopprof-operator-profiler`](./msot-msopprof-operator-profiler/SKILL.md) | 基于 msprof op 工具深度分析算子性能瓶颈，给出算子信息、关键性能数据、TOP5性能瓶颈、TOP5优化建议与报告总结，提升开发者算子性能优化效率  | 算子可执行程序、算子msprof op 性能数据目录                                                               | Python3                                                                |
-| [`nan-overflow-detection`](./nan-overflow-detection/SKILL.md) | 多卡分布式训练 loss/gnorm 精度溢出检测与根因追溯，跨 rank 定位源卡并追溯根因算子                                              | 包含 rank 子目录（`rank0/`, `rank1/`, ...）的 step0 目录                                          | Python3                                                                |
-| [`deterministic-calculation-analysis`](./deterministic-calculation-analysis/SKILL.md) | 执行 MindStudio Probe (msProbe) 数据比对并分析比对结果，定位确定性计算问题首个输入一致输出不一致的API       |  msPorbe dump 数据目录（采集统计信息和tensor的CRC-32校验值，task="statistics", summary_mode="md5"）     | Python3, `msProbe`                                                                |
-
-## 目录结构
-
-```text
-.
-├── README.md
-├── ascend-profiler-db-explorer/
-│   ├── SKILL.md
-│   ├── references/
-│   └── scripts/
-├── cluster-fast-slow-rank-detector/
-│   ├── SKILL.md
-│   └── scripts/
-│       ├── compare_api_stats.py
-│       ├── compare_op_stats.py
-│       └── rank_data_finder.py
-├── document-ux-review/
-│   └── SKILL.md
-├── gitcode-code-reviewer/
-│   ├── SKILL.md
-│   ├── examples/
-│   ├── references/
-│   └── scripts/
-│       ├── fetch_pr_info.py
-│       ├── post_pr_comment.py
-│       └── setup_token.py
-├── github-raw-fetch/
-│   └── SKILL.md
-├── mindstudio_profiler_data_check/
-│   ├── SKILL.md
-│   └── scripts/
-│       ├── offline_parse_mindspore.py
-│       └── offline_parse_pytorch.py
-├── nan-overflow-detection/
-│   ├── SKILL.md
-│   └── scripts/
-│       ├── cross_rank_analyzer.py
-│       └── single_rank_tracer.py
-├── deterministic-calculation-analysis/
-│   ├── SKILL.md
-│   └── scripts/
-│       ├── find_first_diff_api_L1.py
-│       ├── find_first_diff_api_mix.py
-│       ├── md5_dump_files_checker.py
-│       └── msprobe_utils.py
-├── op-mfu-calculator/
-│   └── SKILL.md
-```
-
 ## 快速使用
 
 ### 1. 选择一个 skill
@@ -126,6 +53,79 @@
 - 技能会自动诊断性能瓶颈（Vector/Scalar 利用率、L2 Cache、流水线、资源冲突等）
 - 结合算子源码给出具体的代码优化建议，并参考 AscendC 高阶 API 文档生成优化后的代码
 
+## 特点
+
+- 聚焦真实问题场景，而不是抽象能力描述
+- 每个 skill 都有清晰的触发条件、边界和输出要求
+- 复杂流程优先固化为脚本，减少 Agent 临场发挥带来的不确定性
+- 保持轻量目录结构，便于直接复制、组合或迁移到其他 skill 仓库
+
+## 当前技能
+
+| Skill | 说明                                                                                                    | 典型输入                                                                                     | 依赖                                                                     |
+| --- |-------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------|------------------------------------------------------------------------|
+| [`ascend-profiler-db-explorer`](../../../skills/./ascend-profiler-db-explorer/SKILL.md) | 面向 Ascend PyTorch Profiler / msprof 数据库的 SQL 分析技能，把自然语言问题转成安全可执行 SQL，并结合表结构输出诊断结论                     | `ascend_pytorch_profiler*.db` / `msprof_*.db` 路径，或“TopK 算子 / 通信耗时 / 下发分析 / schema 查询”等问题 | `sqlite3`、Python                                                       |
+| [`cluster-fast-slow-rank-detector`](../../../skills/./cluster-fast-slow-rank-detector/SKILL.md) | 面向 Ascend 集群 Profiling 的快慢卡诊断，区分 Host 下发慢、计算慢、通信慢等瓶颈类型                                                | 集群 profiling 根目录、慢卡/快卡分析诉求                                                               | `msprof-analyze-advisor`、Python、`pandas`                               |
+| [`document-ux-review`](../../../skills/./document-ux-review/SKILL.md) | 像第一次接触项目的人一样按 README / quick start 真跑一遍，判断新人是否能走通并输出文档体验问题报告                                          | 仓库链接或本地仓库路径，以及“按 README 试一下 / 帮我检查文档能不能跑通”这类请求                                           | 目标项目所需运行环境、Shell、包管理工具                                                 |
+| [`gitcode-code-reviewer`](../../../skills/./gitcode-code-reviewer/SKILL.md) | 审查 GitCode PR，结合 PR metadata、diff 和仓库上下文给出深度审查结论，并可按需发布逐行评论                                           | GitCode PR 链接，或“review this PR / 检视这个 PR / 检查 PR”这类请求                                    | Python、`git`、`GITCODE_TOKEN` 或 `git config --global gitcode.token ...` |
+| [`mindstudio_profiler_data_check`](../../../skills/./mindstudio_profiler_data_check/SKILL.md) | 对 MindStudio profiler / msprof 采集结果做前置体检，判断是否可进入后续分析                                                  | profiler 结果目录                                                                            | `msprof`，离线解析时依赖 `torch_npu` 或 `mindspore`                             |
+| [`op-mfu-calculator`](../../../skills/./op-mfu-calculator/SKILL.md) | 计算 matmul / GEMM / FlashAttention 等算子的 MFU，并给出推导过程                                                    | 算子类型、shape、执行时间、峰值算力                                                                     | 无额外脚本依赖                                                                |
+| [`msprof-analyze-cli`](../../../skills/./msprof-analyze-cli/SKILL.md) | 面向 Ascend 性能数据的综合分析，涵盖【集群分析】和【专家建议】两大能力。 | 集群 profiling 路径、性能瓶颈/调优建议诉求                                              | `msprof-analyze`，Python                                                   |
+| [`github-raw-fetch`](../../../skills/./github-raw-fetch/SKILL.md) | 读取 GitHub 仓库中的源码、配置、README、Markdown 与 docs；普通文件自动将 `blob` 链接转换为 raw，docs 场景会先读取同仓库同 `ref` 的 `agent_router.md` 再定位真实路径 | GitHub `blob` / raw 文件链接，或“读取某仓库某篇 docs”这类请求                                             | 支持网络抓取的 Agent / 工具，推荐 `curl` / `curl.exe`                              |
+| [`ascendc-operator-performance-optim`](../../../skills/./ascendc-operator-performance-optim/SKILL.md) | 基于 msprof op 性能数据诊断 AscendC 算子性能瓶颈，给出代码优化建议，并参考 AscendC 高阶 API 文档生成优化后的代码                             | msprof op 性能数据目录、算子源码路径、AscendC API 文档链接                                                 | Python3                                                                |
+| [`msot-msopprof-operator-profiler`](../../../skills/./msot-msopprof-operator-profiler/SKILL.md) | 基于 msprof op 工具深度分析算子性能瓶颈，给出算子信息、关键性能数据、TOP5性能瓶颈、TOP5优化建议与报告总结，提升开发者算子性能优化效率  | 算子可执行程序、算子msprof op 性能数据目录                                                               | Python3                                                                |
+| [`nan-overflow-detection`](../../../skills/./nan-overflow-detection/SKILL.md) | 多卡分布式训练 loss/gnorm 精度溢出检测与根因追溯，跨 rank 定位源卡并追溯根因算子                                              | 包含 rank 子目录（`rank0/`, `rank1/`, ...）的 step0 目录                                          | Python3                                                                |
+| [`deterministic-calculation-analysis`](../../../skills/./deterministic-calculation-analysis/SKILL.md) | 执行 MindStudio Probe (msProbe) 数据比对并分析比对结果，定位确定性计算问题首个输入一致输出不一致的API       |  msPorbe dump 数据目录（采集统计信息和tensor的CRC-32校验值，task="statistics", summary_mode="md5"）     | Python3, `msProbe`                                                                |
+
+## 目录结构
+
+```text
+.
+├── README.md
+├── ascend-profiler-db-explorer/
+│   ├── SKILL.md
+│   ├── references/
+│   └── scripts/
+├── cluster-fast-slow-rank-detector/
+│   ├── SKILL.md
+│   └── scripts/
+│       ├── compare_api_stats.py
+│       ├── compare_op_stats.py
+│       └── rank_data_finder.py
+├── document-ux-review/
+│   └── SKILL.md
+├── gitcode-code-reviewer/
+│   ├── SKILL.md
+│   ├── examples/
+│   ├── references/
+│   └── scripts/
+│       ├── fetch_pr_info.py
+│       ├── post_pr_comment.py
+│       └── setup_token.py
+├── github-raw-fetch/
+│   └── SKILL.md
+├── mindstudio_profiler_data_check/
+│   ├── SKILL.md
+│   └── scripts/
+│       ├── offline_parse_mindspore.py
+│       └── offline_parse_pytorch.py
+├── nan-overflow-detection/
+│   ├── SKILL.md
+│   └── scripts/
+│       ├── cross_rank_analyzer.py
+│       └── single_rank_tracer.py
+├── deterministic-calculation-analysis/
+│   ├── SKILL.md
+│   └── scripts/
+│       ├── find_first_diff_api_L1.py
+│       ├── find_first_diff_api_mix.py
+│       ├── md5_dump_files_checker.py
+│       └── msprobe_utils.py
+├── op-mfu-calculator/
+│   └── SKILL.md
+```
+
+
 ## Skill 设计约定
 
 本仓库遵循一种尽量通用的 Agent Skills 组织方式：
@@ -145,18 +145,3 @@
 3. 如果流程里有稳定可执行的步骤，把它放进 `scripts/`
 4. 用一个真实任务做最小验证，确认技能会被正确触发
 5. 把新 skill 补充到本 README 的“当前技能”表格中
-
-
-## 参考的开源项目
-
-这个 README 的组织方式主要参考了几类业界开源项目的写法：项目定位先行、技能列表可扫读、目录结构明确、快速使用路径清晰、扩展规范单独成节。
-
-- Vercel `skills`: <https://github.com/vercel-labs/skills>
-- Vercel `agent-skills`: <https://github.com/vercel-labs/agent-skills>
-- `claude-skills-base`: <https://github.com/Cam10001110101/claude-skills-base>
-
-如果后续这个仓库继续扩展，可以再补充：
-
-- `CONTRIBUTING.md`
-- 技能分类目录（如 `profiling/`、`utility/`、`research/`）
-- 自动校验脚本（frontmatter、目录结构、脚本可执行性）

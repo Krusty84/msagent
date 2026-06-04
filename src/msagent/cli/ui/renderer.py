@@ -40,17 +40,7 @@ except ImportError:  # pragma: no cover - graceful fallback when dependency isn'
 
 WELCOME_TITLE = "* Welcome to msAgent"
 WELCOME_ASCII_FONT = "ansi_shadow"
-WELCOME_ASCII_COLOR = "#0b1f5e"
-WELCOME_ASCII_PALETTE = [
-    WELCOME_ASCII_COLOR,
-    WELCOME_ASCII_COLOR,
-    WELCOME_ASCII_COLOR,
-    WELCOME_ASCII_COLOR,
-    WELCOME_ASCII_COLOR,
-    WELCOME_ASCII_COLOR,
-    WELCOME_ASCII_COLOR,
-    WELCOME_ASCII_COLOR,
-]
+WELCOME_ASCII_STYLE = console.console.get_style("accent") + Style(bold=True)
 
 
 def _render_welcome_ascii(
@@ -60,55 +50,18 @@ def _render_welcome_ascii(
 ) -> Text:
     """Render ASCII art welcome text in the langchain-code style."""
 
-    def _hex_to_rgb(h: str) -> tuple[int, int, int]:
-        h = h.lstrip("#")
-        return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
-
-    def _lerp(a: int, b: int, t: float) -> int:
-        return int(a + (b - a) * t)
-
-    def _smoothstep(t: float) -> float:
-        return t * t * (3 - 2 * t)
-
-    def _interpolate_palette(palette: list[str], steps: int) -> list[str]:
-        if steps <= 1:
-            return [palette[0]]
-        out: list[str] = []
-        steps_total = steps - 1
-        for x in range(steps):
-            pos = _smoothstep(x / steps_total)
-            seg = min(int(pos * (len(palette) - 1)), len(palette) - 2)
-            seg_start = seg / (len(palette) - 1)
-            seg_end = (seg + 1) / (len(palette) - 1)
-            local_t = (pos - seg_start) / (seg_end - seg_start + 1e-9)
-            c1 = _hex_to_rgb(palette[seg])
-            c2 = _hex_to_rgb(palette[seg + 1])
-            rgb = tuple(_lerp(a, b, local_t) for a, b in zip(c1, c2))
-            out.append("#{:02x}{:02x}{:02x}".format(*rgb))
-        return out
-
     if Figlet is None:
-        return Text(text, style=Style(color=WELCOME_ASCII_COLOR, bold=True))
+        return Text(text, style=WELCOME_ASCII_STYLE)
 
     try:
         lines = Figlet(font=font).renderText(text).rstrip("\n").splitlines()
     except Exception:  # pragma: no cover - invalid font or partial install should not break startup
-        return Text(text, style=Style(color=WELCOME_ASCII_COLOR, bold=True))
+        return Text(text, style=WELCOME_ASCII_STYLE)
 
     while lines and not lines[-1].strip():
         lines.pop()
 
-    palette = WELCOME_ASCII_PALETTE
-    if gradient == "light_to_dark":
-        palette = list(reversed(palette))
-
     width = max(len(line) for line in lines) if lines else 0
-    active_columns = [
-        column for column in range(width) if any(column < len(line) and line[column] != " " for line in lines)
-    ]
-    ramp = _interpolate_palette(palette, len(active_columns))
-    column_colors = {column: ramp[index] for index, column in enumerate(active_columns)}
-
     result = Text()
     for line in lines:
         padded = line.ljust(width)
@@ -118,7 +71,7 @@ def _render_welcome_ascii(
             else:
                 result.append(
                     ch,
-                    Style(color=column_colors.get(column, palette[0]), bold=True),
+                    WELCOME_ASCII_STYLE,
                 )
         result.append("\n")
     return result
@@ -372,7 +325,7 @@ class ChatWelcomeBanner:
         ascii_art = _render_welcome_ascii()
 
         welcome = Text()
-        welcome.append("msAgent", style=Style(color=WELCOME_ASCII_COLOR, bold=True))
+        welcome.append("msAgent", style="accent")
         welcome.append(
             " 是 MindStudio 一站式调试调优 Agent，支持性能、精度、算子等场景问题定位。",
             style="secondary",

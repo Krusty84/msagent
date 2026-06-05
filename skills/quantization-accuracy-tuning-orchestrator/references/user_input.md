@@ -93,3 +93,22 @@
 ```
 
 多数据集目标分别解析；HuggingFace 模型 `trust_remote_code` 须经用户确认。
+
+## 评测配置约束规则
+ 	 
+以下规则在生成或修改评测配置时必须遵守。
+
+### baseline 获取规则（强制）
+
+若用户未提供 FP baseline 精度：
+→ **必须**先对浮点模型执行评测获取 baseline，禁止猜测或使用默认值
+→ baseline 值必须写入 evaluate_config.yaml 的 target 字段后才能开始调优循环
+
+### 评测参数一致性规则（强制）
+
+生成或修改评测配置时，以下参数必须保持一致，修改任一项须同步修改其余项：
+- `device_indices`（实际使用的卡号列表）→ 决定卡数 N
+- `tensor-parallel-size`（YAML 中）→ 必须等于 N
+- `data-parallel-size`（YAML 中）→ 默认为 1
+
+不可只改 device_indices 而不改 tensor-parallel-size，反之亦然。

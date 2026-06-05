@@ -11,6 +11,7 @@
       "stateful": true,
       "repair_timeout": 30,
       "invoke_timeout": 3600.0
+<<<<<<< HEAD
     },
     "tavily-mcp": {
       "command": "npx",
@@ -64,6 +65,8 @@
       "stateful": true,
       "repair_timeout": 30,
       "invoke_timeout": 3600.0
+=======
+>>>>>>> d77a251 (【feature】取代mcp方案)
     }
   }
 }

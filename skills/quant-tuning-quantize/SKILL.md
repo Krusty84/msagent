@@ -1,12 +1,12 @@
 ---
 name: quant-tuning-quantize
-description: 执行模型量化。调用 MCP quantization_run 依据 Practice YAML 对模型进行量化，返回量化结果与产物路径。
+description: 执行模型量化。通过 scripts/run_quantization.py 依据 Practice YAML 对模型进行量化。
 license: Apache-2.0
 metadata:
   version: 0.3.0
   domain: quantization
   framework: msmodelslim
-  protocol: mcp
+  protocol: script
   skill_class: tool
   aliases:
     - quantizer
@@ -33,7 +33,7 @@ metadata:
 - 不执行评测 → 见 `quant-tuning-quantizer` Agent
 - 不做策略决策 → 见 `quantization-accuracy-tuning-orchestrator` Skill
 
-**执行主体**：MCP `quantization_run`
+**执行主体**：`scripts/run_quantization.py`（`execute` 调用，解析 stdout JSON）
 
 ---
 
@@ -45,8 +45,8 @@ quantization-accuracy-tuning-orchestrator (workflow)
         ▼ 调用
 quant-tuning-quantize (tool)
         │
-        ▼ MCP Tool
-  quantization_run
+        ▼ Script
+  run_quantization.py
         │
         ▼ 输出
   量化后的模型权重
@@ -71,9 +71,9 @@ quant-tuning-quantize (tool)
 └────────┬────────┘
          ▼
 ┌─────────────────┐
-│ MCP Tool:       │
-│ quantization_   │
-│ run             │
+│ execute:        │
+│ run_quantization│
+│ .py             │
 └────────┬────────┘
          ▼
 ┌─────────────────┐
@@ -98,30 +98,27 @@ quant-tuning-quantize (tool)
 
 ---
 
-## MCP 调用
+## 脚本调用
 
-### 调用方式
-
-```json
-{
-  "config_path": "/path/to/practice.yaml",
-  "model_path": "/path/to/model",
-  "save_path": "/path/to/output",
-  "device": "npu:0",
-  "trust_remote_code": false
-}
+```bash
+python skills/quant-tuning-quantize/scripts/run_quantization.py \
+  --model-type MODEL_TYPE \
+  --config-path /path/to/practice.yaml \
+  --model-path /path/to/model \
+  --save-path /path/to/output \
+  --device npu:0
 ```
 
-**注意**：所有路径必须是 **JSON 字符串**（加引号），禁止裸路径。
+stdout 为 JSON：`{"ok": true, "message": "..."}` 或 `{"ok": false, "error": "..."}`。
 
 ### 错误处理
 
 | 错误类型 | 处理 |
 |----------|------|
-| MCP 未就绪 | 立即中止，报 "MCP 未就绪" |
+| msmodelslim 未安装 | 按 prepare_environment.md 安装后重试 |
 | 路径不存在 | 检查路径后重试或中止 |
 | 量化失败 | 报错误摘要，等待 orchestrator 决策 |
-| 超时 | 按 MCP 超时处理，不上层续跑 |
+| 超时 | 按 Agent execution_timeout 处理，不上层续跑 |
 
 ---
 
@@ -186,9 +183,9 @@ quant-tuning-quantize (tool)
 
 ## 约束
 
-- **MCP-only**：禁止用 CLI 或脚本替代
+- **Script-only**：禁止用裸 CLI 替代 `run_quantization.py`
 - **路径格式**：必须是 JSON 字符串（`"/path/to"`）
-- **错误即停**：MCP 报错后立即中止，不兜底续跑
+- **错误即停**：脚本报错后立即中止，不兜底续跑
 - **单轮单次**：每次调用只执行一次量化
 
 ---
@@ -210,4 +207,4 @@ quant-tuning-quantize (tool)
 - [ ] 所有路径是 JSON 字符串格式（加引号）
 - [ ] `device` 格式正确（如 `npu:0`, `cuda:0`）
 - [ ] `save_path` 磁盘空间充足
-- [ ] MCP 已就绪
+- [ ] msmodelslim 已安装且可 import

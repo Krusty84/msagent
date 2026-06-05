@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   domain: quantization
   framework: msmodelslim
-  protocol: mcp
+  protocol: script
   skill_class: tool
   aliases:
     - practice-cfg
@@ -31,9 +31,9 @@ metadata:
 
 | 负责 | 不负责（编排层） |
 |------|------------------|
-| 敏感层分析（`analysis_run`） | 缓存查询（`accuracy_lookup`） |
-| 策略生成/修改 Practice YAML | 量化执行（`quantization_run`） |
-| YAML 校验（`yaml_validation_validate`） | 评测执行（`evaluation_run`） |
+| 敏感层分析（`run_analysis.py`） | 缓存查询（`accuracy_lookup`） |
+| 策略生成/修改 Practice YAML | 量化执行（`run_quantization.py`） |
+| YAML 校验（`validate_practice_yaml.py`） | 评测执行（`run_evaluation.py`） |
 | | 缓存写入（`accuracy_append`） |
 | | 历史记录（`history_append`） |
 | | 策略终止决策 |
@@ -55,7 +55,7 @@ metadata:
 
 **产出**：`practice_path`（合法的 Practice YAML 文件路径）
 
-**MCP 工具**：`analysis_run`、`yaml_validation_validate`
+**脚本**：`scripts/run_analysis.py`、`scripts/validate_practice_yaml.py`
 
 ## 执行步骤
 
@@ -64,7 +64,7 @@ metadata:
 ```
         ┌─────────────────────┐
         │   ① 敏感层分析       │  ← 调优任务开始前执行一次
-        │   (analysis_run)     │
+        │   (run_analysis)     │
         └──────────┬──────────┘
                    │ 敏感度得分文件（各轮复用）
                    ▼
@@ -78,8 +78,8 @@ metadata:
                    ▼                          │
         ┌─────────────────────┐              │
         │ ③ 校验 Practice YAML │              │
-        │ (yaml_validation_    │              │
-        │  validate)           │              │
+        │ (validate_practice_  │
+        │  yaml)               │
         └──────────┬──────────┘              │
                    │ practice_path            │
                    ▼                          │
@@ -88,11 +88,11 @@ metadata:
 
 ### ① 敏感层分析
 
-调用 `analysis_run` 获取当前模型各线性层的量化敏感度得分（score 越高越敏感）。**每个调优任务调用一次**，后续各轮复用该得分结果。分析结果由 `analysis_run` 的入参 `result_yaml_path` 决定输出路径，skill 内部将该路径设为 `{save_path}/analysis_result.yaml`。
+调用 `scripts/run_analysis.py` 获取当前模型各线性层的量化敏感度得分（score 越高越敏感）。**每个调优任务调用一次**，后续各轮复用该得分结果。分析结果由脚本的 `--result-yaml-path` 决定输出路径，skill 内部将该路径设为 `{save_path}/analysis_result.yaml`。
 
 若 `{save_path}/analysis_result.yaml` 已存在，跳过本步骤，直接复用已有得分。
 
-若 `analysis_run` 调用返回错误（`ok=false`）或超时，可用经验规则占位，仍需产出相同格式的敏感度得分文件供步骤 ② 使用。仅作占位，**弱于**精确分析。
+若 `run_analysis.py` 返回 `ok=false` 或超时，可用经验规则占位，仍需产出相同格式的敏感度得分文件供步骤 ② 使用。仅作占位，**弱于**精确分析。
 
 > 完整参数说明、metrics 选项与分析结果结构见 [敏感层分析](references/sensitive_layer_analysis.md)。
 
@@ -141,10 +141,10 @@ metadata:
 
 ### ③ 校验 Practice YAML
 
-**MCP 调用**：
+**脚本调用**：
 
-```
-yaml_validation_validate(practice_path: str)
+```bash
+python skills/tune-practice-cfg/scripts/validate_practice_yaml.py --practice-path /path/to/practice.yaml
 ```
 
 **返回**：
@@ -187,7 +187,7 @@ yaml_validation_validate(practice_path: str)
 | ① 在首轮前调用一次 | 敏感度得分每个调优任务计算一次，各轮复用 |
 | 一次只改一两处 | exclude 或离群值抑制，避免多因素同时变化 |
 | 保留锚点 | 始终保留一份当前已知最优且达标的配置，掉精度可回滚 |
-| MCP-only | 所有操作通过 MCP 工具，禁止 CLI 替代 |
+| Script-only | 分析/校验通过 skill scripts，禁止裸 CLI 替代 |
 | 校验必过 | `valid=false` 时不可继续，必须修正后重新校验 |
 
 ## 常见错误

@@ -1,0 +1,26 @@
+support mcp
+
+# Conflicts:
+#	resources/configs/default/config.mcp.json
+
+# Please enter the commit message for your changes. Lines starting
+# with '#' will be ignored, and an empty message aborts the commit.
+#
+# Author:    joejoezhou <zhourongchen1@huawei.com>
+#
+# interactive rebase in progress; onto 63759a9
+# Last commands done (2 commands done):
+#    pick 787e276 # move skill & prompt
+#    pick 6806059 # support mcp
+# Next commands to do (27 remaining commands):
+#    pick 2857d26 # 【mcp】config.mcp.json增加环境变量配置 Changes to be committed: 	modified:   resources/configs/default/config.mcp.json
+#    pick ccd7801 # 【sync】refactor: move chat_template_kwargs into generation_kwargs in evaluation config 将 chat_template_kwargs 从 aime25 任务级别移至 generation_kwargs 内， 使用 enable_thinking: false 替代 thinking: true，配置更合理。  Changes to be committed: 	modified:   skills/gen-evaluation-cfg/assets/evaluation_config.example.yaml
+# You are currently rebasing branch 'feature/modelslim-tuning' on '63759a9'.
+#
+# Changes to be committed:
+#	modified:   resources/configs/default/agents/quant-tuning-quantizer.yml
+#	modified:   resources/configs/default/config.mcp.json
+#	modified:   resources/configs/default/subagents/quant-tuning-evaluation-generator.yml
+#	modified:   resources/configs/default/subagents/quant-tuning-evaluator.yml
+#	modified:   resources/configs/default/subagents/quant-tuning-practice-generator.yml
+#

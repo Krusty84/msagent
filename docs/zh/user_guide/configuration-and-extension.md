@@ -20,7 +20,7 @@
 |---|---|
 | `.msagent/config.llms.yml` | 默认模型配置入口文件。 |
 | `.msagent/llms/*.yml` | 额外的模型别名配置。 |
-| `.msagent/agents/*.yml` | Agent 定义。当前默认包含 `Profiler.yml`、`Minos.yml`。 |
+| `.msagent/agents/*.yml` | Agent 定义。当前默认包含 `Hermes.yml`、`Minos.yml`。 |
 | `.msagent/subagents/*.yml` | SubAgent 定义。 |
 | `.msagent/checkpointers/*.yml` | Checkpointer 配置。当前默认包含 `memory.yml`、`sqlite.yml`。 |
 | `.msagent/sandboxes/*.yml` | Sandbox 配置模板。 |
@@ -164,6 +164,7 @@ resources/configs/default/skills/
 因此源码运行和安装运行共用同一份 Skills 内容，不再需要额外执行 `git submodule` 同步。
 
 (custom-skill-guide)=
+
 ## 添加自定义 Skill
 
 如果你希望在当前项目里扩展一个新的 Skill，推荐直接放在仓库根目录：
@@ -269,6 +270,7 @@ skills:
 ```
 
 (custom-skill-faq)=
+
 ## Skill 常见问题
 
 ### `/skills` 看不到新 Skill

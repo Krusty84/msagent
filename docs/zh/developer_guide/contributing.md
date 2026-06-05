@@ -19,10 +19,10 @@ MindStudio-Agent 是一个面向 Ascend NPU 场景的 Agent 工作台，核心�
 
 当前内置 Agent 及其领域定位如下，贡献前可先了解各自边界：
 
-- [Profiler](../agent_guide/Profiler.md)：性能调优
+- [Hermes](../agent_guide/Hermes.md)：性能调优
 - [Accuracy](../agent_guide/Accuracy.md)：精度调优
-- [Quantizer](../agent_guide/Quantizer.md)：模型量化
-- [Operator](../agent_guide/Operator.md)：算子调优
+- [Zephyr](../agent_guide/Zephyr.md)：模型量化
+- [Icarus](../agent_guide/Icarus.md)：算子调优
 - [Minos](../agent_guide/Minos.md)：文档体验与代码审查
 
 ## 开始之前
@@ -144,9 +144,9 @@ Skills 是项目最重要的扩展面之一。仓库根目录 `skills/` 为内�
 2. 将稳定、可重复的步骤放入 `scripts/`（如有需要）
 3. 在对应 Agent 的 `skills.patterns` 中放开该 Skill
 4. 启动 `msagent` 后通过 `/skills` 验证可见性
-5. 更新 [skills/README.md](../skills/README.md) 中的技能列表
+5. 更新 [skills/README.md](../../../skills/README.md) 中的技能列表
 
-详细约定见 [配置与扩展 · 添加自定义 Skill](../user_guide/configuration-and-extension.md#custom-skill-guide) 与 [skills/README.md · 新增 Skill 建议流程](../skills/README.md)。
+详细约定见 [配置与扩展 · 添加自定义 Skill](../user_guide/configuration-and-extension.md#添加自定义-skill) 与 [skills/README.md · 新增 Skill 建议流程](../../../skills/README.md)。
 
 Skill 匹配与过滤规则见 [Agent / Tool / Skill 过滤规则](../user_guide/agent-tool-skill-filter-rules.md)。
 

@@ -1,4 +1,7 @@
+# msAgent特性分析与设计说明书
+
 ## 修订记录
+
 | 日期 | 修订版本 | 修改描述 | 作者 | RFC文档 |
 | -- | -- | -- | -- | -- |
 | 2026-06-03 | 1.0 | 补充 msAgent 详细设计文档，覆盖架构、交互链路、扩展机制与测试设计 | kali20gakki1 |  |
@@ -170,12 +173,12 @@ sequenceDiagram
 3. **缓存式装配**
    `Initializer` 在 graph 构建后缓存：
 
-- `cached_llm_tools`
-- `cached_tools_in_catalog`
-- `cached_agent_skills`
-- `cached_mcp_server_names`
+    - `cached_llm_tools`
+    - `cached_tools_in_catalog`
+    - `cached_agent_skills`
+    - `cached_mcp_server_names`
 
-   这些缓存既服务于 `/tools`、`/skills`、`/mcp` 等交互命令，也服务于后续 Prompt 模板渲染。
+      这些缓存既服务于 `/tools`、`/skills`、`/mcp` 等交互命令，也服务于后续 Prompt 模板渲染。
 
 4. **CLI/Web 共用图构造**
    Web 模式通过 `src/msagent/web/runtime.py` 读取环境变量后，同样调用 `initializer.create_graph()`；因此文档、测试和维护上只需要守住一套核心运行时行为。
@@ -188,10 +191,10 @@ sequenceDiagram
 
 | Agent | 领域定位 | 默认性 | 典型 Tool Pattern | 典型 Skill Pattern | SubAgent |
 | -- | -- | -- | -- | -- | -- |
-| Profiler | Ascend Profiling / 性能分析 | 默认 Agent | `impl:deepagents:*` + `mcp:msprof-mcp:*` | profiler DB 分析、快慢卡诊断、MFU 计算 | `explorer` + `general-purpose` |
+| Hermes | Ascend Profiling / 性能分析 | 默认 Agent | `impl:deepagents:*` + `mcp:msprof-mcp:*` | profiler DB 分析、快慢卡诊断、MFU 计算 | `explorer` + `general-purpose` |
 | Accuracy | 模型精度分析 | 否 | `impl:deepagents:*` | RL 一致性、NaN/溢出、确定性分析 | `explorer` + `general-purpose` |
-| Quantizer | 模型量化与适配 | 否 | `impl:deepagents:*` | msModelSlim 分析、适配、量化 | `explorer` + `general-purpose` |
-| Operator | 算子性能优化 | 否 | `impl:deepagents:*` + 特定 MCP 模式 | AscendC 算子优化、算子 profiler | `explorer` + `general-purpose` |
+| Zephyr | 模型量化与适配 | 否 | `impl:deepagents:*` | msModelSlim 分析、适配、量化 | `explorer` + `general-purpose` |
+| Icarus | 算子性能优化 | 否 | `impl:deepagents:*` + 特定 MCP 模式 | AscendC 算子优化、算子 profiler | `explorer` + `general-purpose` |
 | Minos | 文档体验与代码审查 | 否 | `impl:deepagents:*` | `document-ux-review`、`gitcode-code-reviewer` | `explorer` |
 
 这种设计意味着：
@@ -225,10 +228,10 @@ flowchart LR
     U --> Q4["算子性能瓶颈"]
     U --> Q5["文档体验 / 代码审查"]
 
-    Q1 --> H["Profiler"]
+    Q1 --> H["Hermes"]
     Q2 --> A["Accuracy"]
-    Q3 --> Z["Quantizer"]
-    Q4 --> I["Operator"]
+    Q3 --> Z["Zephyr"]
+    Q4 --> I["Icarus"]
     Q5 --> M["Minos"]
 
     H --> H1["Prompt: 性能分析方法论"]
@@ -259,7 +262,7 @@ flowchart LR
 
 5 个默认 Agent 共用同一套运行时骨架，在以下维度上形成差异化配置：
 
-| 维度 | Profiler | Accuracy | Quantizer | Operator | Minos |
+| 维度 | Hermes | Accuracy | Zephyr | Icarus | Minos |
 | -- | -- | -- | -- | -- | -- |
 | 主问题域 | Profiling / 性能瓶颈 | 精度异常 | 量化与适配 | 算子优化 | 文档与代码审查 |
 | Prompt 关注点 | 调度、热点、通信、MFU | 一致性、NaN、溢出 | 模型结构、量化风险、适配成本 | 算子热点、端到端性能 | 上手体验、文档可用性、PR 风险 |
@@ -283,10 +286,10 @@ resources/configs/default/
 ├─ config.mcp.json
 ├─ config.approval.json
 ├─ agents/
-│  ├─ Profiler.yml
+│  ├─ Hermes.yml
 │  ├─ Accuracy.yml
-│  ├─ Quantizer.yml
-│  ├─ Operator.yml
+│  ├─ Zephyr.yml
+│  ├─ Icarus.yml
 │  └─ Minos.yml
 ├─ subagents/
 │  ├─ explorer.yml
@@ -474,23 +477,23 @@ sequenceDiagram
 1. **AgentContext 注入**
    `MessageDispatcher._build_agent_context()` 会构造：
 
-- 当前工作目录
-- 平台与 OS 版本
-- 当前时间
-- 本地环境快照
-- 当前启用 MCP 列表
-- 项目 `memory.md`
-- 当前可见工具目录与 Skill 目录
+   - 当前工作目录
+   - 平台与 OS 版本
+   - 当前时间
+   - 本地环境快照
+   - 当前启用 MCP 列表
+   - 项目 `memory.md`
+   - 当前可见工具目录与 Skill 目录
 
-   随后 `_SystemMessageMiddleware` 将这些变量渲染进系统提示词模板。这种设计让 Prompt 具备“环境感知能力”，且不需要把环境信息写死在 Prompt 文件里。
+      随后 `_SystemMessageMiddleware` 将这些变量渲染进系统提示词模板。这种设计让 Prompt 具备“环境感知能力”，且不需要把环境信息写死在 Prompt 文件里。
 
 2. **流式渲染与工具活动区**
    `MessageDispatcher` 对 `astream()` 输出做两类处理：
 
-- `messages` 流：聚合 AI token 流、思考预览、工具调用预告。
-- `updates` 流：渲染最终 AIMessage、ToolMessage、token 统计和工具结果。
+   - `messages` 流：聚合 AI token 流、思考预览、工具调用预告。
+   - `updates` 流：渲染最终 AIMessage、ToolMessage、token 统计和工具结果。
 
-   这套设计让 CLI 能实时反馈“在做什么”，而不是只在最后吐一段长文本。
+      这套设计让 CLI 能实时反馈“在做什么”，而不是只在最后吐一段长文本。
 
 3. **审批恢复**
    `ToolApprovalConfig` 会被转换为 `interrupt_on` payload 注入图运行时。高风险工具（尤其是 `execute`）命中策略后，图中断，CLI 弹出审批界面，用户决策再通过 `Command(resume=...)` 恢复执行。
@@ -632,7 +635,7 @@ msagent
 常见启动参数：
 
 ```bash
-msagent -a Profiler -m default
+msagent -a Hermes -m default
 msagent -a Minos "帮我检查这个仓库的 README 上手流程"
 msagent --approval-mode active
 ```

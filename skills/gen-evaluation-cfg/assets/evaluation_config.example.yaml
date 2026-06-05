@@ -33,6 +33,8 @@ evaluation:
     pred_postprocessor: extract_non_reasoning_content
     generation_kwargs:
       temperature: 1.0
+      chat_template_kwargs:
+        enable_thinking: false
     model_meta:
       base_name: vllm_api_general_chat
       subdir: vllm_api
@@ -46,8 +48,6 @@ evaluation:
     aime25:
       config_name: "aime2025_gen_0_shot_chat_prompt"
       mode: all
-      chat_template_kwargs:
-        thinking: true
 
   # 须与 inference_engine 段对齐（同一服务入口）
   host: localhost

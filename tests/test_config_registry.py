@@ -42,6 +42,13 @@ def _load_default_hermes_config() -> dict:
     return yaml.safe_load(config_path.read_text(encoding="utf-8"))
 
 
+def _load_default_modeling_config() -> dict:
+    config_path = files("resources")
+    for part in ("configs", "default", "agents", "Modeling.yml"):
+        config_path = config_path.joinpath(part)
+    return yaml.safe_load(config_path.read_text(encoding="utf-8"))
+
+
 def _load_default_minos_config() -> dict:
     config_path = files("resources")
     for part in ("configs", "default", "agents", "Minos.yml"):
@@ -103,12 +110,18 @@ async def test_config_registry_bootstraps_default_layout(tmp_path: Path) -> None
     )
 
     hermes = yaml.safe_load((config_dir / "agents" / "Hermes.yml").read_text())
+    modeling = yaml.safe_load((config_dir / "agents" / "Modeling.yml").read_text())
     minos = yaml.safe_load((config_dir / "agents" / "Minos.yml").read_text())
     default_hermes = _load_default_hermes_config()
+    default_modeling = _load_default_modeling_config()
     default_minos = _load_default_minos_config()
     assert hermes["name"] == "Hermes"
     assert hermes["tools"]["patterns"] == default_hermes["tools"]["patterns"]
     assert hermes["skills"]["patterns"] == default_hermes["skills"]["patterns"]
+    assert modeling["name"] == "Modeling"
+    assert modeling["tools"]["patterns"] == default_modeling["tools"]["patterns"]
+    assert modeling["skills"]["patterns"] == default_modeling["skills"]["patterns"]
+    assert modeling["default"] is False
     assert minos["name"] == "Minos"
     assert minos["skills"]["patterns"] == default_minos["skills"]["patterns"]
 

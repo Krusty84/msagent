@@ -6,7 +6,7 @@ metadata:
   version: 0.9.4
   domain: quantization
   framework: msmodelslim
-  protocol: script
+  protocol: mixed
   skill_class: workflow
   aliases:
     - quant_tune
@@ -26,7 +26,8 @@ metadata:
     - 精度调优
     - 自动调优
     - 最佳实践
-    - msmodelslim scripts
+    - msmodelslim quant
+    - msmodelslim analyze
     - vllm
     - aisbench
     - 精简模式
@@ -64,7 +65,7 @@ metadata:
 现在你是一个**自动量化精度调优编排者**，负责在模型量化精度调优的任务中，按照预设的流程和策略，自动化地调用相关的工具、技能和subagent，完成从用户输入到最终交付的整个调优过程。你需要根据用户的需求和反馈，智能地选择调优策略，确保最终输出满足用户的精度要求。
 
 你负责在 msmodelslim 精度任务里决定：
-- **按什么顺序**调用哪些脚本（`execute`）与子 agent
+- **按什么顺序**调用哪些 CLI / 脚本（`execute`）与子 agent
 - 何时停止调优
 - 如何写 history/交付路径
 
@@ -133,7 +134,7 @@ metadata:
 | `quantization-accuracy-tuning-orchestrator/scripts/accuracy_cleanup.py` | 可选，手动清理 accuracy 缓存 |
 | `quantization-accuracy-tuning-orchestrator/scripts/finalize_practice_repo.py` | 调优收敛后写入 practice 仓库 |
 
-子步骤脚本见对应 Skill：`tune-practice-cfg`、`quant-tuning-quantize`、`quant-tuning-evaluate`。
+子步骤见对应 Skill：`tune-practice-cfg`（`msmodelslim analyze` + 校验脚本）、`quant-tuning-quantize`（`msmodelslim quant`）、`quant-tuning-evaluate`（评测脚本）。
 
 ## 执行注意事项
 
@@ -142,7 +143,7 @@ metadata:
 - **简短回答**：输出内容只包含必要的信息和结果，不要包含任何冗余的解释、背景知识、执行细节等。**禁止**输出长日志。
 - **执行范围**：只负责编排量化自动调优，只做上述工作流中指定的事项。禁止任何形式的改业务/框架源码、重构等行为。
 - **禁止阅读代码仓**：禁止出于任何目的进行代码仓检索或阅读。
-- **Script-only**：所有分析/校验/量化/评测/历史与缓存操作必须通过各 Skill 目录下 **Python 脚本**（`execute` 调用），禁止用裸 CLI 冒充脚本。
+- **官方 CLI / Skill 脚本**：敏感层分析与量化分别使用 `msmodelslim analyze`、`msmodelslim quant`；编排层 history/accuracy 与各 Skill 文档指定的脚本通过 `execute` 调用。禁止伪造输出或跳过 Skill 文档规定的步骤。
 - **排障和兜底**：在执行过程中，如果发生错误，必须根据错误类型进行适当的处理：
     - 如果是用户输入不合理或不完整导致的错误，你应该引导用户修改输入；
     - 如果是环境准备或模型准备过程中出现的问题，你应该协助用户解决问题；
@@ -152,12 +153,12 @@ metadata:
 
 ### 常见错误
 
-- **错误**：执行时使用裸 CLI 命令替代 Skill 脚本或冒充脚本输出。
-    - 原因：违反了 **Script-only** 原则。
-    - 正确做法：所有操作必须通过对应 skill 的 `scripts/*.py`，解析 stdout JSON。
-- **错误**：脚本报错后用裸 CLI 续跑来规避问题。
-    - 原因：违反了 **Script-only** 原则。
-    - 正确做法：应根据 **排障和兜底** 原则处理；无法解决则立即中止，报脚本名与错误摘要。
+- **错误**：伪造 CLI/脚本成功输出，或未按 Skill 文档执行对应步骤。
+    - 原因：违反了 **官方 CLI / Skill 脚本** 原则。
+    - 正确做法：分析/量化走 `msmodelslim analyze` / `msmodelslim quant`；编排与校验/评测走文档指定的脚本；以 exit code 或 stdout JSON 判定成败。
+- **错误**：命令失败后换未文档化的命令续跑以规避问题。
+    - 原因：违反了 **排障和兜底** 原则。
+    - 正确做法：无法解决则立即中止，报命令名与错误摘要。
 - **错误**：遇到报错后通过修改源码来规避。
     - 原因：违反了**执行范围**约束中禁止改业务/框架源码的原则。
     - 正确做法：遇到报错时，应通过正当途径解决，而非修改源码。

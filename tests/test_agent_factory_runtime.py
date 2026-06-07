@@ -630,3 +630,65 @@ async def test_agent_factory_injects_local_environment_placeholder_into_system_p
     system_prompt = str(captured.get("system_prompt"))
     assert "test prompt" in system_prompt
     assert "{local_environment_context}" in system_prompt
+
+
+@pytest.mark.asyncio
+async def test_agent_factory_passes_resolved_subagents_to_create_deep_agent(
+    monkeypatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class _DummyBackend:
+        def __init__(self, root_dir: str, **kwargs):
+            self.root_dir = root_dir
+            self.kwargs = kwargs
+
+    def _fake_create_deep_agent(**kwargs):
+        captured.update(kwargs)
+        return _DummyGraph()
+
+    monkeypatch.setattr(factory_module, "LocalShellBackend", _DummyBackend)
+    monkeypatch.setattr(factory_module, "create_deep_agent", _fake_create_deep_agent)
+
+    from msagent.configs import SubAgentConfig
+    from msagent.configs.llm import LLMConfig, LLMProvider
+
+    llm = LLMConfig.model_construct(
+        provider=LLMProvider.OPENAI,
+        model="gpt-4",
+        max_tokens=1024,
+        temperature=0.0,
+    )
+    explorer = SubAgentConfig.model_construct(
+        name="explorer",
+        description="explores code",
+        prompt="You explore.",
+        llm=llm,
+    )
+    general_purpose = SubAgentConfig.model_construct(
+        name="general-purpose",
+        description="gp",
+        prompt="gp prompt",
+        llm=llm,
+    )
+
+    config = SimpleNamespace(
+        name="msagent",
+        prompt="test prompt",
+        llm=SimpleNamespace(),
+        tools=None,
+        subagents=[general_purpose, explorer],
+        retry=None,
+    )
+
+    await AgentFactory(llm_factory=_DummyLLMFactory()).create(
+        config=config,
+        mcp_client=_DummyMCPClient(),
+        llm_config=SimpleNamespace(),
+    )
+
+    subs = captured.get("subagents")
+    assert subs is not None
+    assert len(subs) == 1
+    assert subs[0]["name"] == "explorer"
+    assert "You explore." in str(subs[0]["system_prompt"])

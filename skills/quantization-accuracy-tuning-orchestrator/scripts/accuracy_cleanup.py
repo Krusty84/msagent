@@ -9,9 +9,14 @@ import sys
 from pathlib import Path
 from typing import Any, Dict
 
-from script_utils import add_common_lib, emit_result, ensure_msmodelslim
+# ---------------------------------------------------------------------------
+# Bootstrap: add shared library to sys.path before any cross-skill imports
+# ---------------------------------------------------------------------------
+_common_dir = Path(__file__).resolve().parents[2] / "msmodelslim-tools-common" / "scripts"
+if str(_common_dir) not in sys.path:
+    sys.path.insert(0, str(_common_dir))
 
-add_common_lib(__file__)
+from script_utils import emit_result, ensure_msmodelslim
 
 
 def accuracy_cleanup(save_path: str, keep_last: int) -> Dict[str, Any]:

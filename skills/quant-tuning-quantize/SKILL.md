@@ -1,12 +1,12 @@
 ---
 name: quant-tuning-quantize
-description: 执行模型量化。通过 scripts/run_quantization.py 依据 Practice YAML 对模型进行量化。
+description: 执行模型量化。通过 msmodelslim quant 依据 Practice YAML 对模型进行量化。
 license: Apache-2.0
 metadata:
   version: 0.3.0
   domain: quantization
   framework: msmodelslim
-  protocol: script
+  protocol: cli
   skill_class: tool
   aliases:
     - quantizer
@@ -16,24 +16,23 @@ metadata:
     - 运行 quantization_run
     - 量化模型
   keywords:
-    - quantization_run
+    - msmodelslim quant
     - quantize
     - practice.yaml
-    - mcp
 ---
 
 # Skill: Quant Tuning Quantize
 
 ## Overview
 
-**解决什么**：依据 Practice YAML 配置，调用 MCP 执行模型量化。
+**解决什么**：依据 Practice YAML 配置，调用 `msmodelslim quant` 执行模型量化。
 
 **不解决什么**：
 - 不生成/修改 Practice YAML → 见 `quant-tuning-practice-generator` Agent
-- 不执行评测 → 见 `quant-tuning-quantizer` Agent
+- 不执行评测 → 见 `quant-tuning-evaluator` Agent
 - 不做策略决策 → 见 `quantization-accuracy-tuning-orchestrator` Skill
 
-**执行主体**：`scripts/run_quantization.py`（`execute` 调用，解析 stdout JSON）
+**执行主体**：`msmodelslim quant`（`execute` 调用，以 exit code 判定成败）
 
 ---
 
@@ -45,8 +44,8 @@ quantization-accuracy-tuning-orchestrator (workflow)
         ▼ 调用
 quant-tuning-quantize (tool)
         │
-        ▼ Script
-  run_quantization.py
+        ▼ CLI
+  msmodelslim quant
         │
         ▼ 输出
   量化后的模型权重
@@ -66,19 +65,17 @@ quant-tuning-quantize (tool)
          ▼
 ┌─────────────────┐
 │ 参数校验        │
-│ 路径为 JSON 字符串│
-│ (加引号)        │
+│ 路径存在且可读   │
 └────────┬────────┘
          ▼
 ┌─────────────────┐
 │ execute:        │
-│ run_quantization│
-│ .py             │
+│ msmodelslim quant│
 └────────┬────────┘
          ▼
 ┌─────────────────┐
 │ 结果处理        │
-│ - 检查返回状态   │
+│ - 检查 exit code │
 │ - 记录产物路径   │
 │ - 错误上报       │
 └─────────────────┘
@@ -90,26 +87,28 @@ quant-tuning-quantize (tool)
 
 | 参数 | 类型 | 必需 | 说明 |
 |------|------|------|------|
-| `config_path` | string | ✅ | Practice YAML 路径，**JSON 字符串格式** |
+| `config_path` | string | ✅ | Practice YAML 路径 |
 | `model_path` | string | ✅ | 原始模型路径 |
 | `save_path` | string | ✅ | 量化产物保存路径 |
+| `model_type` | string | ✅ | 模型类型名 |
 | `device` | string | ✅ | 设备类型，如 `npu:0` |
 | `trust_remote_code` | bool | ❌ | 是否信任远程代码 |
 
 ---
 
-## 脚本调用
+## CLI 调用
 
 ```bash
-python skills/quant-tuning-quantize/scripts/run_quantization.py \
-  --model-type MODEL_TYPE \
-  --config-path /path/to/practice.yaml \
-  --model-path /path/to/model \
-  --save-path /path/to/output \
-  --device npu:0
+msmodelslim quant \
+  --model_path "${MODEL_PATH}" \
+  --save_path "${SAVE_PATH}" \
+  --device npu:0 \
+  --model_type "${MODEL_TYPE}" \
+  --config_path "${CONFIG_PATH}" \
+  --trust_remote_code False
 ```
 
-stdout 为 JSON：`{"ok": true, "message": "..."}` 或 `{"ok": false, "error": "..."}`。
+**成功判定**：exit code 为 0，且 `${SAVE_PATH}` 下出现量化权重产物。
 
 ### 错误处理
 
@@ -117,7 +116,7 @@ stdout 为 JSON：`{"ok": true, "message": "..."}` 或 `{"ok": false, "error": "
 |----------|------|
 | msmodelslim 未安装 | 按 prepare_environment.md 安装后重试 |
 | 路径不存在 | 检查路径后重试或中止 |
-| 量化失败 | 报错误摘要，等待 orchestrator 决策 |
+| 量化失败 | 报 stderr 摘要，等待 orchestrator 决策 |
 | 超时 | 按 Agent execution_timeout 处理，不上层续跑 |
 
 ---
@@ -126,24 +125,17 @@ stdout 为 JSON：`{"ok": true, "message": "..."}` 或 `{"ok": false, "error": "
 
 ### 成功
 
-```json
-{
-  "ok": true,
-  "output_path": "/path/to/output/quantized_model",
-  "config_id": "Qwen2-7B_W8A8_xxx",
-  "duration": 123.45
-}
+向 orchestrator 回显：
+
+```
+量化完成:
+- 产物路径: /workspace/output/round_1/quantized
+- 耗时: （可选）
 ```
 
 ### 失败
 
-```json
-{
-  "ok": false,
-  "error": "量化失败原因",
-  "error_code": "QUANTIZATION_ERROR"
-}
-```
+立即中止，回显命令名与 stderr 关键摘要，不续跑其它命令。
 
 ---
 
@@ -155,38 +147,11 @@ stdout 为 JSON：`{"ok": true, "message": "..."}` 或 `{"ok": false, "error": "
 
 ---
 
-## 执行示例
-
-### 标准调用
-
-```python
-# MCP Tool: quantization_run
-{
-  "config_path": "/workspace/output/round_1/practice.yaml",
-  "model_path": "/models/Qwen2-7B-Instruct",
-  "save_path": "/workspace/output/round_1/quantized",
-  "device": "npu:0",
-  "trust_remote_code": false
-}
-```
-
-### 结果返回给 orchestrator
-
-```
-量化完成:
-- 产物路径: /workspace/output/round_1/quantized
-- 配置ID: Qwen2-7B_W8A8_Baseline_v1
-- 耗时: 125.3s
-```
-
----
-
 ## 约束
 
-- **Script-only**：禁止用裸 CLI 替代 `run_quantization.py`
-- **路径格式**：必须是 JSON 字符串（`"/path/to"`）
-- **错误即停**：脚本报错后立即中止，不兜底续跑
+- **错误即停**：命令失败后立即中止，不兜底续跑
 - **单轮单次**：每次调用只执行一次量化
+- **config_path 模式**：调优闭环使用 `--config_path`，与 `--quant_type` 互斥
 
 ---
 
@@ -197,14 +162,13 @@ stdout 为 JSON：`{"ok": true, "message": "..."}` 或 `{"ok": false, "error": "
 | `practice.yaml not found` | 配置文件不存在 | 检查 `config_path` |
 | `out of memory` | 设备内存不足 | 换设备 |
 
-若错误不在上述常见错误中或者多次解决后依然未解决，依据[错误上报](references/error_handling.md)，按照错误上报格式返回至`quant-tuning-quantizer` Agent
+若错误不在上述常见错误中或者多次解决后依然未解决，依据[错误上报](references/error_handling.md)，按照错误上报格式返回至 orchestrator。
 
 ---
 
 ## 检查清单
 
-- [ ] `config_path` 指向的 Practice YAML 已通过 `yaml_validation_validate`
-- [ ] 所有路径是 JSON 字符串格式（加引号）
-- [ ] `device` 格式正确（如 `npu:0`, `cuda:0`）
+- [ ] `config_path` 指向的 Practice YAML 已通过校验
+- [ ] `device` 格式正确（如 `npu:0`, `npu:0,1,2,3`）
 - [ ] `save_path` 磁盘空间充足
-- [ ] msmodelslim 已安装且可 import
+- [ ] `msmodelslim quant --help` 可正常执行

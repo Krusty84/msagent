@@ -24,13 +24,13 @@
 | `quantization-accuracy-tuning-orchestrator` | `scripts/accuracy_append.py` | 将 practice + evaluate 评测结果写入精度缓存 |
 | `quantization-accuracy-tuning-orchestrator` | `scripts/accuracy_lookup.py` | 查询精度缓存，避免重复计算 |
 
-### Scripts（子 Skill，由 subagent 调用）
+### CLI / 脚本（子 Skill，由 subagent 调用）
 
-| Skill | 脚本 | 功能用途 |
+| Skill | 命令 / 脚本 | 功能用途 |
 | --- | --- | --- |
-| `tune-practice-cfg` | `scripts/run_analysis.py` | 敏感层分析 |
+| `tune-practice-cfg` | `msmodelslim analyze linear ...` | 敏感层分析 |
 | `tune-practice-cfg` | `scripts/validate_practice_yaml.py` | Practice YAML 校验 |
-| `quant-tuning-quantize` | `scripts/run_quantization.py` | 执行量化 |
+| `quant-tuning-quantize` | `msmodelslim quant --config_path ...` | 执行量化 |
 | `quant-tuning-evaluate` | `scripts/run_evaluation.py` | 执行评测 |
 
 ## 详细步骤

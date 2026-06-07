@@ -4,7 +4,7 @@
 
 ## msmodelslim 安装（强制）
 
-量化调优脚本通过 **当前 Python 环境** 直接 `import msmodelslim`，不再使用 modelslim MCP 子进程。
+量化调优通过 **当前 shell 环境** 调用 `msmodelslim` CLI（`analyze` / `quant` 等），编排层脚本通过 Python 直接 `import msmodelslim`。
 
 1. 确认已安装 Ascend 工具链与 CANN（NPU 场景）。
 2. 安装 msmodelslim（版本以项目要求为准）：
@@ -46,15 +46,16 @@ python -c "import msmodelslim; print('ok')"
 - 每张卡的 HBM 占用量和进程情况
 - 最终选用的卡号列表及用途（量化卡号 / 评测卡号）
 
-## 脚本调用方式
+## 命令调用方式
 
-各步骤通过 `execute` 运行 skill 目录下脚本，例如：
+- **敏感层分析 / 量化**：通过 `execute` 运行 `msmodelslim analyze`、`msmodelslim quant`（参数见各 Skill 文档）。
+- **编排层 / 校验 / 评测**：通过 `execute` 运行 skill 目录下脚本，例如：
 
 ```bash
 python skills/quantization-accuracy-tuning-orchestrator/scripts/history_clear.py --save-path /path/to/workdir
 ```
 
-脚本 **stdout** 输出单行 JSON（`{ok: ...}`）；日志应走 stderr。解析 JSON 判断成功与否，**禁止**用裸 `msmodelslim quant` CLI 替代脚本。
+编排脚本 **stdout** 输出单行 JSON（`{ok: ...}`）；CLI 以 **exit code** 判定成败。
 
 ## 环境就绪确认
 

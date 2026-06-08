@@ -11,6 +11,16 @@
 5. **禁止读代码仓**：禁止出于任何目的检索或阅读代码仓（日志、配置、命令输出除外）
 6. **磁盘管理**：磁盘中同时最多存储 2 份完整量化权重（当前迭代 + 最优一轮），其余及时删除
 
+## Skill 调用规则
+
+进入调优任务后，先调用 `get_skill(name="<skill-name>")` 读取主编排 Skill，并严格按其工作流与 references 执行。`<skill-name>` 必须使用 SKILL.md 中的 `name` 字段，而不是目录名。
+
+| Skill 名称 | 适用场景 |
+|------------|----------|
+| `quantization-accuracy-tuning-orchestrator` | 端到端量化精度调优编排（环境/模型准备、调优循环、结果交付） |
+
+编排层在本会话中直接 `execute` 的脚本（history/accuracy 等）以 orchestrator Skill 文档为准；**不要**在本会话中代替子代理完成 Practice/Evaluation 生成、量化或评测的全流程。
+
 ## 子代理委派规则
 
 四项能力由专用子代理承载；**不要**在本会话中代替子代理走完其全流程。通过 Task 工具委派，子代理名称与配置文件名（不含 `.md`）一致：

@@ -13,10 +13,10 @@ metadata:
     - evaluation-run
   trigger_intents:
     - 执行测评
-    - 运行 evaluation_run
+    - 运行 run_evaluation
     - 评测模型
   keywords:
-    - evaluation_run
+    - run_evaluation
     - evaluate
     - aisbench
     - service_oriented
@@ -26,7 +26,7 @@ metadata:
 
 ## Overview
 
-**解决什么**：依据 Evaluation YAML 配置，调用 MCP 对量化模型进行评测。
+**解决什么**：依据 Evaluation YAML 配置，通过 `scripts/run_evaluation.py` 对量化模型进行评测。
 
 **不解决什么**：
 - 不生成/修改 Evaluation YAML → 见 `quant-tuning-evaluation-generator` Agent
@@ -70,8 +70,9 @@ quant-tuning-evaluate (tool)
 └────────┬────────┘
          ▼
 ┌─────────────────┐
-│ MCP Tool:       │
-│ evaluation_run  │
+│ execute:        │
+│ run_evaluation  │
+│ .py             │
 │ (启动推理服务   │
 │  + 执行评测)    │
 └────────┬────────┘
@@ -90,9 +91,12 @@ quant-tuning-evaluate (tool)
 
 | 参数 | 类型 | 必需 | 说明 |
 |------|------|------|------|
-| `config_path` | string | ✅ | Evaluation YAML 路径，**JSON 字符串格式** |
-| `device` | string | ✅ | 设备类型，如 `npu` |
-| `device_indices` | list[int] | ✅ | 设备索引列表，如 `[0,1]` |
+| `quant_model_path` | string | ✅ | 量化后模型路径 |
+| `evaluate_id` | string | ✅ | 本轮评测 ID |
+| `evaluate_config_path` | string | ✅ | Evaluation YAML 路径（编排层常称 `config_path`） |
+| `save_path` | string | ✅ | 评测工作目录 |
+| `device` | string | ❌ | 设备类型，默认 `npu` |
+| `device_indices` | list[int] | ❌ | 设备索引列表，如 `[0,1]` |
 
 ---
 

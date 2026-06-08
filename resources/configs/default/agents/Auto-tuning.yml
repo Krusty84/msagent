@@ -20,6 +20,10 @@ tools:
 skills:
   patterns:
     - default:quantization-accuracy-tuning-orchestrator
+    - default:gen-evaluation-cfg
+    - default:quant-tuning-evaluate
+    - default:tune-practice-cfg
+    - default:quant-tuning-quantize
   use_catalog: false
 compression:
   auto_compress_enabled: true

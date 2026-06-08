@@ -152,6 +152,7 @@ msmodelslim quant \
 - **错误即停**：命令失败后立即中止，不兜底续跑
 - **单轮单次**：每次调用只执行一次量化
 - **config_path 模式**：调优闭环使用 `--config_path`，与 `--quant_type` 互斥
+- **device**：优先使用单卡，即以 `--device npu:0`/`--device npu:3` 这种入参形式
 
 ---
 

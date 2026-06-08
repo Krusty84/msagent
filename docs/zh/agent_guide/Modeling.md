@@ -2,14 +2,22 @@
 
 `Modeling` 是面向 `msmodeling` 场景的领域 Agent，负责承接 TensorCast / ServingCast 相关的性能建模、单点仿真、吞吐规划、设备画像和模型接入准备类问题。
 
-> 当前版本先提供 Agent 壳能力，用于统一问题入口、能力边界和文档入口；`msmodeling` 专项 skills 将在后续版本逐步接入。
+> 当前版本已经接入首批 `msmodeling` 专项 skills，可在统一入口下承接参数补齐、命令规划、设备建模引导与执行前确认；涉及真实性能结果时，仍应以实际运行输出为准。
 
 ## Agent 定位
 
 - 面向 `msmodeling` 仓库及其相关任务
 - 覆盖 TensorCast 性能仿真与 ServingCast 部署规划两大方向
 - 聚焦“理解需求 → 梳理输入 → 形成候选命令 / 方案 → 给出验证路径”
-- 当前首版不承诺自动化跑通全部专项流程，重点先做好统一入口与结构化指引
+- 对已接入的专项链路优先走 skill，对未接入链路继续提供结构化人工引导
+
+## 已接入能力
+
+当前已接入以下 `msmodeling` 专项能力：
+
+- `text-generate-executor`：用于单点仿真参数补齐、候选命令生成、执行前确认与结果总结
+- `throughput-optimizer-executor`：用于吞吐规划、硬件对比、聚合/分离/P:D 配比搜索的参数补齐与结果总结
+- `device-profile-natural-language-importer`：用于把自然语言硬件规格转换为 TensorCast `DeviceProfile` 建模输入，并显式标注待校准项
 
 ## 核心能力
 
@@ -37,23 +45,19 @@
 
 ## 当前边界说明
 
-- 当前首版 **未正式接入** `msmodeling` 专项 skills，因此更偏向：
-  - 需求归类
-  - 参数补齐
-  - 文档 / 实现阅读
+- 对已接入的 3 个专项 skill，Agent 可以直接承接：
+  - 参数渐进式补齐
   - 候选命令生成
-  - 后续动作规划
-- 对于仍未接入 skill 的链路，Agent 会先用人工引导方式承接，而不是伪造自动化流程
+  - 执行前确认
+  - 执行后结果总结
+- 对尚未接入 skill 的链路，Agent 仍以人工引导为主，而不是伪造自动化流程
 - 若需要真实性能结果，仍应以实际运行和验证输出为准
 
 ## 后续规划
 
-后续建议逐步接入以下 `msmodeling` 专项能力：
+后续仍建议逐步补齐以下 `msmodeling` 专项能力：
 
 - 环境初始化：`msmodeling-env-installer`
-- 单点仿真验证：`text-generate-executor`
-- 吞吐规划：`throughput-optimizer-executor`
-- 设备画像：`device_config`
 - 新模型接入：`model-adaptation`
 - 算子映射 / replay：`op-mapping`、`microbench`
 

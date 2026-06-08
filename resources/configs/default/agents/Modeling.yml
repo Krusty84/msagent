@@ -17,7 +17,10 @@ tools:
   use_catalog: false
   output_max_tokens: 10000
 skills:
-  patterns: []
+  patterns:
+    - default:device-profile-natural-language-importer
+    - default:text-generate-executor
+    - default:throughput-optimizer-executor
   use_catalog: false
 compression:
   auto_compress_enabled: true

@@ -3,7 +3,7 @@ name: quant-tuning-quantizer
 description: Quantize model using Practice YAML configuration
 prompt:
   - prompts/subagents/quant-tuning-quantizer.md
-llm: haiku-4.5
+llm: default
 tools:
   patterns:
     - impl:*:*

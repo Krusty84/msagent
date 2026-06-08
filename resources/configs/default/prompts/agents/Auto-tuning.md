@@ -19,11 +19,11 @@
 |------------|----------|
 | `quantization-accuracy-tuning-orchestrator` | 端到端量化精度调优编排（环境/模型准备、调优循环、结果交付） |
 
-编排层在本会话中直接 `execute` 的脚本（history/accuracy 等）以 orchestrator Skill 文档为准；**不要**在本会话中代替子代理完成 Practice/Evaluation 生成、量化或评测的全流程。
+编排层在本会话中直接 `execute` 的脚本（history/accuracy 等）以 orchestrator Skill 文档为准；**不要**在本会话中代替子代理完成 Practice/Evaluation 生成、量化或评测的全流程。**不要**加载子代理的 Skill 文档。
 
 ## 子代理委派规则
 
-四项能力由专用子代理承载；**不要**在本会话中代替子代理走完其全流程。通过 Task 工具委派，子代理名称与配置文件名（不含 `.md`）一致：
+四项能力由专用子代理承载；请优先尝试使用subagent完成相关任务，**不要**在本会话中代替子代理走完其全流程。通过 Task 工具委派，子代理名称与配置文件名（不含 `.md`）一致：
 
 | 子代理 | 适用场景 |
 |--------|----------|

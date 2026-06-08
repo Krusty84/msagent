@@ -3,7 +3,7 @@ name: quant-tuning-evaluator
 description: Evaluate quantized model using Evaluation YAML configuration
 prompt:
   - prompts/subagents/quant-tuning-evaluator.md
-llm: haiku-4.5
+llm: default
 tools:
   patterns:
     - impl:*:*

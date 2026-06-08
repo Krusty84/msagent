@@ -1,8 +1,8 @@
 version: __APP_VERSION__
-name: quant-tuning-quantizer
-description: Quantize model using Practice YAML configuration
+name: Auto-tuning
+description: Automatically tune model quantization accuracy using Practice YAML configuration
 prompt:
-  - prompts/agents/quant-tuning-quantizer.md
+  - prompts/agents/Auto-tuning.md
 llm: default
 checkpointer: sqlite
 default: false
@@ -10,6 +10,7 @@ subagents:
   - quant-tuning-practice-generator
   - quant-tuning-evaluation-generator
   - quant-tuning-evaluator
+  - quant-tuning-quantizer
 recursion_limit: 1000
 tools:
   patterns:

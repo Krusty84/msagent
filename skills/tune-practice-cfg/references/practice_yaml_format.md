@@ -156,3 +156,4 @@ spec:
 - `metadata.label` 写成字符串而非 dict
 - `type` 与字段不匹配（如 `flex_awq_ssz` 缺少 `qconfig`）
 - `dataset` 虚构不存在的文件名，未用 `lab_calib` 短名
+- `save` 字段的 `type` 不为 `"ascendv1_saver"`

@@ -1,4 +1,4 @@
-# Modeling 建模与部署规划
+# Modeling 仿真建模
 
 `Modeling` 是面向 `msmodeling` 场景的领域 Agent，负责承接 TensorCast / ServingCast 相关的性能建模、单点仿真、吞吐规划、设备画像和模型接入准备类问题。
 

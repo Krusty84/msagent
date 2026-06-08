@@ -191,7 +191,7 @@ sequenceDiagram
 | Profiler | Ascend Profiling / 性能分析 | 默认 Agent | `impl:deepagents:*` + `mcp:msprof-mcp:*` | profiler DB 分析、快慢卡诊断、MFU 计算 | `explorer` + `general-purpose` |
 | Accuracy | 模型精度分析 | 否 | `impl:deepagents:*` | RL 一致性、NaN/溢出、确定性分析 | `explorer` + `general-purpose` |
 | Quantizer | 模型量化与适配 | 否 | `impl:deepagents:*` | msModelSlim 分析、适配、量化 | `explorer` + `general-purpose` |
-| Modeling | msmodeling 建模与部署规划 | 否 | `impl:deepagents:*` | text_generate / throughput_optimizer / 设备画像 / 模型接入准备 | `explorer` + `general-purpose` |
+| Modeling | msmodeling 仿真建模 | 否 | `impl:deepagents:*` | text_generate / throughput_optimizer / 设备画像 / 模型接入准备 | `explorer` + `general-purpose` |
 | Operator | 算子性能优化 | 否 | `impl:deepagents:*` + 特定 MCP 模式 | AscendC 算子优化、算子 profiler | `explorer` + `general-purpose` |
 | Minos | 文档体验与代码审查 | 否 | `impl:deepagents:*` | `document-ux-review`、`gitcode-code-reviewer` | `explorer` |
 
@@ -249,7 +249,7 @@ flowchart LR
     Z --> Z3["Skills: msModelSlim 分析 / 适配 / 量化"]
     Z --> Z4["SubAgents: explorer + general-purpose"]
 
-    O --> O1["Prompt: 建模与部署规划方法论"]
+    O --> O1["Prompt: 仿真建模方法论"]
     O --> O2["Tools: deepagents"]
     O --> O3["Skills: 预留 msmodeling 专项接入位"]
     O --> O4["SubAgents: explorer + general-purpose"]
@@ -269,7 +269,7 @@ flowchart LR
 
 | 维度 | Profiler | Accuracy | Quantizer | Modeling | Operator | Minos |
 | -- | -- | -- | -- | -- | -- | -- |
-| 主问题域 | Profiling / 性能瓶颈 | 精度异常 | 量化与适配 | msmodeling 建模与部署规划 | 算子优化 | 文档与代码审查 |
+| 主问题域 | Profiling / 性能瓶颈 | 精度异常 | 量化与适配 | msmodeling 仿真建模 | 算子优化 | 文档与代码审查 |
 | Prompt 关注点 | 调度、热点、通信、MFU | 一致性、NaN、溢出 | 模型结构、量化风险、适配成本 | 仿真参数、部署模式、输入约束、验证路径 | 算子热点、端到端性能 | 上手体验、文档可用性、PR 风险 |
 | Tool 边界 | deepagents + `msprof-mcp` | deepagents | deepagents | deepagents | deepagents + 特定 MCP | deepagents |
 | Skill 组合特点 | 强依赖 Profiling 数据分析类 Skill | 强依赖诊断型 Skill | 强依赖量化/适配型 Skill | 首版预留 msmodeling 专项 Skill 扩展位 | 强依赖算子调优型 Skill | 强依赖流程审查型 Skill |

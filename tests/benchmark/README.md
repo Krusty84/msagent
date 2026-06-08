@@ -44,9 +44,22 @@ src/
 - `must_include_regex`：可选。最终 `answer` 文本必须匹配的正则表达式列表。
   使用 Python `re.search`，默认 flags 为 `re.IGNORECASE | re.MULTILINE`，不启用
   `DOTALL`。
+- `must_tool_use`：可选。Agent trace 中必须出现的工具调用列表。确定性校验（不交给
+  LLM judge），大小写不敏感子串匹配，例如 `msprof-mcp` 可命中
+  `msprof-mcp_analyze_kernel_details`。这是一个**硬门槛**：任一要求的工具未被调用，
+  最终 `score` 直接为 0（即使答案正确）。
 - `scoring_prompt`：judge 的评分标准 prompt，用于给出 0 到 5 分。
 
 `id` 是可选字段；缺省时使用 YAML 文件名作为 case id。
+
+工具使用效率相关字段均为可选，缺省时使用全局默认值：
+
+- `tool_budget`：免费工具调用额度，超出部分才计入效率惩罚。默认 `20`。
+- `tool_penalty_per_call`：每超额一次工具调用对应的惩罚系数。默认 `0.02`。
+- `tool_penalty_floor`：效率系数下限，避免被工具数压到过低。默认 `0.5`。
+
+注意：效率系数目前**只用于报告**（informational），不会折进最终 `score`。详见
+下方“工具使用效率”一节。
 
 示例：
 
@@ -59,6 +72,8 @@ must_include:
   - 必须覆盖的事实或结论 B
 must_include_regex:
   - "rank\\s*3"
+must_tool_use:
+  - read_file
 scoring_prompt: >
   按 0-5 分评价答案质量，重点看结论是否准确、证据是否充分、推理是否清晰。
 ```
@@ -97,9 +112,15 @@ judge 有两个职责：
 ```text
 if any must_include or must_include_regex item is missing:
   score = 0
+elif any must_tool_use tool was never called:
+  score = 0
 else:
   score = rubric_score / 5
 ```
+
+`must_tool_use` 同样是确定性硬门槛，基于 trace 中实际的工具调用判定，
+结果记录在 scores.json 每个 case 的 `must_tool_use_pass` /
+`must_tool_use_results` 字段，以及 report.md 的 `Must Tool Use` / `Missing Tools` 列。
 
 judge 输出会保存为 `judge/<case_id>.judge.json`，其中包含：
 
@@ -116,6 +137,36 @@ judge 输出会保存为 `judge/<case_id>.judge.json`，其中包含：
   "rubric_score": 4.5,
   "strengths": ["答案结论明确。"],
   "weaknesses": []
+}
+```
+
+## 工具使用效率
+
+benchmark 会根据 trace 中实际的工具调用数量，确定性地计算一个效率系数，用于人工
+评估 Agent 是否使用了过多工具调用。计算来自 metrics 的确定性计数
+（`tool_calls.agent.count`），不交给 LLM judge（judge 只看到截断的 trace 摘要，
+无法准确计数）。
+
+```text
+over_budget = max(0, tool_calls - tool_budget)
+efficiency_factor = clamp(1 - over_budget * tool_penalty_per_call, tool_penalty_floor, 1.0)
+```
+
+当前 `efficiency_factor` **仅用于报告**，不会折进最终 `score`（`applied_to_score:
+false`）。它会出现在 `scores.json` 每个 case 的 `efficiency` 字段、聚合层的
+`average_efficiency_factor`，以及 `report.md` 的 `Tools / Budget / Over / Eff` 列。
+
+`efficiency` 字段示例：
+
+```json
+{
+  "tool_calls": 26,
+  "tool_budget": 20,
+  "over_budget": 6,
+  "tool_penalty_per_call": 0.02,
+  "tool_penalty_floor": 0.5,
+  "efficiency_factor": 0.88,
+  "applied_to_score": false
 }
 ```
 
@@ -138,6 +189,7 @@ runs/<run_id>/
 - `judge_score`：judge 给出的 `rubric_score`，范围为 0 到 5。
 - `must_include_pass`：是否覆盖全部必含项。
 - `must_include_results`：逐项覆盖判断。
+- `efficiency`：工具使用效率（informational，不影响 `score`）。
 - `token_usage`、`duration_ms`、`tool_calls`：运行指标。
 
 msAgent 运行会额外启用 `--trace-jsonl`，并把 msAgent trace 保存到

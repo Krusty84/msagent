@@ -6,6 +6,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+DEFAULT_TOOL_BUDGET = 20
+DEFAULT_TOOL_PENALTY_PER_CALL = 0.02
+DEFAULT_TOOL_PENALTY_FLOOR = 0.5
+
 
 def _load_yaml_or_json(path: Path) -> dict[str, Any]:
     text = path.read_text(encoding="utf-8")
@@ -80,8 +84,12 @@ class BenchmarkCase:
     prompt: str
     must_include: list[str]
     must_include_regex: list[str]
+    must_tool_use: list[str]
     scoring_prompt: str
     source_path: Path = field(repr=False)
+    tool_budget: int = DEFAULT_TOOL_BUDGET
+    tool_penalty_per_call: float = DEFAULT_TOOL_PENALTY_PER_CALL
+    tool_penalty_floor: float = DEFAULT_TOOL_PENALTY_FLOOR
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any], source_path: Path) -> "BenchmarkCase":
@@ -106,8 +114,26 @@ class BenchmarkCase:
             prompt=str(raw["prompt"]),
             must_include=_normalize_string_list(raw["must_include"], source_path, "must_include"),
             must_include_regex=must_include_regex,
+            must_tool_use=_normalize_string_list(
+                raw.get("must_tool_use", []),
+                source_path,
+                "must_tool_use",
+            ),
             scoring_prompt=scoring_prompt,
             source_path=source_path,
+            tool_budget=_parse_tool_budget(raw.get("tool_budget"), source_path),
+            tool_penalty_per_call=_parse_non_negative_float(
+                raw.get("tool_penalty_per_call"),
+                source_path,
+                "tool_penalty_per_call",
+                DEFAULT_TOOL_PENALTY_PER_CALL,
+            ),
+            tool_penalty_floor=_parse_unit_float(
+                raw.get("tool_penalty_floor"),
+                source_path,
+                "tool_penalty_floor",
+                DEFAULT_TOOL_PENALTY_FLOOR,
+            ),
         )
 
     def resolve_input_path(self) -> Path:
@@ -159,6 +185,42 @@ def _normalize_string_list(value: Any, source_path: Path, field_name: str) -> li
     if isinstance(value, list):
         return [str(item).strip() for item in value if str(item).strip()]
     raise ValueError(f"{source_path} {field_name} must be a list of strings.")
+
+
+def _parse_tool_budget(value: Any, source_path: Path) -> int:
+    if value is None or value == "":
+        return DEFAULT_TOOL_BUDGET
+    try:
+        budget = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{source_path} tool_budget must be a non-negative integer.") from exc
+    if budget < 0:
+        raise ValueError(f"{source_path} tool_budget must be a non-negative integer.")
+    return budget
+
+
+def _parse_non_negative_float(value: Any, source_path: Path, field_name: str, default: float) -> float:
+    if value is None or value == "":
+        return default
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{source_path} {field_name} must be a non-negative number.") from exc
+    if parsed < 0:
+        raise ValueError(f"{source_path} {field_name} must be a non-negative number.")
+    return parsed
+
+
+def _parse_unit_float(value: Any, source_path: Path, field_name: str, default: float) -> float:
+    if value is None or value == "":
+        return default
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{source_path} {field_name} must be a number between 0 and 1.") from exc
+    if not 0.0 <= parsed <= 1.0:
+        raise ValueError(f"{source_path} {field_name} must be a number between 0 and 1.")
+    return parsed
 
 
 def _validate_regex_list(patterns: list[str], source_path: Path) -> None:

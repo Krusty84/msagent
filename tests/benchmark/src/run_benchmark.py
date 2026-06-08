@@ -79,13 +79,19 @@ def run(
         )
         metrics_items.append(case_metrics)
 
-        final_score = _final_score(judge_result)
+        tool_use_results = _tool_use_results(case, case_metrics)
+        must_tool_use_pass = all(item["used"] for item in tool_use_results)
+        efficiency = _efficiency_report(case, case_metrics)
+        final_score = _final_score(judge_result, must_tool_use_pass)
         score = {
             "case_id": case.id,
             "must_include_pass": judge_result["must_include_pass"],
             "must_include_results": judge_result["must_include_results"],
+            "must_tool_use_pass": must_tool_use_pass,
+            "must_tool_use_results": tool_use_results,
             "judge_score": judge_result["rubric_score"],
             "score": final_score,
+            "efficiency": efficiency,
             "strengths": judge_result.get("strengths", []),
             "weaknesses": judge_result.get("weaknesses", []),
             "trace_path": str(trace_path),
@@ -103,6 +109,14 @@ def run(
         "average_judge_score": round(mean(judge_scores), 4),
         "must_include_pass_rate": round(
             mean(1.0 if item["must_include_pass"] else 0.0 for item in scores),
+            4,
+        ),
+        "must_tool_use_pass_rate": round(
+            mean(1.0 if item["must_tool_use_pass"] else 0.0 for item in scores),
+            4,
+        ),
+        "average_efficiency_factor": round(
+            mean(item["efficiency"]["efficiency_factor"] for item in scores),
             4,
         ),
         "token_usage": _sum_token_usage(metrics_items),
@@ -290,10 +304,59 @@ def _clamp_score(value: Any) -> float:
     return round(max(0.0, min(5.0, score)), 2)
 
 
-def _final_score(judge_result: dict[str, Any]) -> float:
+def _final_score(judge_result: dict[str, Any], must_tool_use_pass: bool = True) -> float:
     if not judge_result.get("must_include_pass"):
         return 0.0
+    if not must_tool_use_pass:
+        return 0.0
     return round(normalized_judge_score(judge_result), 4)
+
+
+def _tool_use_results(case: BenchmarkCase, case_metrics: dict[str, Any]) -> list[dict[str, Any]]:
+    """Deterministically check whether required tools were actually called.
+
+    Matching is case-insensitive and forgiving: a required entry is considered
+    used if it equals or is a substring of any tool name in the trace (so
+    ``msprof`` matches ``msprof-mcp_analyze_kernel_details``). This is a hard
+    gate, like must_include: any required tool that was never called sets
+    score=0.
+    """
+    by_tool = case_metrics.get("tool_calls", {}).get("agent", {}).get("by_tool", {})
+    results = []
+    for required in case.must_tool_use:
+        needle = required.casefold()
+        matched = {tool: int(count) for tool, count in by_tool.items() if needle in str(tool).casefold()}
+        results.append(
+            {
+                "tool": required,
+                "used": bool(matched),
+                "count": sum(matched.values()),
+                "matched_tools": sorted(matched),
+            }
+        )
+    return results
+
+
+def _efficiency_report(case: BenchmarkCase, case_metrics: dict[str, Any]) -> dict[str, Any]:
+    """Report tool-use efficiency for human review.
+
+    This is informational only: the efficiency factor is NOT folded into the
+    final score. It surfaces how far a run exceeded its tool budget and what a
+    multiplicative penalty would look like if it were applied later.
+    """
+    tool_calls = int(case_metrics.get("tool_calls", {}).get("agent", {}).get("count", 0))
+    over_budget = max(0, tool_calls - case.tool_budget)
+    raw_factor = 1.0 - over_budget * case.tool_penalty_per_call
+    efficiency_factor = round(max(case.tool_penalty_floor, min(1.0, raw_factor)), 4)
+    return {
+        "tool_calls": tool_calls,
+        "tool_budget": case.tool_budget,
+        "over_budget": over_budget,
+        "tool_penalty_per_call": case.tool_penalty_per_call,
+        "tool_penalty_floor": case.tool_penalty_floor,
+        "efficiency_factor": efficiency_factor,
+        "applied_to_score": False,
+    }
 
 
 def _render_markdown_report(report: dict[str, Any]) -> str:
@@ -305,22 +368,32 @@ def _render_markdown_report(report: dict[str, Any]) -> str:
         f"- Average score: {report['average_score']:.4f}",
         _format_judge_score(report.get("average_judge_score")),
         f"- Must-include pass rate: {report['must_include_pass_rate']:.4f}",
+        f"- Must-tool-use pass rate: {report['must_tool_use_pass_rate']:.4f}",
+        f"- Average efficiency factor (informational): {report['average_efficiency_factor']:.4f}",
         f"- Total tokens: {report['token_usage']['total_tokens']}",
         f"- Total duration: {report['duration_ms']['total']} ms",
         f"- Agent tool calls: {report['tool_calls']['agent']['count']}",
         "",
-        "| Case | Final | Judge | Must Include | Missing Items |",
-        "| --- | ---: | ---: | --- | --- |",
+        "| Case | Final | Judge | Must Include | Must Tool Use | Tools | Budget | Over | Eff | Missing Items | Missing Tools |",
+        "| --- | ---: | ---: | --- | --- | ---: | ---: | ---: | ---: | --- | --- |",
     ]
     for item in report["scores"]:
         missing_items = [result["item"] for result in item.get("must_include_results", []) if not result.get("covered")]
+        missing_tools = [result["tool"] for result in item.get("must_tool_use_results", []) if not result.get("used")]
+        efficiency = item.get("efficiency", {})
         lines.append(
-            "| {case_id} | {score:.4f} | {judge_score:.2f} | {must_include} | {missing} |".format(
+            "| {case_id} | {score:.4f} | {judge_score:.2f} | {must_include} | {must_tool_use} | {tools} | {budget} | {over} | {eff:.2f} | {missing} | {missing_tools} |".format(
                 case_id=item["case_id"],
                 score=item["score"],
                 judge_score=float(item["judge_score"]),
                 must_include="pass" if item["must_include_pass"] else "fail",
+                must_tool_use="pass" if item["must_tool_use_pass"] else "fail",
+                tools=efficiency.get("tool_calls", 0),
+                budget=efficiency.get("tool_budget", 0),
+                over=efficiency.get("over_budget", 0),
+                eff=float(efficiency.get("efficiency_factor", 1.0)),
                 missing=", ".join(missing_items) or "[]",
+                missing_tools=", ".join(missing_tools) or "[]",
             )
         )
     lines.append("")

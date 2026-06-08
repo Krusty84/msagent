@@ -6,7 +6,9 @@ prompt:
 llm: haiku-4.5
 tools:
   patterns:
-    - impl:deepagents:*
+    - impl:*:*
+    - internal:*:*
+    - mcp:*:*
   use_catalog: false
   output_max_tokens: 10000
 skills:

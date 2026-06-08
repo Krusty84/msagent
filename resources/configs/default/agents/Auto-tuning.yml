@@ -11,6 +11,8 @@ subagents:
   - quant-tuning-evaluation-generator
   - quant-tuning-evaluator
   - quant-tuning-quantizer
+  - msmodelslim-model-analysis
+  - msmodelslim-model-adapt
 recursion_limit: 1000
 tools:
   patterns:
@@ -24,6 +26,8 @@ skills:
     - default:quant-tuning-evaluate
     - default:tune-practice-cfg
     - default:quant-tuning-quantize
+    - default:msmodelslim-model-analysis
+    - default:msmodelslim-model-adapt
   use_catalog: false
 compression:
   auto_compress_enabled: true

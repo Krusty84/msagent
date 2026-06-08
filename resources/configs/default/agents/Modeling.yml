@@ -17,7 +17,11 @@ tools:
   use_catalog: false
   output_max_tokens: 10000
 skills:
-  patterns: []
+  patterns:
+    - default:msmodeling-env-installer
+    - default:msmodeling-device-config
+    - default:msmodeling-text-generate-executor
+    - default:msmodeling-throughput-optimizer-executor
   use_catalog: false
 compression:
   auto_compress_enabled: true

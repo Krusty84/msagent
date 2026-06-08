@@ -3,7 +3,7 @@ name: quant-tuning-evaluation-generator
 description: Generate msmodelslim evaluation YAML configuration
 prompt:
   - prompts/subagents/quant-tuning-evaluation-generator.md
-llm: haiku-4.5
+llm: default
 tools:
   patterns:
     - impl:*:*

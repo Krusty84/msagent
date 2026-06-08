@@ -24,7 +24,7 @@ metadata:
 
 ## Overview
 
-本 Skill 负责生成 `evaluation_run` 所需的单文件评测 YAML 配置。
+本 Skill 负责生成 `quant-tuning-evaluate` / `run_evaluation.py` 所需的单文件评测 YAML 配置。
 
 **核心功能**：
 - 生成包含 `demand`（目标精度）、`evaluation`（AISBench）、`inference_engine`（vLLM-Ascend）三个模块的完整 YAML
@@ -121,7 +121,7 @@ inference_engine:
 
 **允许**：
 - 使用 `assets/evaluation_config.example.yaml` 作为模板
-- 使用 MCP `evaluation_run` 工具描述参考 `device` / `device_indices` 字段
+- 参考 `quant-tuning-evaluate` Skill 中 `device` / `device_indices` 与 `inference_engine.args.tensor-parallel-size` 的对齐要求
 - 仅通过本 SKILL.md 文档和模板文件完成配置生成
 
 ## 常见错误

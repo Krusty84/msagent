@@ -100,7 +100,7 @@ msmodelslim analyze linear \
   --calib_dataset boolq.jsonl \
   --pattern "*" \
   --topk 15 \
-  --device npu \
+  --device npu:0 \
   --trust_remote_code False \
   2>&1 | tee "${SAVE_PATH}/analysis_console.log"
 ```
@@ -211,3 +211,4 @@ python skills/tune-practice-cfg/scripts/validate_practice_yaml.py --practice-pat
 - `metadata.label` 写成字符串而非 dict
 - `type` 与字段不匹配（如 `flex_awq_ssz` 缺少 `qconfig`），参见 [量化配置格式](references/practice_yaml_format.md)
 - `valid=false` 仍继续后续步骤
+- 命令行参数 `--device` 未使用 `npu:0` 这种格式，错误地使用了 `DeviceType.NPU`

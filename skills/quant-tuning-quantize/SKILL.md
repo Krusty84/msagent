@@ -89,7 +89,7 @@ quant-tuning-quantize (tool)
 |------|------|------|------|
 | `config_path` | string | ✅ | Practice YAML 路径 |
 | `model_path` | string | ✅ | 原始模型路径 |
-| `save_path` | string | ✅ | 量化产物保存路径 |
+| `save_path` | string | ✅ | 量化产物保存路径；须体现调优轮次，推荐 `{workdir}/round_{N}/quantized`（如 `round_1/quantized`） |
 | `model_type` | string | ✅ | 模型类型名 |
 | `device` | string | ✅ | 设备类型，如 `npu:0` |
 | `trust_remote_code` | bool | ❌ | 是否信任远程代码 |
@@ -101,12 +101,14 @@ quant-tuning-quantize (tool)
 ```bash
 msmodelslim quant \
   --model_path "${MODEL_PATH}" \
-  --save_path "${SAVE_PATH}" \
+  --save_path "${WORKDIR}/round_1/quantized" \
   --device npu:0 \
   --model_type "${MODEL_TYPE}" \
   --config_path "${CONFIG_PATH}" \
   --trust_remote_code False
 ```
+
+`save_path` 必须包含轮次与产物目录层级，便于 orchestrator 区分各轮权重，例如 `{workdir}/round_1/quantized`、`{workdir}/round_2/quantized`。
 
 **成功判定**：exit code 为 0，且 `${SAVE_PATH}` 下出现量化权重产物。
 
@@ -129,7 +131,7 @@ msmodelslim quant \
 
 ```
 量化完成:
-- 产物路径: /workspace/output/round_1/quantized
+- 产物路径: /workspace/output/round_1/quantized  （与 `--save_path` 一致，须含 round_N/quantized）
 - 耗时: （可选）
 ```
 
@@ -152,6 +154,7 @@ msmodelslim quant \
 - **错误即停**：命令失败后立即中止，不兜底续跑
 - **单轮单次**：每次调用只执行一次量化
 - **config_path 模式**：调优闭环使用 `--config_path`，与 `--quant_type` 互斥
+- **save_path 命名**：每轮使用 `{workdir}/round_{N}/quantized`，N 为当前调优轮次（如 `round_1/quantized`）
 - **device**：优先使用单卡，即以 `--device npu:0`/`--device npu:3` 这种入参形式
 
 ---
@@ -170,6 +173,6 @@ msmodelslim quant \
 ## 检查清单
 
 - [ ] `config_path` 指向的 Practice YAML 已通过校验
-- [ ] `device` 格式正确（如 `npu:0`, `npu:0,1,2,3`）
-- [ ] `save_path` 磁盘空间充足
+- [ ] `device` 格式正确（如 `npu:0`, `npu:0,1,2,3`），优先使用单卡
+- [ ] `save_path` 为 `{workdir}/round_{N}/quantized` 形式且磁盘空间充足
 - [ ] `msmodelslim quant --help` 可正常执行

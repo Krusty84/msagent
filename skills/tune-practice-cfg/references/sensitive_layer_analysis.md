@@ -26,7 +26,8 @@ msmodelslim analyze linear \
 | `topk` | 返回 Top-K 敏感层 | `15` |
 | `device` | 执行设备（如 `"npu"`, `"npu:0"`, `"gpu:0"`） | `"npu"` |
 
-官方文档：[敏感层分析使用指南](https://gitcode.com/Ascend/msmodelslim/blob/master/docs/zh/feature_guide/sensitive_layer_analysis/usage.md)
+- `model_type` 与模型 `config.json` 中的 `model_type` 并非同一概念，你应该参考 `msmodelslim/config/config.ini`，如 `Qwen3-32B` `DeepSeek-V3` 才是正确合法的 `model_type`。
+- 官方文档：[敏感层分析使用指南](https://gitcode.com/Ascend/msmodelslim/blob/master/docs/zh/feature_guide/sensitive_layer_analysis/usage.md)
 
 ## 支持的分析指标
 

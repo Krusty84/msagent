@@ -97,7 +97,7 @@ msmodelslim analyze linear \
   --model_type "${MODEL_TYPE}" \
   --model_path "${MODEL_PATH}" \
   --metrics kurtosis \
-  --calib_dataset boolq.jsonl \
+  --calib_dataset mix_calib.jsonl \
   --pattern "*" \
   --topk 15 \
   --device npu:0 \

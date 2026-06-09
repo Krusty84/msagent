@@ -1,13 +1,13 @@
 ---
 name: msmodeling-device-config
-description: 在需要根据自然语言规格为未支持硬件新增或更新 TensorCast DeviceProfile 条目时使用
+description: 在需要根据自然语言规格为未支持硬件新增或更新 DeviceProfile 设备画像条目时使用
 version: 0.4.0
 source: local-session-analysis
 ---
 
 # 设备画像自然语言导入器
 
-引导用户把自然语言硬件描述转换为可运行、可校准、可复现的 TensorCast `DeviceProfile`。
+引导用户把自然语言硬件描述转换为可运行、可校准、可复现的 `DeviceProfile` 设备画像。
 
 ## 适用场景
 
@@ -34,7 +34,7 @@ source: local-session-analysis
 
 不要默认新建 `tensor_cast/device_profiles/<device_slug>.py`。只有当用户明确要求临时 profile、自定义 profile 文件或隔离实验时，才写入 `tensor_cast/device_profiles/`。
 
-## 当前 TensorCast 结构
+## 当前设备画像代码结构
 
 编辑前先阅读 `tensor_cast/device.py`，确认现有厂商类、profile 命名风格、互联常量和 `DeviceProfile` 注册方式。只有在用户明确要求写入 `tensor_cast/device_profiles/` 时，才需要额外阅读 `tensor_cast/device_profiles/README.md` 和 `tensor_cast/device_profiles/__init__.py`。
 
@@ -75,7 +75,7 @@ source: local-session-analysis
 2. 你手头有什么资料？比如官网规格、截图、表格、口头描述。
 3. 你希望先按“单卡”建 profile，还是硬件里有多个 die/chiplet 需要拆开？如果不确定，直接说“不确定”。
 
-你可以直接粘贴原始描述或截图里的文字，我会帮你翻译成 TensorCast 需要的字段。
+你可以直接粘贴原始描述或截图里的文字，我会帮你翻译成设备画像需要的字段。
 ```
 
 后续按阶段推进：
@@ -94,7 +94,7 @@ source: local-session-analysis
 
 向新手解释时使用这些说法：
 
-- `DeviceProfile`：TensorCast 里的一张“硬件能力卡片”，记录某种硬件的算力、显存、带宽和互联。
+- `DeviceProfile`：一张“硬件能力卡片”，记录某种硬件的算力、显存、带宽和互联。
 - profile 粒度：这张能力卡片代表的最小硬件单元。常见选择是“单卡”或“单 die”。
 - die / chiplet：一张卡里面可能有多个计算芯片小块；如果软件能分别调度它们，可能要按 die 建 profile。
 - dtype：数据类型，比如 FP32、FP16、BF16、INT8、FP8。
@@ -171,7 +171,7 @@ source: local-session-analysis
 - `BF16`、`bfloat16` -> `torch.bfloat16`
 - `INT8` -> `torch.int8`
 - `FP8` -> `DTYPE_FP8`
-- `FP4`、`MXFP4` -> 仅当用户确认这对应 TensorCast 的 FP4 路径时，映射为 `DTYPE_FP4`
+- `FP4`、`MXFP4` -> 仅当用户确认这对应当前 FP4 建模路径时，映射为 `DTYPE_FP4`
 
 不要编造 dtype 吞吐。如果某种关系看起来合理，应请用户确认，例如：`INT8 峰值是否等于 FP16 的 2 倍？`
 
@@ -183,11 +183,11 @@ source: local-session-analysis
 
 ### 第一步：从资料提取峰值数字
 
-直接问用户：“你的资料里有没有写 FP16/BF16/INT8 这类算力？直接贴过来就行，我来帮你对应到 TensorCast 的格式。”
+直接问用户：“你的资料里有没有写 FP16/BF16/INT8 这类算力？直接贴过来就行，我来帮你对应到设备画像字段。”
 
 支持的关键词映射（用户不需要知道这些术语）：
 
-| 用户资料里可能的写法 | 对应 TensorCast 字段 |
+| 用户资料里可能的写法 | 对应设备画像字段 |
 |---|---|
 | FP16 TFLOPS、FP16 算力、Tensor Core 算力 | `mma_ops[torch.half]` |
 | BF16 TFLOPS、BF16 算力、AI Core 算力 | `mma_ops[torch.bfloat16]` |
@@ -483,6 +483,6 @@ python -m cli.inference.text_generate Qwen/Qwen3-32B --num-queries 2 --query-len
 
 - profile 可以成功导入。
 - `DeviceProfile.all_device_profiles` 包含新的 profile 名称。
-- 用户可以把该 profile 名称传给 TensorCast 设备选择逻辑。
+- 用户可以把该 profile 名称传给设备选择逻辑。
 - 最终回复包含已替换真实 profile 名称的可执行命令行示例。
 - 所有默认值、估值、推断值和不确定性都对用户可见。

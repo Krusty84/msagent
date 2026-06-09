@@ -9,7 +9,7 @@ msmodelslim analyze linear \
   --model_type MODEL_TYPE \
   --model_path MODEL_PATH \
   --metrics kurtosis \
-  --calib_dataset boolq.jsonl \
+  --calib_dataset mix_calib.jsonl \
   --pattern "*" \
   --topk 15 \
   --device npu \
@@ -21,7 +21,7 @@ msmodelslim analyze linear \
 | `model_type` | 模型类型（模型名） | 必填 |
 | `model_path` | 模型路径 | 必填 |
 | `metrics` | 分析指标（linear scope） | `"kurtosis"` |
-| `calib_dataset` | 校准数据集 | `"boolq.jsonl"` |
+| `calib_dataset` | 校准数据集 | `"mix_calib.jsonl"` |
 | `pattern` | 层匹配模式列表 | `"*"`（全量） |
 | `topk` | 返回 Top-K 敏感层 | `15` |
 | `device` | 执行设备（如 `"npu"`, `"npu:0"`, `"gpu:0"`） | `"npu"` |

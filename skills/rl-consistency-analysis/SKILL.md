@@ -12,25 +12,26 @@ description: 训练与推理数据不一致的端到端根因分析。当模块�
 
 ## 工作流程
 
-1. 运行下面的固定脚本。它将：
-   - 调用 `scripts/generate_module_mapping.py` 脚本生成 `output_1` 到 `output_4`
+1. 你是一个训推一致性的专家，知道不同训练和推理框架的层级映射关系，现在需要识别并获取训练和推理数据的key，将他们进行映射，生成`<output_dir>/output_0_key_mapping.json`, 其中key是训练的key, value是推理的key
+2. 运行下面的固定脚本。它将：
+   - 调用 `scripts/run_root_cause_analysis.py` 脚本生成 `output_1` 到 `output_5`
    - 对 `module_priority_rank` 为 1 和 2 的候选进行排序
    - 抑制明显的结构性误报（如融合 QKV 边界）
    - 检查同一层/块中前一个对齐的模块
    - 比较对齐边界与可疑模块之间的训练侧和推理侧中间模块
    - 以 JSON 格式输出结构化根因证据
-2. 读取：
+3. 读取：
    - `output_5_root_cause_report.json` 获取机器可读的证据
    - `references/report_template.md` 获取最终 Markdown 报告结构
    - `references/manual_case_pattern.md` 获取必要时的专家推理模式
-3. 由 Agent（而非脚本）编写最终的 `output_5_root_cause_report.md`：
+4. 由 Agent（而非脚本）编写最终的 `output_5_root_cause_report.md`：
    - 使用模板作为框架，而非固定文本
    - 解释为什么保留或排除顶级可疑模块
    - 将结构化证据转换为特定任务的叙述
    - 陈述最可能的根因和具体的下一步检查
    - 在回复“报告已生成”或复用任何历史结论前，必须在当前轮次检查 `<output_dir>` 下的 `output_5_root_cause_report.md` 是否真实存在
    - 如果 `output_5_root_cause_report.md` 缺失，则任务不能视为完成：需要按需重新运行固定脚本，并在当前轮次重新写出该 Markdown 报告，不能仅依赖 thread 中的历史记忆
-4. 如果证据表明某一侧有额外的激活或融合操作，请下一步验证该侧的实现/配置。
+5. 如果证据表明某一侧有额外的激活或融合操作，请下一步验证该侧的实现/配置。
 
 ## 分析规则
 
@@ -55,6 +56,7 @@ description: 训练与推理数据不一致的端到端根因分析。当模块�
 python3 "<skill_root>/scripts/run_root_cause_analysis.py" \
   --train "<train_dump_json_path>" \
   --rollout "<rollout_dump_json_path>" \
+  --mapping_key "<mapping_key_json_path>" \
   --out-dir "<output_dir>"
 ```
 
@@ -62,6 +64,7 @@ python3 "<skill_root>/scripts/run_root_cause_analysis.py" \
 
 ## 输出文件
 
+- `output_0_key_mapping.json`
 - `output_1_key_mapping.*`
 - `output_2_mapping.*`
 - `output_3_value_compare.*`

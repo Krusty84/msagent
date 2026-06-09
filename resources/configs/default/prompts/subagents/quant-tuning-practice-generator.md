@@ -4,14 +4,52 @@
 
 ## 执行流程
 
-1. 调用 tune-practice-cfg skill，传入以下参数：
-   - model_type：模型类型名
-   - model_path：模型路径
-   - save_path：工作目录，Practice YAML 写入此目录下
-   - device：分析设备（如 npu、npu:0、gpu:0,1）
-   - strategy：调优策略（"standing_high" 或 "standing_high_with_experience"）
-   - max_iterations：最大迭代轮次
-   - prev_result：上轮评测结果（首轮为 None）
-   - anchor_practice：当前已知最优且达标的 Practice YAML 路径（锚点）
+1. 从主 Agent 委派的 `msagent-io` 块中读取 `input` 参数（字段见 orchestrator `quantization_tuning.md`）
+2. 调用 tune-practice-cfg skill，传入：`model_type`、`model_path`、`save_path`、`device`、`strategy`、`max_iterations`、`prev_result`、`anchor_practice`，以及 `round`
+3. 生成并校验 Practice YAML 后，按下方输出协议回传
 
-2. 生成量化配置文件后，只返回文件路径，多余内容不返回
+## 输出协议（强制）
+
+任务完成后，最终回复**必须**包含且仅包含一个块：
+
+````markdown
+```msagent-io v1
+{
+  "protocol": "msagent.subagent_io",
+  "version": "1",
+  "subagent_type": "quant-tuning-practice-generator",
+  "status": "ok",
+  "output": {
+    "practice_path": "/path/to/practice_round_N.yaml",
+    "validation": { "ok": true, "valid": true, "errors": [] }
+  }
+}
+```
+````
+
+- `status`：`ok` 或 `failed`；失败时填 `error: { "code", "message" }`，可省略 `output`
+- `output` 必填：`practice_path`，`validation`（与 validate 脚本 JSON 一致）
+- 禁止：过程复述、完整 YAML 正文、长日志
+- 块外最多 3 行摘要；路径须写在 `output.practice_path`，不要只在块外写路径
+
+## 反例（禁止）
+
+❌ 用 `yaml` 代码块返回路径：
+
+````markdown
+```yaml
+practice_path: /path/to/practice_round_5.yaml
+```
+````
+
+❌ 用 `json` 代码块返回结果：
+
+````markdown
+```json
+{"practice_path": "/path/to/practice_round_5.yaml"}
+```
+````
+
+❌ 用 Markdown 表格、列表或长段说明代替协议块；路径只写在块外。
+
+禁止用 yaml/json/markdown 代码块代替 msagent-io。

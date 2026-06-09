@@ -16,7 +16,7 @@ metadata:
   verified_tags: {}               # {model_type: [[tag1, tag2], [tag3]]}
 spec:
   process: []                     # 量化处理器列表（见下文）
-  dataset: "boolq.jsonl"          # 校准数据集（无路径时用短名，在 lab_calib 解析）
+  dataset: "mix_calib.jsonl"          # 校准数据集（无路径时用短名，在 lab_calib 解析）
   save: []                        # 保存配置
 ```
 
@@ -145,7 +145,7 @@ spec:
           symmetric: true
           method: "minmax"
       include: ["*"]
-  dataset: "boolq.jsonl"
+  dataset: "mix_calib.jsonl"
   save:
     - type: "ascendv1_saver"
       part_file_size: 4

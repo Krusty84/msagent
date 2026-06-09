@@ -1,7 +1,7 @@
 ---
 name: msmodeling-env-installer
 description: Install and verify the msmodeling development environment. Use when the user explicitly asks to install msmodeling dependencies, set up this repository, create `myenv` with `uv`, install this repository's `requirements.txt`, set project `PYTHONPATH`, or configure `HF_ENDPOINT`; if the user only says to install an environment, ask whether they mean msmodeling dependencies before proceeding.
-version: 0.2.1
+version: 0.2.2
 source: local-session-analysis
 ---
 
@@ -61,7 +61,14 @@ source: local-session-analysis
 ## 工作流程
 
 1. 确认用户意图明确指向 msmodeling 环境依赖；如果只是泛化的“安装环境”，先询问是否安装 msmodeling 当前仓库的环境依赖。
-2. 确认当前目录是 msmodeling 仓库根目录，至少包含 `README.md` 和 `requirements.txt`。
+2. 检查当前目录是否为 msmodeling 仓库根目录，至少包含 `README.md` 和 `requirements.txt`。
+   - 若当前目录不是 msmodeling 仓库根目录，先检查当前目录下是否已有 `msmodeling/README.md` 和 `msmodeling/requirements.txt`；若存在，进入 `msmodeling` 后继续。
+   - 若当前目录及其下级 `msmodeling/` 都不存在仓库，说明将创建 `msmodeling` 目录并从官方仓库克隆；获得授权后直接执行：
+     ```bash
+     git clone https://gitcode.com/Ascend/msmodeling.git
+     cd msmodeling
+     ```
+   - 克隆后必须重新确认 `README.md` 和 `requirements.txt` 存在，再继续环境安装。
 3. 检测 `python`、`python3` 或 Windows `py -3`，确认 Python 版本为 `3.10+`。
 4. 检查 `uv` 是否可用；缺失时用 `python -m pip install uv -i https://mirrors.ustc.edu.cn/pypi/web/simple` 安装。
 5. 安装或调用 `uv` 后，解析真实 `uv` 可执行路径，不能假设当前 shell 的 `PATH` 已刷新。
@@ -137,6 +144,8 @@ $env:HF_ENDPOINT = "https://hf-mirror.com"
 |:---|:---|
 | `scripts/install-current-project-deps.ps1` | Windows PowerShell |
 | `scripts/install-current-project-deps.sh` | Linux/macOS/WSL/Git Bash |
+
+脚本会先确认当前目录是否为 msmodeling 仓库根目录；如果当前目录下已有 `msmodeling/` 仓库则自动进入；如果两者都不存在，则按 `optix-deploy` 的方式从 `https://gitcode.com/Ascend/msmodeling.git` 克隆后再继续安装。
 
 PowerShell 参数：
 

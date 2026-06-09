@@ -128,7 +128,6 @@ async def test_config_registry_bootstraps_default_layout(tmp_path: Path) -> None
     assert minos["skills"]["patterns"] == default_minos["skills"]["patterns"]
 
 
-
 @pytest.mark.asyncio
 async def test_config_registry_adds_missing_modeling_skill_patterns_to_existing_config_dir(
     tmp_path: Path,

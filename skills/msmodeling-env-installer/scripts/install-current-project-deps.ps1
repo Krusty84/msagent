@@ -10,6 +10,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $PypiMirror = "https://mirrors.ustc.edu.cn/pypi/web/simple"
+$MsmodelingRepoUrl = "https://gitcode.com/Ascend/msmodeling.git"
 
 function Test-CommandExists {
     param([string]$Name)
@@ -98,6 +99,30 @@ function Enable-ProjectUvCache {
     Write-Host "UV_CACHE_DIR set for current session: $env:UV_CACHE_DIR"
 }
 
+function Confirm-MsmodelingRepoRoot {
+    if ((Test-Path "README.md") -and (Test-Path "requirements.txt")) {
+        return
+    }
+
+    if ((Test-Path "msmodeling\README.md") -and (Test-Path "msmodeling\requirements.txt")) {
+        Write-Host "msmodeling repository found under .\msmodeling. Entering it..."
+        Set-Location "msmodeling"
+        return
+    }
+
+    if (Test-Path "msmodeling") {
+        throw "Path .\msmodeling exists but does not look like the msmodeling repository root. Move it aside or run this script from a valid msmodeling repository root."
+    }
+
+    Write-Host "msmodeling repository root not found. Cloning from $MsmodelingRepoUrl ..."
+    git clone $MsmodelingRepoUrl
+    Set-Location "msmodeling"
+
+    if ((-not (Test-Path "README.md")) -or (-not (Test-Path "requirements.txt"))) {
+        throw "Clone finished, but README.md or requirements.txt is missing. Check repository contents."
+    }
+}
+
 function Test-PythonModuleAvailable {
     param(
         [string[]]$Launcher,
@@ -139,9 +164,7 @@ function Assert-ExistingEnvironmentClean {
     Write-Host "Existing environment check passed: torch_npu and cudatoolkit are absent."
 }
 
-if ((-not (Test-Path "README.md")) -or (-not (Test-Path "requirements.txt"))) {
-    throw "README.md or requirements.txt not found. Run this script from msmodeling repository root."
-}
+Confirm-MsmodelingRepoRoot
 
 $launcher = @(Resolve-PythonLauncher)
 $detectedPython = Get-PythonVersion -Launcher $launcher

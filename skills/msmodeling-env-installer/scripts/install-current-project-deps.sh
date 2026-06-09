@@ -8,6 +8,7 @@ SET_PROJECT_ENV=0
 USE_HF_MIRROR=0
 USE_PROJECT_UV_CACHE=1
 PYPI_MIRROR="https://mirrors.ustc.edu.cn/pypi/web/simple"
+MSMODELING_REPO_URL="https://gitcode.com/Ascend/msmodeling.git"
 
 usage() {
     cat <<'EOF'
@@ -134,6 +135,32 @@ enable_project_uv_cache() {
     echo "UV_CACHE_DIR set for current session: $UV_CACHE_DIR"
 }
 
+ensure_msmodeling_repo_root() {
+    if [[ -f "README.md" && -f "requirements.txt" ]]; then
+        return
+    fi
+
+    if [[ -f "msmodeling/README.md" && -f "msmodeling/requirements.txt" ]]; then
+        echo "msmodeling repository found under ./msmodeling. Entering it..."
+        cd msmodeling
+        return
+    fi
+
+    if [[ -e "msmodeling" ]]; then
+        echo "Path ./msmodeling exists but does not look like the msmodeling repository root. Move it aside or run this script from a valid msmodeling repository root." >&2
+        exit 1
+    fi
+
+    echo "msmodeling repository root not found. Cloning from $MSMODELING_REPO_URL ..."
+    git clone "$MSMODELING_REPO_URL"
+    cd msmodeling
+
+    if [[ ! -f "README.md" || ! -f "requirements.txt" ]]; then
+        echo "Clone finished, but README.md or requirements.txt is missing. Check repository contents." >&2
+        exit 1
+    fi
+}
+
 test_python_module_available() {
     local launcher="$1"
     local module_name="$2"
@@ -170,10 +197,7 @@ assert_existing_environment_clean() {
     echo "Existing environment check passed: torch_npu and cudatoolkit are absent."
 }
 
-if [[ ! -f "README.md" || ! -f "requirements.txt" ]]; then
-    echo "README.md or requirements.txt not found. Run this script from msmodeling repository root." >&2
-    exit 1
-fi
+ensure_msmodeling_repo_root
 
 REPO_ROOT="$(pwd)"
 PYTHON="$(resolve_python_launcher)"

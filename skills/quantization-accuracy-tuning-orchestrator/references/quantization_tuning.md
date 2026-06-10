@@ -121,8 +121,12 @@
 若用户未提供 FP baseline：
 1. 生成浮点模型的评测配置（不含 quantization 相关参数）
 2. 对浮点模型执行评测，记录 baseline 精度
-3. 将 baseline 值写入 evaluate_config.yaml 的 target 字段（target = FP baseline, tolerance = 用户容差）
+3. 将 baseline 值写入 evaluate_config.yaml 的 target 字段（target = FP baseline - tolerance, 其中 tolerance 为用户容差）
 4. 然后才进入循环
+
+注意：target 不要随意计算。参照以下示例进行计算：
+（1）如果用户描述“不低于浮点精度超过 1%”，则 target = FP baseline - 1%。
+（2）如果描述“某数据集相比浮点模型多错一道题”，则需要通过计算该数据集一道题目对应的精度数值，然后 target = FP baseline - 一题对应的数值。
 
 ### standing_high 摸高二分搜索
 

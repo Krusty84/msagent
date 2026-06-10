@@ -1,12 +1,12 @@
 ---
 name: quant-tuning-evaluate
-description: 执行模型测评。调用 MCP evaluation_run 依据 Evaluation YAML 对量化模型进行评测，返回评测结果。
+description: 执行模型测评。通过 scripts/run_evaluation.py 依据 Evaluation YAML 对量化模型进行评测。
 license: Apache-2.0
 metadata:
   version: 0.3.0
   domain: quantization
   framework: msmodelslim
-  protocol: mcp
+  protocol: script
   skill_class: tool
   aliases:
     - evaluator
@@ -33,7 +33,7 @@ metadata:
 - 不执行量化 → 见 `quant-tuning-quantizer` Agent
 - 不做策略决策 → 见 `quantization-accuracy-tuning-orchestrator` Skill
 
-**执行主体**：MCP `evaluation_run`
+**执行主体**：`scripts/run_evaluation.py`
 
 ---
 
@@ -45,8 +45,8 @@ quantization-accuracy-tuning-orchestrator (workflow)
         ▼ 调用
 quant-tuning-evaluate (tool)
         │
-        ▼ MCP Tool
-  evaluation_run
+        ▼ Script
+  run_evaluation.py
         │
         ▼ 输出
   评测结果 (精度分数)
@@ -96,28 +96,28 @@ quant-tuning-evaluate (tool)
 
 ---
 
-## MCP 调用
+## 脚本调用
 
-### 调用方式
-
-```json
-{
-  "config_path": "/path/to/evaluate.yaml",
-  "device": "npu",
-  "device_indices": [0, 1]
-}
+```bash
+python skills/quant-tuning-evaluate/scripts/run_evaluation.py \
+  --quant-model-path /path/to/quantized \
+  --evaluate-id eval-round-1 \
+  --evaluate-config-path /path/to/evaluate.yaml \
+  --save-path /path/to/workdir \
+  --device npu \
+  --device-indices 0,1
 ```
-
-**注意**：`device_indices` 与 `inference_engine.args.tensor-parallel-size` 对齐。
 
 ### 错误处理
 
 | 错误类型 | 处理 |
 |----------|------|
-| MCP 未就绪 | 立即中止，报 "MCP 未就绪" |
+| msmodelslim 未安装 | 按 prepare_environment.md 安装 |
 | 推理服务启动失败 | 检查端口占用、设备可用性 |
 | 评测超时 | 检查 `aisbench.timeout` 配置 |
 | 精度不达标 | 正常返回结果，由 orchestrator 决策 |
+
+**注意**：`device_indices` 与 `inference_engine.args.tensor-parallel-size` 对齐。
 
 ---
 
@@ -160,7 +160,7 @@ quant-tuning-evaluate (tool)
 
 ### 1. 服务启动
 
-调用MCP `evaluation_run`
+调用 `scripts/run_evaluation.py`（`execute`）
 
 ### 2. 结果解析
 
@@ -179,13 +179,14 @@ quant-tuning-evaluate (tool)
 
 ### 标准调用
 
-```python
-# MCP Tool: evaluation_run
-{
-  "config_path": "/workspace/output/round_1/evaluate.yaml",
-  "device": "npu",
-  "device_indices": [0, 1]
-}
+```bash
+python skills/quant-tuning-evaluate/scripts/run_evaluation.py \
+  --quant-model-path /workspace/output/round_1/quantized \
+  --evaluate-id round-1 \
+  --evaluate-config-path /workspace/output/evaluate.yaml \
+  --save-path /workspace/output \
+  --device npu \
+  --device-indices 0,1
 ```
 
 ### 结果返回给 orchestrator
@@ -202,11 +203,11 @@ quant-tuning-evaluate (tool)
 
 ## 约束
 
-- **MCP-only**：禁止用 CLI 或脚本替代
+- **Script-only**：禁止用裸 CLI 替代 `run_evaluation.py`
 - **路径格式**：必须是 JSON 字符串
 - **设备对齐**：`device_indices` 与 `tensor-parallel-size` 对齐
 - **单轮单次**：每次调用只执行一次完整评测
-- **服务生命周期**：由 MCP 内部管理，本 skill 不直接操作 vLLM
+- **服务生命周期**：由脚本内部评测服务管理
 
 ---
 
@@ -230,4 +231,4 @@ quant-tuning-evaluate (tool)
 - [ ] `device_indices` 长度与 `tensor-parallel-size` 对齐
 - [ ] 目标端口未被占用
 - [ ] NPU/GPU 设备可用
-- [ ] MCP 已就绪
+- [ ] msmodelslim 已安装

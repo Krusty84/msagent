@@ -15,14 +15,23 @@
 | `modelslim-agent` | `quant-tuning-quantizer` | 依据量化配置进行量化 |
 | `modelslim-agent` | `quant-tuning-evaluator` | 对量化后的模型进行测评 |
 
-### MCP Tools
+### Scripts（编排层）
 
-| Plugin | MCP Server | MCP Tool name | 功能用途 |
-| --- | --- | --- | --- |
-| `modelslim-agent` | `modelslim` | `history_clear` | 清空当前调优历史，每次调优任务开始时用于初始化 |
-| `modelslim-agent` | `modelslim` | `history_append` | 记录一条调优历史，用于记录每次循环迭代的调优过程 |
-| `modelslim-agent` | `modelslim` | `accuracy_append` | 计算结束后，将practice + evaluate配置的评测结果写入精度缓存，避免重复计算 |
-| `modelslim-agent` | `modelslim` | `accuracy_lookup` | 计算开始前，在精度缓存中根据practice + evaluate配置查询评测结果，避免重复计算 |
+| Skill | 脚本 | 功能用途 |
+| --- | --- | --- |
+| `quantization-accuracy-tuning-orchestrator` | `scripts/history_clear.py` | 清空当前调优历史，每次调优任务开始时用于初始化 |
+| `quantization-accuracy-tuning-orchestrator` | `scripts/history_append.py` | 记录一条调优历史 |
+| `quantization-accuracy-tuning-orchestrator` | `scripts/accuracy_append.py` | 将 practice + evaluate 评测结果写入精度缓存 |
+| `quantization-accuracy-tuning-orchestrator` | `scripts/accuracy_lookup.py` | 查询精度缓存，避免重复计算 |
+
+### Scripts（子 Skill，由 subagent 调用）
+
+| Skill | 脚本 | 功能用途 |
+| --- | --- | --- |
+| `tune-practice-cfg` | `scripts/run_analysis.py` | 敏感层分析 |
+| `tune-practice-cfg` | `scripts/validate_practice_yaml.py` | Practice YAML 校验 |
+| `quant-tuning-quantize` | `scripts/run_quantization.py` | 执行量化 |
+| `quant-tuning-evaluate` | `scripts/run_evaluation.py` | 执行评测 |
 
 ## 详细步骤
 
@@ -44,7 +53,7 @@
             └────────┬───────────┘          │
                      ▼                      │
             ┌─────────────────┐             │
-            │ MCP Tool:       │             │
+            │ Script:         │             │
             │ history_clear   │             │
             │ (初始化历史)     │             │
             └────────┬────────┘             │
@@ -57,7 +66,7 @@
             └────────┬────────┘             │
                      ▼                      │
             ┌─────────────────┐             │
-            │ MCP Tool:       │             │
+            │ Script:         │             │
             │ accuracy_lookup │             │
             │ (查询精度缓存)   │             │
             └────────┬────────┘             │
@@ -79,14 +88,14 @@
                │    └────────┬──────┘       │
                │             ▼              │
                │    ┌─────────────────┐     │
-               │    │ MCP Tool:       │     │
+               │    │ Script:       │     │
                │    │ accuracy_append │     │
                │    │ (写入精度缓存)   │     │
                │    └────────┬────────┘     │
                └─────┬───────┘              │
                      ▼                      │
             ┌────────────────┐              │
-            │ MCP Tool:      │              │
+            │ Script:        │              │
             │ history_append │              │
             │ (记录调优历史)  │              │
             └────────┬───────┘              │

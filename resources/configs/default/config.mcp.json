@@ -28,42 +28,6 @@
       "stateful": true,
       "repair_timeout": 30,
       "invoke_timeout": 120.0
-    },
-    "modelslim": {
-      "command": "python",
-      "args": ["-m", "msmodelslim.mcp"],
-      "transport": "stdio",
-      "env": {
-        "ASCEND_AICPU_PATH": "/usr/local/Ascend/ascend-toolkit/latest",
-        "ASCEND_HOME_PATH": "/usr/local/Ascend/ascend-toolkit/latest",
-        "ASCEND_OPP_PATH": "/usr/local/Ascend/ascend-toolkit/latest/opp",
-        "ASCEND_TOOLKIT_HOME": "/usr/local/Ascend/ascend-toolkit/latest",
-        "ATB_COMPARE_TILING_EVERY_KERNEL": "0",
-        "ATB_DEVICE_TILING_BUFFER_BLOCK_NUM": "32",
-        "ATB_HOME_PATH": "/usr/local/Ascend/nnal/atb/latest/atb/cxx_abi_1",
-        "ATB_HOST_TILING_BUFFER_BLOCK_NUM": "128",
-        "ATB_MATMUL_SHUFFLE_K_ENABLE": "1",
-        "ATB_OPSRUNNER_KERNEL_CACHE_GLOABL_COUNT": "5",
-        "ATB_OPSRUNNER_KERNEL_CACHE_LOCAL_COUNT": "1",
-        "ATB_OPSRUNNER_SETUP_CACHE_ENABLE": "1",
-        "ATB_SHARE_MEMORY_NAME_SUFFIX": "",
-        "ATB_STREAM_SYNC_EVERY_KERNEL_ENABLE": "0",
-        "ATB_STREAM_SYNC_EVERY_OPERATION_ENABLE": "0",
-        "ATB_STREAM_SYNC_EVERY_RUNNER_ENABLE": "0",
-        "ATB_WORKSPACE_MEM_ALLOC_ALG_TYPE": "1",
-        "ATB_WORKSPACE_MEM_ALLOC_GLOBAL": "1",
-        "LCCL_DETERMINISTIC": "0",
-        "LCCL_PARALLEL": "0",
-        "LD_LIBRARY_PATH": "/usr/local/Ascend/nnal/atb/latest/atb/cxx_abi_1/lib:/usr/local/Ascend/nnal/atb/latest/atb/cxx_abi_1/examples:/usr/local/Ascend/nnal/atb/latest/atb/cxx_abi_1/tests/atbopstest:/usr/local/Ascend/ascend-toolkit/latest/tools/aml/lib64:/usr/local/Ascend/ascend-toolkit/latest/tools/aml/lib64/plugin:/usr/local/Ascend/ascend-toolkit/latest/lib64:/usr/local/Ascend/ascend-toolkit/latest/lib64/plugin/opskernel:/usr/local/Ascend/ascend-toolkit/latest/lib64/plugin/nnengine:/usr/local/Ascend/ascend-toolkit/latest/opp/built-in/op_impl/ai_core/tbe/op_tiling/lib/linux/aarch64:/usr/local/Ascend/nnal/atb/latest/atb/cxx_abi_0/lib:/usr/local/Ascend/nnal/atb/latest/atb/cxx_abi_0/examples:/usr/local/Ascend/nnal/atb/latest/atb/cxx_abi_0/tests/atbopstest:/usr/local/Ascend/ascend-toolkit/latest/tools/aml/lib64:/usr/local/Ascend/ascend-toolkit/latest/tools/aml/lib64/plugin:/usr/local/Ascend/ascend-toolkit/latest/lib64:/usr/local/Ascend/ascend-toolkit/latest/lib64/plugin/opskernel:/usr/local/Ascend/ascend-toolkit/latest/lib64/plugin/nnengine:/usr/local/Ascend/ascend-toolkit/latest/opp/built-in/op_impl/ai_core/tbe/op_tiling:/usr/local/Ascend/driver/lib64/common/:/usr/local/Ascend/driver/lib64/driver/:",
-        "LD_PRELOAD": "/usr/lib/aarch64-linux-gnu/libjemalloc.so.2:",
-        "PYTHONPATH": "/usr/local/Ascend/ascend-toolkit/latest/python/site-packages:/usr/local/Ascend/ascend-toolkit/latest/opp/built-in/op_impl/ai_core/tbe:/usr/local/Ascend/ascend-toolkit/latest/python/site-packages:/usr/local/Ascend/ascend-toolkit/latest/opp/built-in/op_impl/ai_core/tbe:"
-      },
-      "include": [],
-      "exclude": [],
-      "enabled": true,
-      "stateful": true,
-      "repair_timeout": 30,
-      "invoke_timeout": 3600.0
     }
   }
 }

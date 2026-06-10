@@ -5,26 +5,24 @@
 通过 `execute` 调用 **msmodelslim CLI**：
 
 ```bash
-msmodelslim analyze linear \
-  --model_type MODEL_TYPE \
-  --model_path MODEL_PATH \
-  --metrics kurtosis \
-  --calib_dataset mix_calib.jsonl \
-  --pattern "*" \
-  --topk 15 \
-  --device npu \
-  --trust_remote_code False
+msmodelslim analyze layer \
+    --model_type Qwen3-32B \
+    --model_path ${model_path} \
+    --metrics mse_layer_wise \
+    --calib_dataset ${calib_dataset} \
+    --topk 999 \
+    --device npu:0 \
 ```
 
 | 参数 | 说明 | 默认值 |
 |------|------|--------|
 | `model_type` | 模型类型（模型名） | 必填 |
 | `model_path` | 模型路径 | 必填 |
-| `metrics` | 分析指标（linear scope） | `"kurtosis"` |
+| `metrics` | 分析指标（linear scope） | `"mse_layer_wise"` |
 | `calib_dataset` | 校准数据集 | `"mix_calib.jsonl"` |
 | `pattern` | 层匹配模式列表 | `"*"`（全量） |
-| `topk` | 返回 Top-K 敏感层 | `15` |
-| `device` | 执行设备（如 `"npu"`, `"npu:0"`, `"gpu:0"`） | `"npu"` |
+| `topk` | 返回 Top-K 敏感层 | `999` |
+| `device` | 执行设备（如 `"npu"`, `"npu:0"`, `"gpu:0"`） | `"npu:0"` |
 
 - `model_type` 与模型 `config.json` 中的 `model_type` 并非同一概念，你应该参考 `msmodelslim/config/config.ini`，如 `Qwen3-32B` `DeepSeek-V3` 才是正确合法的 `model_type`。
 - 官方文档：[敏感层分析使用指南](https://gitcode.com/Ascend/msmodelslim/blob/master/docs/zh/feature_guide/sensitive_layer_analysis/usage.md)
@@ -37,6 +35,8 @@ msmodelslim analyze linear \
 | **std** | 标准差，衡量激活值的离散程度 | 通用 |
 | **quantile** | 分位数分析，基于激活分布的分位范围 | 通用 |
 | **attention_mse** | 注意力层量化前后 MSE | 需适配器实现 `AttentionMSEAnalysisInterface`；使用 `msmodelslim analyze attn --metrics mse` |
+| **mse_layer_wise** | 整层量化前后 MSE | 使用 `msmodelslim analyze layer --metrics mse_layer_wise` |
+| **mse_model_wise** | 整模型量化 MSE | 使用 `msmodelslim analyze layer --metrics mse_model_wise` |
 
 ## 分析结果结构
 
@@ -44,12 +44,12 @@ CLI 在控制台输出各层 Score。解析后写入 `{save_path}/analysis_resul
 
 ```yaml
 layer_scores:
-  - name: "model.layers.0.mlp.down_proj"
+  - name: "model.layers.0.mlp.*"
     score: 12.5
-  - name: "model.layers.15.self_attn.o_proj"
+  - name: "model.layers.15.*"
     score: 8.3
   # ... 按 score 降序排列
-method: "kurtosis"
+method: "mse_layer_wise"
 patterns:
   - "*"
 ```

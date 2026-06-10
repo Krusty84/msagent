@@ -88,20 +88,18 @@ metadata:
 
 ### ① 敏感层分析
 
-通过 `execute` 调用 **msmodelslim CLI** 获取当前模型各线性层的量化敏感度得分（score 越高越敏感）。**每个调优任务调用一次**，后续各轮复用该得分结果。
+通过 `execute` 调用 **msmodelslim CLI** 获取当前模型各线性层的量化敏感度得分（score 越高越敏感）。**每个调优任务调用一次**，后续各轮复用该得分结果。注意默认优先使用 **mse_layer_wise** 指标。
 
 若 `{save_path}/analysis_result.yaml` 已存在，跳过本步骤，直接复用已有得分。
 
 ```bash
-msmodelslim analyze linear \
-  --model_type "${MODEL_TYPE}" \
-  --model_path "${MODEL_PATH}" \
-  --metrics kurtosis \
-  --calib_dataset mix_calib.jsonl \
-  --pattern "*" \
-  --topk 15 \
-  --device npu:0 \
-  --trust_remote_code False \
+msmodelslim analyze layer \
+    --model_type Qwen3-32B \
+    --model_path ${model_path} \
+    --metrics mse_layer_wise \
+    --calib_dataset ${calib_dataset} \
+    --topk 999 \
+    --device npu:0 \
   2>&1 | tee "${SAVE_PATH}/analysis_console.log"
 ```
 

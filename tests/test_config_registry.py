@@ -25,6 +25,7 @@ import pytest
 
 from msagent.configs.registry import ConfigRegistry
 from msagent.core.constants import CONFIG_APPROVAL_FILE_NAME, LLM_CONFIG_VERSION
+from msagent.skills.factory import SkillFactory
 
 
 def _load_default_msprof_server() -> dict:
@@ -35,9 +36,16 @@ def _load_default_msprof_server() -> dict:
     return config["mcpServers"]["msprof-mcp"]
 
 
-def _load_default_hermes_config() -> dict:
+def _load_default_profiler_config() -> dict:
     config_path = files("resources")
-    for part in ("configs", "default", "agents", "Hermes.yml"):
+    for part in ("configs", "default", "agents", "Profiler.yml"):
+        config_path = config_path.joinpath(part)
+    return yaml.safe_load(config_path.read_text(encoding="utf-8"))
+
+
+def _load_default_modeling_config() -> dict:
+    config_path = files("resources")
+    for part in ("configs", "default", "agents", "Modeling.yml"):
         config_path = config_path.joinpath(part)
     return yaml.safe_load(config_path.read_text(encoding="utf-8"))
 
@@ -102,15 +110,67 @@ async def test_config_registry_bootstraps_default_layout(tmp_path: Path) -> None
         for rule in approval_config["decision_rules"]
     )
 
-    hermes = yaml.safe_load((config_dir / "agents" / "Hermes.yml").read_text())
+    profiler = yaml.safe_load((config_dir / "agents" / "Profiler.yml").read_text())
+    modeling = yaml.safe_load((config_dir / "agents" / "Modeling.yml").read_text())
     minos = yaml.safe_load((config_dir / "agents" / "Minos.yml").read_text())
-    default_hermes = _load_default_hermes_config()
+    default_profiler = _load_default_profiler_config()
+    default_modeling = _load_default_modeling_config()
     default_minos = _load_default_minos_config()
-    assert hermes["name"] == "Hermes"
-    assert hermes["tools"]["patterns"] == default_hermes["tools"]["patterns"]
-    assert hermes["skills"]["patterns"] == default_hermes["skills"]["patterns"]
+    assert profiler["name"] == "Profiler"
+    assert profiler["tools"]["patterns"] == default_profiler["tools"]["patterns"]
+    assert profiler["skills"]["patterns"] == default_profiler["skills"]["patterns"]
+    assert modeling["name"] == "Modeling"
+    assert modeling["tools"]["patterns"] == default_modeling["tools"]["patterns"]
+    assert modeling["skills"]["patterns"] == default_modeling["skills"]["patterns"]
+    assert "default:msmodeling-env-installer" in modeling["skills"]["patterns"]
+    assert modeling["default"] is False
     assert minos["name"] == "Minos"
     assert minos["skills"]["patterns"] == default_minos["skills"]["patterns"]
+
+
+@pytest.mark.asyncio
+async def test_config_registry_adds_missing_modeling_skill_patterns_to_existing_config_dir(
+    tmp_path: Path,
+) -> None:
+    config_dir = tmp_path / ".msagent"
+    agents_dir = config_dir / "agents"
+    agents_dir.mkdir(parents=True)
+    (agents_dir / "Modeling.yml").write_text(
+        yaml.safe_dump(
+            {
+                "version": "__APP_VERSION__",
+                "name": "Modeling",
+                "description": "legacy local modeling config",
+                "prompt": ["prompts/agents/Modeling.md"],
+                "llm": "default",
+                "checkpointer": "sqlite",
+                "default": False,
+                "tools": {"patterns": ["impl:deepagents:*"], "use_catalog": False},
+                "skills": {"patterns": ["default:custom-local-skill"], "use_catalog": False},
+            },
+            sort_keys=False,
+            allow_unicode=True,
+        ),
+        encoding="utf-8",
+    )
+
+    registry = ConfigRegistry(tmp_path)
+
+    await registry.ensure_config_dir()
+
+    modeling = yaml.safe_load((agents_dir / "Modeling.yml").read_text(encoding="utf-8"))
+    patterns = modeling["skills"]["patterns"]
+    default_modeling = _load_default_modeling_config()
+    for pattern in default_modeling["skills"]["patterns"]:
+        assert pattern in patterns
+    assert "default:custom-local-skill" in patterns
+
+
+@pytest.mark.asyncio
+async def test_default_skills_include_msmodeling_env_installer() -> None:
+    skills = await SkillFactory().load_skills(SkillFactory.get_default_skills_dir())
+
+    assert "msmodeling-env-installer" in skills["default"]
 
 
 @pytest.mark.asyncio
@@ -125,12 +185,12 @@ async def test_config_registry_resolves_template_version_tokens_on_load(
     assert all(llm.version == LLM_CONFIG_VERSION for llm in llms.llms)
 
 
-def test_default_agent_skill_bindings_are_split_between_hermes_and_minos() -> None:
-    hermes = _load_default_hermes_config()
+def test_default_agent_skill_bindings_are_split_between_profiler_and_minos() -> None:
+    profiler = _load_default_profiler_config()
     minos = _load_default_minos_config()
 
-    assert "default:document-ux-review" not in hermes["skills"]["patterns"]
-    assert "default:gitcode-code-reviewer" not in hermes["skills"]["patterns"]
+    assert "default:document-ux-review" not in profiler["skills"]["patterns"]
+    assert "default:gitcode-code-reviewer" not in profiler["skills"]["patterns"]
     assert minos["skills"]["patterns"] == [
         "default:document-ux-review",
         "default:gitcode-code-reviewer",

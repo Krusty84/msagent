@@ -22,7 +22,7 @@ def _write_skill(skill_dir: Path, *, name: str, description: str = "test skill")
 def _build_session(tmp_path: Path) -> SimpleNamespace:
     return SimpleNamespace(
         context=SimpleNamespace(
-            agent="Hermes",
+            agent="Profiler",
             working_dir=tmp_path,
             bash_mode=False,
             thread_id="thread-1",
@@ -61,8 +61,8 @@ async def test_add_skill_handler_installs_skill_and_updates_agent_patterns(
     installed_skill = tmp_path / ".msagent" / "skills" / "custom_skill" / "SKILL.md"
     assert installed_skill.exists()
 
-    hermes_config = yaml.safe_load((tmp_path / ".msagent" / "agents" / "Hermes.yml").read_text(encoding="utf-8"))
-    assert "default:custom_skill" in hermes_config["skills"]["patterns"]
+    profiler_config = yaml.safe_load((tmp_path / ".msagent" / "agents" / "Profiler.yml").read_text(encoding="utf-8"))
+    assert "default:custom_skill" in profiler_config["skills"]["patterns"]
     assert session.needs_reload is True
     assert session.running is False
     assert any("Installed skill 'custom_skill'" in message for message in messages)
@@ -149,3 +149,58 @@ async def test_command_dispatcher_routes_add_skill_command(
 
     handle_mock.assert_awaited_once_with(["/tmp/custom skill"])
     assert "/add-skill" in dispatcher.commands
+
+
+@pytest.mark.asyncio
+async def test_add_skill_handler_reports_usage_when_no_args(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    errors: list[str] = []
+    monkeypatch.setattr(add_skill_module.console, "print_error", errors.append)
+    monkeypatch.setattr(add_skill_module.console, "print", lambda *_args, **_kwargs: None)
+
+    session = _build_session(tmp_path)
+    handler = AddSkillHandler(session)
+    await handler.handle([])
+
+    assert any("Usage: /add-skill" in e for e in errors)
+
+
+@pytest.mark.asyncio
+async def test_add_skill_handler_handles_skill_install_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    errors: list[str] = []
+    monkeypatch.setattr(add_skill_module.console, "print_error", errors.append)
+    monkeypatch.setattr(add_skill_module.console, "print", lambda *_args, **_kwargs: None)
+
+    session = _build_session(tmp_path)
+    handler = AddSkillHandler(session)
+
+    async def fake_load_agent_config(_agent, _working_dir):
+        return SimpleNamespace(name="Profiler")
+
+    async def fake_install(_self, _path):
+        raise SkillInstallError("Skill conflicts with existing one")
+
+    monkeypatch.setattr(add_skill_module.initializer, "load_agent_config", fake_load_agent_config)
+    monkeypatch.setattr(SkillInstaller, "install", fake_install)
+
+    await handler.handle(["/tmp/skill"])
+
+    assert any("Skill conflicts with existing one" in e for e in errors)
+
+
+@pytest.mark.asyncio
+async def test_add_skill_handler_handles_generic_exception(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    errors: list[str] = []
+    monkeypatch.setattr(add_skill_module.console, "print_error", errors.append)
+    monkeypatch.setattr(add_skill_module.console, "print", lambda *_args, **_kwargs: None)
+
+    session = _build_session(tmp_path)
+    handler = AddSkillHandler(session)
+
+    async def fake_load_agent_config(_agent, _working_dir):
+        raise RuntimeError("unexpected failure")
+
+    monkeypatch.setattr(add_skill_module.initializer, "load_agent_config", fake_load_agent_config)
+
+    await handler.handle(["/tmp/skill"])
+
+    assert any("Error installing skill" in e for e in errors)

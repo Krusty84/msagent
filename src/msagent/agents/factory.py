@@ -21,6 +21,8 @@
 from __future__ import annotations
 
 import logging
+import string
+import os
 import tempfile
 from fnmatch import fnmatch
 from importlib import import_module
@@ -31,14 +33,22 @@ from deepagents import create_deep_agent
 from deepagents.backends import CompositeBackend, LocalShellBackend
 from deepagents.backends.filesystem import FilesystemBackend
 from deepagents.middleware import MemoryMiddleware, SkillsMiddleware
+import httpx
 from langchain.agents.middleware import ToolRetryMiddleware
 from langchain.agents.middleware.types import AgentMiddleware
 
 from msagent.agents.local_context import ensure_local_context_prompt
+from msagent.configs import AgentConfig, BaseAgentConfig, RetryPolicyConfig, SubAgentConfig
 from msagent.core.constants import CONFIG_CONVERSATION_HISTORY_DIR
 from msagent.llms.factory import LLMFactory
 from msagent.middlewares.tool_result_eviction import ToolResultEvictionMiddleware
-from msagent.tools.catalog import fetch_skills, fetch_tools, get_skill, get_tool, run_tool
+from msagent.tools.catalog import (
+    fetch_skills,
+    fetch_tools,
+    get_skill,
+    get_tool,
+    run_tool,
+)
 from msagent.tools.factory import ToolFactory
 from msagent.tools.web_search import web_search
 from msagent.utils.deepagents_compat import patch_deepagents_windows_absolute_paths
@@ -48,10 +58,18 @@ if TYPE_CHECKING:
     from langgraph.checkpoint.base import BaseCheckpointSaver
     from langgraph.graph.state import CompiledStateGraph
 
-    from msagent.configs import AgentConfig, LLMConfig
+    from msagent.configs import LLMConfig
 
 
 logger = logging.getLogger(__name__)
+
+_TAVILY_SERVER_KEYWORDS = ("tavily",)
+_TAVILY_API_KEY_ENV = "TAVILY_API_KEY"
+_TAVILY_VALIDATE_URL = "https://api.tavily.com/usage"
+_TAVILY_VALIDATE_TIMEOUT_SECONDS = 5.0
+_TAVILY_KEY_VALIDATION_CACHE: dict[str, bool] = {}
+_SEARCH_TOOL_NAME_KEYWORDS = ("search", "web_search")
+_SEARCH_TOOL_DESCRIPTION_KEYWORDS = ("search", "web", "internet", "query")
 
 
 class _ToolPatternFilterMiddleware(AgentMiddleware[Any, Any, Any]):
@@ -72,6 +90,79 @@ class _ToolPatternFilterMiddleware(AgentMiddleware[Any, Any, Any]):
     async def awrap_model_call(self, request, handler):
         filtered_tools = self._filter_tools(list(getattr(request, "tools", []) or []))
         request = request.override(tools=filtered_tools)
+        return await handler(request)
+
+
+class _SystemMessageMiddleware(AgentMiddleware[Any, Any, Any]):
+    """Populate system message placeholders from runtime AgentContext.template_vars."""
+
+    class _SafeTemplateFormatter(string.Formatter):
+        """String formatter that leaves unknown placeholders unchanged."""
+
+        def __init__(self, context: dict[str, Any]) -> None:
+            super().__init__()
+            self._context = context
+
+        def get_value(self, key: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
+            if isinstance(key, str):
+                if key in self._context:
+                    return self._context[key]
+                return "{" + key + "}"
+            return super().get_value(key, args, kwargs)
+
+    @classmethod
+    def _safe_render_templates(cls, data: Any, context: dict[str, Any] | None) -> Any:
+        formatter = cls._SafeTemplateFormatter(context or {})
+        if isinstance(data, str):
+            return cls._safe_render_text(data, formatter)
+        if isinstance(data, list):
+            return [cls._render_text_block(item, formatter) for item in data]
+        return data
+
+    @staticmethod
+    def _safe_render_text(text: str, formatter: string.Formatter) -> str:
+        try:
+            return formatter.vformat(text, (), {})
+        except ValueError:
+            return text
+
+    @classmethod
+    def _render_text_block(cls, item: Any, formatter: string.Formatter) -> Any:
+        if not isinstance(item, dict) or item.get("type") != "text" or not isinstance(item.get("text"), str):
+            return item
+
+        rendered_text = cls._safe_render_text(item["text"], formatter)
+        if rendered_text == item["text"]:
+            return item
+
+        rendered_item = dict(item)
+        rendered_item["text"] = rendered_text
+        return rendered_item
+
+    @staticmethod
+    def _render_request_system_message(request):
+        system_message = getattr(request, "system_message", None)
+        runtime = getattr(request, "runtime", None)
+        context = getattr(runtime, "context", None) if runtime is not None else None
+        template_vars = getattr(context, "template_vars", None) if context is not None else None
+        if system_message is None or not template_vars:
+            return request
+
+        rendered_content = _SystemMessageMiddleware._safe_render_templates(
+            system_message.content,
+            template_vars,
+        )
+        if rendered_content == system_message.content:
+            return request
+
+        return request.override(system_message=system_message.model_copy(update={"content": rendered_content}))
+
+    def wrap_model_call(self, request, handler):
+        request = self._render_request_system_message(request)
+        return handler(request)
+
+    async def awrap_model_call(self, request, handler):
+        request = self._render_request_system_message(request)
         return await handler(request)
 
 
@@ -105,23 +196,8 @@ class AgentFactory:
         working_dir = (working_dir or Path.cwd()).resolve()
         resolved_llm = llm_config or config.llm
         retry_cfg = getattr(config, "retry", None)
-        model_retry_cfg = getattr(retry_cfg, "model", None) if retry_cfg is not None else None
         tool_retry_cfg = getattr(retry_cfg, "tool", None) if retry_cfg is not None else None
-        llm_max_retries: int | None = None
-        llm_timeout_seconds: float | None = None
-        if retry_cfg is not None and retry_cfg.enabled:
-            model_enabled = getattr(model_retry_cfg, "enabled", True) if model_retry_cfg is not None else True
-            if model_enabled:
-                llm_max_retries = int(getattr(model_retry_cfg, "max_retries", 0))
-                llm_timeout_seconds = (
-                    float(getattr(model_retry_cfg, "timeout"))
-                    if model_retry_cfg is not None and getattr(model_retry_cfg, "timeout", None) is not None
-                    else None
-                )
-            else:
-                llm_max_retries = 0
-        elif retry_cfg is not None and not retry_cfg.enabled:
-            llm_max_retries = 0
+        llm_max_retries, llm_timeout_seconds = self._resolve_llm_retry_for_policy(retry_cfg)
 
         model = self.llm_factory.create(
             resolved_llm,
@@ -143,6 +219,15 @@ class AgentFactory:
             loaded = await mcp_client.tools()
             mcp_tools = list(loaded or [])
             mcp_module_map = dict(getattr(mcp_client, "module_map", {}) or {})
+
+            if await self._should_prefer_search_mcp(
+                mcp_client,
+                mcp_tools=mcp_tools,
+                mcp_module_map=mcp_module_map,
+            ):
+                runtime_tools = [t for t in runtime_tools if self._tool_name(t) != "web_search"]
+        catalog_runtime_tools = list(runtime_tools)
+        catalog_mcp_tools = list(mcp_tools)
 
         tool_patterns = list(config.tools.patterns or []) if config.tools is not None else []
         mcp_servers = self._collect_mcp_servers(mcp_client, mcp_module_map)
@@ -193,6 +278,16 @@ class AgentFactory:
 
         middleware: list[AgentMiddleware[Any, Any, Any]] = []
         agent_backend = self._build_composite_backend(working_dir)
+        deepagents_subagents = self._build_deepagents_subagent_specs(
+            config=config,
+            agent_backend=agent_backend,
+            skills_sources=skills_sources,
+            catalog_runtime_tools=catalog_runtime_tools,
+            catalog_mcp_tools=catalog_mcp_tools,
+            mcp_module_map=mcp_module_map,
+            mcp_servers=mcp_servers,
+            tool_timeout=tool_timeout,
+        )
         metadata_backend = FilesystemBackend(virtual_mode=False)
         if memory_sources:
             middleware.append(
@@ -220,6 +315,7 @@ class AgentFactory:
                     tool_token_limit_before_evict=tool_output_max_tokens,
                 )
             )
+        middleware.append(_SystemMessageMiddleware())
 
         raw_system_prompt = config.prompt
         if isinstance(raw_system_prompt, list):
@@ -236,6 +332,8 @@ class AgentFactory:
             "name": config.name,
             "middleware": middleware,
         }
+        if deepagents_subagents:
+            kwargs["subagents"] = deepagents_subagents
         if interrupt_on:
             kwargs["interrupt_on"] = interrupt_on
         if (
@@ -278,6 +376,168 @@ class AgentFactory:
         setattr(graph, "_llm_tools", all_tools)
         setattr(graph, "_tools_in_catalog", list(all_tools))
         return graph
+
+    @staticmethod
+    def _resolve_llm_retry_for_policy(
+        retry_cfg: RetryPolicyConfig | None,
+    ) -> tuple[int | None, float | None]:
+        model_retry_cfg = getattr(retry_cfg, "model", None) if retry_cfg is not None else None
+        llm_max_retries: int | None = None
+        llm_timeout_seconds: float | None = None
+        if retry_cfg is not None and retry_cfg.enabled:
+            model_enabled = getattr(model_retry_cfg, "enabled", True) if model_retry_cfg is not None else True
+            if model_enabled:
+                llm_max_retries = int(getattr(model_retry_cfg, "max_retries", 0))
+                llm_timeout_seconds = (
+                    float(getattr(model_retry_cfg, "timeout"))
+                    if model_retry_cfg is not None and getattr(model_retry_cfg, "timeout", None) is not None
+                    else None
+                )
+            else:
+                llm_max_retries = 0
+        elif retry_cfg is not None and not retry_cfg.enabled:
+            llm_max_retries = 0
+        return llm_max_retries, llm_timeout_seconds
+
+    @staticmethod
+    def _agent_system_prompt_text(prompt: str | list[str]) -> str:
+        if isinstance(prompt, list):
+            return "\n\n".join(str(item) for item in prompt)
+        return str(prompt)
+
+    def _build_deepagents_subagent_specs(
+        self,
+        *,
+        config: AgentConfig,
+        agent_backend: Any,
+        skills_sources: list[str],
+        catalog_runtime_tools: list[Any],
+        catalog_mcp_tools: list[Any],
+        mcp_module_map: dict[str, str],
+        mcp_servers: set[str],
+        tool_timeout: float | None,
+    ) -> list[dict[str, Any]]:
+        raw = getattr(config, "subagents", None) or []
+        if not raw:
+            return []
+
+        main_retry = getattr(config, "retry", None)
+        specs: list[dict[str, Any]] = []
+        for sub in raw:
+            if not isinstance(sub, SubAgentConfig):
+                continue
+            if sub.name == "general-purpose":
+                continue
+
+            sub_retry = sub.retry if sub.retry is not None else main_retry
+            sub_max_r, sub_timeout = self._resolve_llm_retry_for_policy(sub_retry)
+            sub_model = self.llm_factory.create(
+                sub.llm,
+                max_retries=sub_max_r,
+                timeout_seconds=sub_timeout,
+            )
+
+            system_prompt = ensure_local_context_prompt(self._agent_system_prompt_text(sub.prompt))
+            spec: dict[str, Any] = {
+                "name": sub.name,
+                "description": sub.description or f"Subagent {sub.name}",
+                "system_prompt": system_prompt,
+                "model": sub_model,
+            }
+
+            stools = sub.tools
+            if stools is not None and stools.patterns:
+                pos, neg = self._compile_tool_patterns(list(stools.patterns))
+                rt, mcp = self._filter_tools_by_patterns(
+                    runtime_tools=catalog_runtime_tools,
+                    mcp_tools=catalog_mcp_tools,
+                    positive_patterns=pos,
+                    negative_patterns=neg,
+                    mcp_module_map=mcp_module_map,
+                    mcp_servers=mcp_servers,
+                )
+                sub_t_timeout = tool_timeout
+                if stools.execution_timeout_seconds is not None:
+                    sub_t_timeout = float(stools.execution_timeout_seconds)
+                if sub_t_timeout:
+                    mcp = self.tool_factory.wrap_tools_with_timeout(
+                        mcp,
+                        timeout_seconds=float(sub_t_timeout),
+                        source="subagent",
+                    )
+                    rt = self.tool_factory.wrap_tools_with_timeout(
+                        rt,
+                        timeout_seconds=float(sub_t_timeout),
+                        source="subagent",
+                    )
+                spec["tools"] = [*rt, *mcp]
+
+            if self._should_enable_skills_middleware(config=sub, skills_sources=skills_sources):
+                spec["skills"] = list(skills_sources)
+
+            extra_mw = self._subagent_extra_middleware(
+                sub=sub,
+                agent_backend=agent_backend,
+                fallback_retry=main_retry,
+            )
+            if extra_mw:
+                spec["middleware"] = extra_mw
+
+            specs.append(spec)
+        return specs
+
+    def _subagent_extra_middleware(
+        self,
+        *,
+        sub: SubAgentConfig,
+        agent_backend: Any,
+        fallback_retry: RetryPolicyConfig | None,
+    ) -> list[AgentMiddleware[Any, Any, Any]]:
+        extra: list[AgentMiddleware[Any, Any, Any]] = []
+        retry_cfg = sub.retry if sub.retry is not None else fallback_retry
+        tool_retry_cfg = getattr(retry_cfg, "tool", None) if retry_cfg is not None else None
+        if (
+            retry_cfg is not None
+            and retry_cfg.enabled
+            and (getattr(tool_retry_cfg, "enabled", True) if tool_retry_cfg is not None else True)
+            and int(getattr(tool_retry_cfg, "max_retries", 0)) > 0
+        ):
+            tool_names = (
+                list(getattr(tool_retry_cfg, "tools"))
+                if tool_retry_cfg is not None and getattr(tool_retry_cfg, "tools", None) is not None
+                else None
+            )
+            retry_on = self._resolve_retry_on_exceptions(
+                list(getattr(tool_retry_cfg, "retry_on"))
+                if tool_retry_cfg is not None and getattr(tool_retry_cfg, "retry_on", None) is not None
+                else []
+            )
+            tool_retry_kwargs: dict[str, Any] = {
+                "max_retries": int(getattr(tool_retry_cfg, "max_retries")),
+                "tools": tool_names,
+                "on_failure": getattr(tool_retry_cfg, "on_failure", "continue"),
+                "backoff_factor": float(getattr(tool_retry_cfg, "backoff_factor", 2.0)),
+                "initial_delay": float(getattr(tool_retry_cfg, "initial_delay", 1.0)),
+                "max_delay": float(getattr(tool_retry_cfg, "max_delay", 60.0)),
+                "jitter": bool(getattr(tool_retry_cfg, "jitter", True)),
+            }
+            if retry_on is not None:
+                tool_retry_kwargs["retry_on"] = retry_on
+            extra.append(ToolRetryMiddleware(**tool_retry_kwargs))
+
+        sub_tools = sub.tools
+        if (
+            sub_tools is not None
+            and getattr(sub_tools, "output_max_tokens", None) is not None
+            and int(sub_tools.output_max_tokens) > 0
+        ):
+            extra.append(
+                ToolResultEvictionMiddleware(
+                    backend=agent_backend,
+                    tool_token_limit_before_evict=int(sub_tools.output_max_tokens),
+                )
+            )
+        return extra
 
     def _filter_tools_by_patterns(
         self,
@@ -396,6 +656,117 @@ class AgentFactory:
             servers.update(str(name) for name in config_servers.keys())
         return servers
 
+    @staticmethod
+    async def _should_prefer_search_mcp(
+        mcp_client: Any,
+        *,
+        mcp_tools: list[Any],
+        mcp_module_map: dict[str, str],
+    ) -> bool:
+        config = getattr(mcp_client, "config", None)
+        servers = getattr(config, "servers", None)
+        if not isinstance(servers, dict):
+            return False
+
+        for name, server in servers.items():
+            if not getattr(server, "enabled", False):
+                continue
+
+            server_tools = AgentFactory._collect_server_tools(
+                server_name=str(name),
+                mcp_tools=mcp_tools,
+                mcp_module_map=mcp_module_map,
+            )
+            if not AgentFactory._has_search_tool(server_tools):
+                continue
+
+            normalized_name = str(name).lower()
+            if any(kw in normalized_name for kw in _TAVILY_SERVER_KEYWORDS):
+                if await AgentFactory._has_valid_tavily_api_key(server):
+                    return True
+                continue
+
+            return True
+
+        return False
+
+    @staticmethod
+    def _collect_server_tools(
+        *,
+        server_name: str,
+        mcp_tools: list[Any],
+        mcp_module_map: dict[str, str],
+    ) -> list[Any]:
+        server_prefix = f"mcp:{server_name}"
+        return [
+            tool
+            for tool in mcp_tools
+            if str(mcp_module_map.get(AgentFactory._tool_name(tool), "") or "") == server_prefix
+        ]
+
+    @staticmethod
+    def _has_search_tool(mcp_tools: list[Any]) -> bool:
+        for tool in mcp_tools:
+            tool_name = AgentFactory._tool_name(tool).lower()
+            if any(keyword in tool_name for keyword in _SEARCH_TOOL_NAME_KEYWORDS):
+                return True
+            description = str(getattr(tool, "description", "") or "").lower()
+            if description and all(keyword in description for keyword in _SEARCH_TOOL_DESCRIPTION_KEYWORDS):
+                return True
+        return False
+
+    @staticmethod
+    async def _has_valid_tavily_api_key(server: Any) -> bool:
+        api_key = AgentFactory._resolve_tavily_api_key(server)
+        if not api_key:
+            return False
+        if not api_key.startswith("tvly-"):
+            logger.warning("Ignoring Tavily MCP preference because TAVILY_API_KEY does not look valid.")
+            return False
+        return await AgentFactory._probe_tavily_api_key(api_key)
+
+    @staticmethod
+    def _resolve_tavily_api_key(server: Any) -> str:
+        env = getattr(server, "env", None)
+        if isinstance(env, dict):
+            explicit_key = str(env.get(_TAVILY_API_KEY_ENV, "") or "").strip()
+            if explicit_key.startswith("${") and explicit_key.endswith("}"):
+                env_name = explicit_key[2:-1].strip()
+                return str(os.environ.get(env_name, "") or "").strip()
+            if explicit_key:
+                return explicit_key
+
+        return str(os.environ.get(_TAVILY_API_KEY_ENV, "") or "").strip()
+
+    @staticmethod
+    async def _probe_tavily_api_key(api_key: str) -> bool:
+        cached = _TAVILY_KEY_VALIDATION_CACHE.get(api_key)
+        if cached is not None:
+            return cached
+
+        headers = {"Authorization": f"Bearer {api_key}"}
+        try:
+            async with httpx.AsyncClient(timeout=_TAVILY_VALIDATE_TIMEOUT_SECONDS, follow_redirects=True) as client:
+                response = await client.get(_TAVILY_VALIDATE_URL, headers=headers)
+        except httpx.HTTPError as exc:
+            logger.warning("Unable to validate Tavily API key; keeping built-in web_search fallback: %s", exc)
+            return False
+
+        if response.status_code == 200:
+            _TAVILY_KEY_VALIDATION_CACHE[api_key] = True
+            return True
+
+        if response.status_code in {401, 403}:
+            logger.warning("Tavily API key validation failed with HTTP %s.", response.status_code)
+            _TAVILY_KEY_VALIDATION_CACHE[api_key] = False
+            return False
+
+        logger.warning(
+            "Unable to confirm Tavily API key validity (HTTP %s); keeping built-in web_search fallback.",
+            response.status_code,
+        )
+        return False
+
     def _resolve_mcp_tool_identity(
         self,
         *,
@@ -496,7 +867,7 @@ class AgentFactory:
     @staticmethod
     def _should_enable_skills_middleware(
         *,
-        config: AgentConfig,
+        config: BaseAgentConfig,
         skills_sources: list[str],
     ) -> bool:
         if not skills_sources:

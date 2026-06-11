@@ -17,7 +17,6 @@ from prompt_toolkit.shortcuts import CompleteStyle
 from msagent.cli.completers import CompleterRouter
 from msagent.cli.core.context import Context
 from msagent.cli.ui.shared import (
-    TRUE_COLOR_DEPTH,
     build_agent_prompt,
     create_bottom_toolbar,
     create_prompt_style,
@@ -89,7 +88,6 @@ class InteractivePrompt:
             complete_style=CompleteStyle.COLUMN,
             key_bindings=kb,
             style=style,
-            color_depth=TRUE_COLOR_DEPTH,
             multiline=False,
             prompt_continuation=lambda width, line_number, is_soft_wrap: " " * len(build_agent_prompt(self.context)),
             wrap_lines=settings.cli.enable_word_wrap,
@@ -161,20 +159,22 @@ class InteractivePrompt:
             """Tab: apply first completion immediately."""
             buffer = event.current_buffer
 
-            if buffer.complete_state and buffer.complete_state.current_completion:
-                current_completion = buffer.complete_state.current_completion
-                buffer.apply_completion(current_completion)
-
-                if not buffer.text.lstrip().startswith("/"):
-                    buffer.insert_text(" ")
-            else:
-                buffer.start_completion(select_first=True)
-                if buffer.complete_state and buffer.complete_state.current_completion:
-                    current_completion = buffer.complete_state.current_completion
-                    buffer.apply_completion(current_completion)
-
+            if buffer.complete_state:
+                completions = buffer.complete_state.completions
+                target = buffer.complete_state.current_completion or (completions[0] if completions else None)
+                if target is not None:
+                    buffer.apply_completion(target)
                     if not buffer.text.lstrip().startswith("/"):
                         buffer.insert_text(" ")
+            else:
+                buffer.start_completion(select_first=True)
+                if buffer.complete_state:
+                    completions = buffer.complete_state.completions
+                    target = buffer.complete_state.current_completion or (completions[0] if completions else None)
+                    if target is not None:
+                        buffer.apply_completion(target)
+                        if not buffer.text.lstrip().startswith("/"):
+                            buffer.insert_text(" ")
 
         self.hotkeys = {
             self._format_key_name(Keys.ControlC): "Clear input (press twice to quit)",

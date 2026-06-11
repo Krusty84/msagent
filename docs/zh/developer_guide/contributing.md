@@ -19,10 +19,11 @@ MindStudio-Agent 是一个面向 Ascend NPU 场景的 Agent 工作台，核心�
 
 当前内置 Agent 及其领域定位如下，贡献前可先了解各自边界：
 
-- [Hermes](../agent_guide/Hermes.md)：性能调优
+- [Profiler](../agent_guide/Profiler.md)：性能调优
 - [Accuracy](../agent_guide/Accuracy.md)：精度调优
-- [Zephyr](../agent_guide/Zephyr.md)：模型量化
-- [Icarus](../agent_guide/Icarus.md)：算子调优
+- [Quantizer](../agent_guide/Quantizer.md)：模型量化
+- [Modeling](../agent_guide/Modeling.md)：仿真建模
+- [Operator](../agent_guide/Operator.md)：算子调优
 - [Minos](../agent_guide/Minos.md)：文档体验与代码审查
 
 ## 开始之前
@@ -146,7 +147,7 @@ Skills 是项目最重要的扩展面之一。仓库根目录 `skills/` 为内�
 4. 启动 `msagent` 后通过 `/skills` 验证可见性
 5. 更新 [skills/README.md](../../../skills/README.md) 中的技能列表
 
-详细约定见 [配置与扩展 · 添加自定义 Skill](../user_guide/configuration-and-extension.md#custom-skill-guide) 与 [skills/README.md · 新增 Skill 建议流程](../../../skills/README.md)。
+详细约定见 [配置与扩展 · 添加自定义 Skill](../user_guide/configuration-and-extension.md#添加自定义-skill) 与 [skills/README.md · 新增 Skill 建议流程](../../../skills/README.md)。
 
 Skill 匹配与过滤规则见 [Agent / Tool / Skill 过滤规则](../user_guide/agent-tool-skill-filter-rules.md)。
 
@@ -179,16 +180,6 @@ MCP 接入与字段说明见 [配置与扩展 · MCP 配置](../user_guide/confi
 - 集成测试可使用 `@pytest.mark.integration` 标记
 
 涉及 Agent 行为、配置加载、Tool/Skill 过滤的改动，建议补充或更新对应单元测试。
-
-## 发布相关（维护者）
-
-正式发版流程由 Git tag 触发 CI，包括版本校验、测试、wheel/sdist 构建、GitHub Release 与 PyPI 发布。维护者请参考 [Release Guide](tag-release.md)。
-
-发版前关键检查项：
-
-- `pyproject.toml` 中 `project.version` 与 tag 严格对应（如 `0.1.3` ↔ `v0.1.3`）
-- 修改 `pyproject.toml` 后必须同步 `uv.lock`
-- 仓库根目录 `skills/` 目录完整且非空
 
 ## 许可证与社区
 

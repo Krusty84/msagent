@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,10 @@ def _load_yaml_or_json(path: Path) -> dict[str, Any]:
     try:
         import yaml  # type: ignore
     except ModuleNotFoundError:
+        warnings.warn(
+            "PyYAML is not installed. JSON and only simple case YAML are supported. Install with: pip install PyYAML",
+            stacklevel=2,
+        )
         try:
             return json.loads(text)
         except json.JSONDecodeError:
@@ -153,7 +158,7 @@ class BenchmarkSuite:
 def load_suite(config_path: str | Path) -> BenchmarkSuite:
     path = Path(config_path).resolve()
     if path.is_dir():
-        case_files = sorted([*path.glob("*.yaml"), *path.glob("*.yml")])
+        case_files = sorted([*path.rglob("*.yaml"), *path.rglob("*.yml")])
         cases = [_load_case_file(case_file) for case_file in case_files]
         name = path.name
     else:
@@ -181,7 +186,7 @@ def _normalize_string_list(value: Any, source_path: Path, field_name: str) -> li
     if isinstance(value, str):
         if not value.strip():
             return []
-        return [item.strip() for item in value.split(",") if item.strip()]
+        return [value.strip()]
     if isinstance(value, list):
         return [str(item).strip() for item in value if str(item).strip()]
     raise ValueError(f"{source_path} {field_name} must be a list of strings.")

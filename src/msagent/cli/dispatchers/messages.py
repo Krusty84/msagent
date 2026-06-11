@@ -406,7 +406,9 @@ class MessageDispatcher:
         context.retry_notice_handler = self._render_retry_notice
         try:
             current_input: dict[str, Any] | Command = input_data
-            while True:
+            max_iterations = 50
+            result: Any = None
+            for _ in range(max_iterations):
                 result = await self.session.graph.ainvoke(current_input, config, context=context)
                 interrupts = self._extract_interrupts(result)
                 if not interrupts:
@@ -418,6 +420,10 @@ class MessageDispatcher:
                     current_input = Command(resume=resume_value)
                 else:
                     current_input = Command(resume={interrupts[0].id: resume_value})
+            else:
+                raise RuntimeError(
+                    f"Non-streaming graph invocation exceeded {max_iterations} interrupt/resume iterations."
+                )
         finally:
             context.retry_notice_handler = None
 

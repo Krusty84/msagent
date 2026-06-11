@@ -6,6 +6,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from time import perf_counter
@@ -24,7 +25,7 @@ from third_party.codex_cli import (
     trim_text,
 )
 from schema import BenchmarkCase
-from trace import TraceBuilder
+from trace import TraceBuilder  # pylint: disable=no-name-in-module
 
 
 DEFAULT_MSAGENT_AGENT = "Hermes"
@@ -282,8 +283,7 @@ def resolve_msagent_cli_command() -> list[str]:
         if resolved:
             return [str(resolved), *configured_parts[1:]]
         raise MsagentCliUnavailableError(
-            f"MSAGENT_CLI executable was not found: {executable}. "
-            "Use an absolute path or add it to PATH."
+            f"MSAGENT_CLI executable was not found: {executable}. Use an absolute path or add it to PATH."
         )
 
     msagent_path = resolve_executable("msagent")
@@ -313,13 +313,21 @@ def resolve_executable(executable: str) -> Path | None:
 
 def user_executable_search_paths() -> list[Path]:
     home = Path.home()
-    return [
-        home / ".local" / "bin",
-        home / ".cargo" / "bin",
-        home / ".rye" / "shims",
-        Path("/opt/homebrew/bin"),
-        Path("/usr/local/bin"),
-    ]
+    paths = [home / ".local" / "bin"]
+    if sys.platform == "win32":
+        appdata = os.environ.get("APPDATA")
+        if appdata:
+            paths.append(Path(appdata) / "Python" / "Scripts")
+    else:
+        paths.extend(
+            [
+                home / ".cargo" / "bin",
+                home / ".rye" / "shims",
+                Path("/opt/homebrew/bin"),
+                Path("/usr/local/bin"),
+            ]
+        )
+    return paths
 
 
 def build_msagent_command(
@@ -389,9 +397,7 @@ def copy_msagent_config(source_workspace: Path, run_workspace: Path) -> None:
         target_root.mkdir(parents=True, exist_ok=True)
 
         dirs[:] = [
-            dirname
-            for dirname in dirs
-            if dirname not in ignored_dirs and not (root_path / dirname).is_symlink()
+            dirname for dirname in dirs if dirname not in ignored_dirs and not (root_path / dirname).is_symlink()
         ]
         for filename in files:
             if filename in ignored_files or filename.startswith(ignored_prefixes):
@@ -570,11 +576,13 @@ def normalize_msagent_stdout(stdout: str) -> list[dict[str, Any]]:
         if tool_call is not None:
             events.append(tool_call)
 
-    events.append({
-        "event_type": "agent_event",
-        "raw_type": "msagent.stdout",
-        "summary": trim_text(text, 4000),
-    })
+    events.append(
+        {
+            "event_type": "agent_event",
+            "raw_type": "msagent.stdout",
+            "summary": trim_text(text, 4000),
+        }
+    )
     return events
 
 
@@ -600,14 +608,16 @@ def normalize_msagent_trace_events(events: list[dict[str, Any]]) -> list[dict[st
     for event in events:
         event_type = str(event.get("type") or "")
         if event_type == "tool_call":
-            normalized.append({
-                "event_type": "tool_call",
-                "raw_type": "msagent.trace.tool_call",
-                "tool": str(event.get("tool") or "unknown"),
-                "item_id": event.get("item_id"),
-                "input": event.get("input", {}),
-                "summary": trim_event_text(event),
-            })
+            normalized.append(
+                {
+                    "event_type": "tool_call",
+                    "raw_type": "msagent.trace.tool_call",
+                    "tool": str(event.get("tool") or "unknown"),
+                    "item_id": event.get("item_id"),
+                    "input": event.get("input", {}),
+                    "summary": trim_event_text(event),
+                }
+            )
         elif event_type == "tool_result":
             payload = {
                 "event_type": "tool_result",
@@ -622,28 +632,34 @@ def normalize_msagent_trace_events(events: list[dict[str, Any]]) -> list[dict[st
                 payload["duration_ms"] = round(float(duration_ms))
             normalized.append(payload)
         elif event_type == "token_usage":
-            normalized.append({
-                "event_type": "token_usage",
-                "raw_type": "msagent.trace.token_usage",
-                "usage": event.get("usage", {}),
-                "cumulative": event.get("cumulative", {}),
-                "summary": trim_event_text(event),
-            })
+            normalized.append(
+                {
+                    "event_type": "token_usage",
+                    "raw_type": "msagent.trace.token_usage",
+                    "usage": event.get("usage", {}),
+                    "cumulative": event.get("cumulative", {}),
+                    "summary": trim_event_text(event),
+                }
+            )
         elif event_type == "session_finished":
-            normalized.append({
-                "event_type": "agent_event",
-                "raw_type": "msagent.trace.session_finished",
-                "exit_code": event.get("exit_code"),
-                "duration_ms": event.get("duration_ms"),
-                "token_usage": event.get("token_usage", {}),
-                "summary": trim_event_text(event),
-            })
+            normalized.append(
+                {
+                    "event_type": "agent_event",
+                    "raw_type": "msagent.trace.session_finished",
+                    "exit_code": event.get("exit_code"),
+                    "duration_ms": event.get("duration_ms"),
+                    "token_usage": event.get("token_usage", {}),
+                    "summary": trim_event_text(event),
+                }
+            )
         elif event_type in {"session_started", "assistant_message", "error"}:
-            normalized.append({
-                "event_type": "agent_event",
-                "raw_type": f"msagent.trace.{event_type}",
-                "summary": trim_event_text(event),
-            })
+            normalized.append(
+                {
+                    "event_type": "agent_event",
+                    "raw_type": f"msagent.trace.{event_type}",
+                    "summary": trim_event_text(event),
+                }
+            )
     return normalized
 
 

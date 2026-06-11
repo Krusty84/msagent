@@ -179,6 +179,8 @@ class Session:
                 self.graph = graph
 
                 await self.message_dispatcher.dispatch(message)
+                if self.run_recorder is not None:
+                    self.run_recorder.finish(context=self.context, exit_code=0)
                 return 0
 
         except KeyboardInterrupt:
@@ -194,8 +196,6 @@ class Session:
             logger.exception("CLI message error")
             return 1
         finally:
-            if self.run_recorder is not None:
-                self.run_recorder.finish(context=self.context, exit_code=0)
             self._restore_sigint()
 
     def _sync_audit_context(self) -> None:

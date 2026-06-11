@@ -65,6 +65,11 @@ def _build_session(tmp_path: Path) -> SimpleNamespace:
             render_tool_call=lambda *args, **kwargs: None,
             render_tool_message=lambda *args, **kwargs: None,
         ),
+        subagent_audit=SimpleNamespace(
+            begin_run=lambda *args, **kwargs: None,
+            observe=lambda *args, **kwargs: None,
+            run_id=None,
+        ),
     )
 
     def update_context(**kwargs: Any) -> None:
@@ -169,6 +174,33 @@ async def test_invoke_without_stream_resumes_interrupts(tmp_path: Path) -> None:
     assert rendered and isinstance(rendered[0], AIMessage)
     assert session.context.current_input_tokens == 10
     assert session.context.current_output_tokens == 2
+
+
+@pytest.mark.asyncio
+async def test_invoke_without_stream_limits_interrupt_resume_iterations(tmp_path: Path) -> None:
+    session = _build_session(tmp_path)
+    dispatcher = MessageDispatcher(session)
+    calls: list[Any] = []
+
+    async def fake_ainvoke(input_data, config, *, context):
+        del config, context
+        calls.append(input_data)
+        return {"__interrupt__": [SimpleNamespace(id=f"interrupt-{len(calls)}")]}
+
+    async def fake_handle(_interrupts):
+        return {"decisions": [{"type": "approve"}]}
+
+    session.graph.ainvoke = fake_ainvoke
+    dispatcher.interrupt_handler.handle = fake_handle
+
+    with pytest.raises(RuntimeError, match="exceeded 50 interrupt/resume iterations"):
+        await dispatcher._invoke_without_stream(
+            {"messages": []},
+            {},
+            message_module.AgentContext(),
+        )
+
+    assert len(calls) == 50
 
 
 @pytest.mark.asyncio

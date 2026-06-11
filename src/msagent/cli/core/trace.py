@@ -212,7 +212,7 @@ class CliRunRecorder:
 
         usage_key = _message_id(message)
         if usage_key is None:
-            usage_key = f"{hash((_message_text(message), input_value, output_value))}"
+            usage_key = f"msg:{input_value}:{output_value}:{_trim_text(_message_text(message), 200)}"
         if usage_key in self._seen_usage_keys:
             return
         self._seen_usage_keys.add(usage_key)

@@ -54,56 +54,73 @@ def run(
     metrics_dir.mkdir(parents=True, exist_ok=True)
 
     scores = []
+    failures = []
     metrics_items = []
     for case in suite.cases:
-        input_path = case.resolve_input_path()
-        if not input_path.exists():
-            raise FileNotFoundError(f"Missing input data for {case.id}: {input_path}")
+        try:
+            input_path = case.resolve_input_path()
+            if not input_path.exists():
+                raise FileNotFoundError(f"Missing input data for {case.id}: {input_path}")
 
-        trace = agent.run(case, input_path)
-        trace_path = traces_dir / f"{case.id}.trace.json"
-        trace_path.write_text(json.dumps(trace, indent=2, ensure_ascii=False), encoding="utf-8")
+            trace = agent.run(case, input_path)
+            trace_path = traces_dir / f"{case.id}.trace.json"
+            trace_path.write_text(json.dumps(trace, indent=2, ensure_ascii=False), encoding="utf-8")
 
-        judge_result = _normalize_judge_result(case, judge.judge(case, trace), trace)
-        judge_path = judge_dir / f"{case.id}.judge.json"
-        judge_path.write_text(
-            json.dumps(judge_result, indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
+            judge_result = _normalize_judge_result(case, judge.judge(case, trace), trace)
+            judge_path = judge_dir / f"{case.id}.judge.json"
+            judge_path.write_text(
+                json.dumps(judge_result, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
 
-        case_metrics = build_case_metrics(case.id, trace, judge_result)
-        metrics_path = metrics_dir / f"{case.id}.metrics.json"
-        metrics_path.write_text(
-            json.dumps(case_metrics, indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
-        metrics_items.append(case_metrics)
+            case_metrics = build_case_metrics(case.id, trace, judge_result)
+            metrics_path = metrics_dir / f"{case.id}.metrics.json"
+            metrics_path.write_text(
+                json.dumps(case_metrics, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            metrics_items.append(case_metrics)
 
-        tool_use_results = _tool_use_results(case, case_metrics)
-        must_tool_use_pass = all(item["used"] for item in tool_use_results)
-        efficiency = _efficiency_report(case, case_metrics)
-        final_score = _final_score(judge_result, must_tool_use_pass)
-        score = {
-            "case_id": case.id,
-            "must_include_pass": judge_result["must_include_pass"],
-            "must_include_results": judge_result["must_include_results"],
-            "must_tool_use_pass": must_tool_use_pass,
-            "must_tool_use_results": tool_use_results,
-            "judge_score": judge_result["rubric_score"],
-            "score": final_score,
-            "efficiency": efficiency,
-            "strengths": judge_result.get("strengths", []),
-            "weaknesses": judge_result.get("weaknesses", []),
-            "trace_path": str(trace_path),
-            "metrics_path": str(metrics_path),
-            "judge_path": str(judge_path),
-        }
-        scores.append(score)
+            tool_use_results = _tool_use_results(case, case_metrics)
+            must_tool_use_pass = all(item["used"] for item in tool_use_results)
+            efficiency = _efficiency_report(case, case_metrics)
+            final_score = _final_score(judge_result, must_tool_use_pass)
+            score = {
+                "case_id": case.id,
+                "status": "completed",
+                "must_include_pass": judge_result["must_include_pass"],
+                "must_include_results": judge_result["must_include_results"],
+                "must_tool_use_pass": must_tool_use_pass,
+                "must_tool_use_results": tool_use_results,
+                "judge_score": judge_result["rubric_score"],
+                "score": final_score,
+                "efficiency": efficiency,
+                "strengths": judge_result.get("strengths", []),
+                "weaknesses": judge_result.get("weaknesses", []),
+                "trace_path": str(trace_path),
+                "metrics_path": str(metrics_path),
+                "judge_path": str(judge_path),
+            }
+            scores.append(score)
+        except Exception as exc:
+            score = _failed_case_score(case, exc, out_dir / "failures")
+            scores.append(score)
+            failures.append(
+                {
+                    "case_id": case.id,
+                    "error_type": type(exc).__name__,
+                    "message": str(exc),
+                    "failure_path": score["failure_path"],
+                }
+            )
 
     judge_scores = [float(item["judge_score"]) for item in scores]
     report = {
         "suite": suite.name,
-        "case_count": len(scores),
+        "case_count": len(suite.cases),
+        "completed_count": len(scores) - len(failures),
+        "failed_count": len(failures),
+        "failed_cases": failures,
         "judge_enabled": True,
         "average_score": round(mean(item["score"] for item in scores), 4),
         "average_judge_score": round(mean(judge_scores), 4),
@@ -223,21 +240,17 @@ def _normalize_must_include_results(
     judge_result: dict[str, Any],
 ) -> list[dict[str, Any]]:
     raw_results = judge_result.get("must_include_results", [])
-    raw_items: list[dict[str, Any]] = []
     by_item: dict[str, dict[str, Any]] = {}
     if isinstance(raw_results, list):
         for item in raw_results:
             if isinstance(item, dict):
-                raw_items.append(item)
                 key = str(item.get("item", ""))
                 if key and key not in by_item:
                     by_item[key] = item
 
     normalized = []
-    for index, required_item in enumerate(case.must_include):
+    for required_item in case.must_include:
         raw = by_item.get(required_item)
-        if raw is None and index < len(raw_items):
-            raw = raw_items[index]
         if raw is None:
             normalized.append(
                 {
@@ -359,11 +372,72 @@ def _efficiency_report(case: BenchmarkCase, case_metrics: dict[str, Any]) -> dic
     }
 
 
+def _failed_case_score(case: BenchmarkCase, error: Exception, failures_dir: Path) -> dict[str, Any]:
+    failures_dir.mkdir(parents=True, exist_ok=True)
+    error_info = {
+        "type": type(error).__name__,
+        "message": str(error),
+    }
+    failure_path = failures_dir / f"{case.id}.failure.json"
+    failure_payload = {
+        "case_id": case.id,
+        "status": "failed",
+        "error": error_info,
+    }
+    failure_path.write_text(
+        json.dumps(failure_payload, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    return {
+        "case_id": case.id,
+        "status": "failed",
+        "must_include_pass": False,
+        "must_include_results": [
+            {
+                "item": item,
+                "covered": False,
+                "reason": "Case failed before judging.",
+            }
+            for item in case.must_include
+        ],
+        "must_tool_use_pass": False,
+        "must_tool_use_results": [
+            {
+                "tool": tool,
+                "used": False,
+                "count": 0,
+                "matched_tools": [],
+            }
+            for tool in case.must_tool_use
+        ],
+        "judge_score": 0.0,
+        "score": 0.0,
+        "efficiency": _empty_efficiency_report(case),
+        "strengths": [],
+        "weaknesses": [error_info["message"]],
+        "error": error_info,
+        "failure_path": str(failure_path),
+    }
+
+
+def _empty_efficiency_report(case: BenchmarkCase) -> dict[str, Any]:
+    return {
+        "tool_calls": 0,
+        "tool_budget": case.tool_budget,
+        "over_budget": 0,
+        "tool_penalty_per_call": case.tool_penalty_per_call,
+        "tool_penalty_floor": case.tool_penalty_floor,
+        "efficiency_factor": 1.0,
+        "applied_to_score": False,
+    }
+
+
 def _render_markdown_report(report: dict[str, Any]) -> str:
     lines = [
         f"# Benchmark Report: {report['suite']}",
         "",
         f"- Cases: {report['case_count']}",
+        f"- Failed cases: {report.get('failed_count', 0)}",
         "- Judge: enabled",
         f"- Average score: {report['average_score']:.4f}",
         _format_judge_score(report.get("average_judge_score")),

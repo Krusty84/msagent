@@ -58,4 +58,13 @@ test_data/
 .omx/
 .msagent/
 
-tests/benchmark
+# Benchmark runtime outputs
+tests/benchmark/log/
+tests/benchmark/runs/*
+!tests/benchmark/runs/.gitkeep
+tests/benchmark/data/*
+!tests/benchmark/data/mock_agent_smoke/
+!tests/benchmark/data/mock_agent_smoke/**
+
+# DS_Store
+.DS_Store

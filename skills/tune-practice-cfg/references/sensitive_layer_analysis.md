@@ -29,6 +29,7 @@ msmodelslim analyze layer \
 
 **注意事项**
 - 敏感层分析运行时长可能较长，超过 timeout 3600s，将结果输出到 stdout 时，由于 tee 因超时而中断，造成输出丢失。你**应当**使用 nohup 或将输出重定向到文件。**务必避免**在上一个敏感层分析进程未结束时再次拉起一个敏感层分析进程。
+- 当使用 mse_layer_wise 时，topk 按照模型实际层数（config.json 中 num_hidden_layers）填写。
 
 ## 支持的分析指标
 

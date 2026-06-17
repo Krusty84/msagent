@@ -205,6 +205,7 @@ python skills/tune-practice-cfg/scripts/validate_practice_yaml.py --practice-pat
 | 一次只改一两处 | exclude 或离群值抑制，避免多因素同时变化 |
 | 保留锚点 | 始终保留一份当前已知最优且达标的配置，掉精度可回滚 |
 | 校验必过 | `valid=false` 时不可继续，必须修正后重新校验 |
+| save固定 | `spec.save` 字段除非用户指定，默认情况下必须为 `ascendv1_saver` |
 
 ## 常见错误
 

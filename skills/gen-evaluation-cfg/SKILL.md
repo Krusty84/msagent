@@ -24,7 +24,7 @@ metadata:
 
 ## Overview
 
-本 Skill 负责生成 `quant-tuning-evaluate` / `run_evaluation.py` 所需的单文件评测 YAML 配置。
+本 Skill 负责生成 `quant-tuning-evaluate` / `run_evaluation.py` 所需的单文件评测 YAML 配置。本 Skill 仅生成 Evaluation YAML。不要据此推断 Practice YAML 的 spec.save 应使用 `compressed_tensors`；Practice 的 save 以 tune-practice-cfg 为准，默认情况下使用 `ascendv1_saver`。
 
 **核心功能**：
 - 生成包含 `demand`（目标精度）、`evaluation`（AISBench）、`inference_engine`（vLLM-Ascend）三个模块的完整 YAML

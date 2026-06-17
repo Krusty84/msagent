@@ -113,6 +113,7 @@ inference_engine:
 
 1. 确保所有必填字段存在且符合格式要求
 2. 确保生成的 YAML 文件语法正确，可以被 YAML 解析器成功解析
+3. 如果你在测浮点模型精度基线，则 `demand.expectations[].target` 和 `demand.expectations[].tolerance` **必须**都设置为 100 进行占位。
 
 ## 执行约束
 

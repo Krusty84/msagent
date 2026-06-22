@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import os
 from typing import Any
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import urlparse
 
 import httpx
 from langchain.chat_models import init_chat_model
@@ -190,18 +190,6 @@ class LLMFactory:
         normalized = base_url.strip()
         if not normalized:
             return None
-
-        if provider != "openai":
-            return normalized
-
-        parsed = urlparse(normalized)
-        host = (parsed.hostname or "").lower()
-        path = parsed.path.rstrip("/")
-
-        # DeepSeek OpenAI-compatible endpoint requires /v1.
-        if host.endswith("deepseek.com") and path in {"", "/"}:
-            parsed = parsed._replace(path="/v1")
-            return urlunparse(parsed)
 
         return normalized
 

@@ -32,7 +32,29 @@ DEFAULT_API_ENV_MAP = {
 
 DEFAULT_SESSION_COMMAND = "__session__"
 PUBLIC_COMMANDS = {"config", "web"}
-ROOT_ONLY_FLAGS = {"-h", "--help", "--version"}
+ROOT_ONLY_FLAGS = {"--version"}
+
+AGENT_HELP = (
+    "Agent name. Available agents:\n"
+    "Profiler  【性能调优】聚焦 Ascend Profiling 分析，覆盖单卡、多卡、集群等场景，"
+    "擅长快慢卡、慢节点、MFU、通信瓶颈、算子热点、下发调度等性能问题定位与优化建议。\n"
+    "Accuracy  【精度调优】聚焦 Ascend 精度分析与优化，覆盖 RL 训推一致性分析、"
+    "loss / gnorm NaN 分析等常见精度问题。\n"
+    "Quantizer 【模型量化】聚焦 msModelSlim 量化与压缩场景，协助完成模型适配可行性、"
+    "结构风险评估与基础适配器开发。\n"
+    "Modeling  【仿真建模】聚焦大模型（LLM/VLM）仿真建模场景，承接性能建模、"
+    "单点仿真、吞吐规划、设备画像与模型接入准备类问题。\n"
+    "Operator  【算子调优】聚焦 Ascend NPU 算子性能调优，包括算子性能深度分析、"
+    "端到端算子性能优化，辅助提升调优效率并降低开发难度。\n"
+    "Minos     【文档体验与代码审查】聚焦 README 走查、安装流程验证、Quick Start 体验、"
+    "新手 onboarding、文档可用性评估，以及 GitCode PR 审查与评审意见整理。"
+)
+
+
+class MsAgentHelpFormatter(argparse.RawDescriptionHelpFormatter, argparse.RawTextHelpFormatter):
+    """Preserve multi-line help text in descriptions, epilog, and option help."""
+
+    pass
 
 
 def normalize_argv(argv: list[str]) -> list[str]:
@@ -49,6 +71,7 @@ def create_legacy_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog=APP_NAME,
         description="msAgent - AI Assistant with MCP support",
+        formatter_class=MsAgentHelpFormatter,
     )
     parser.add_argument(
         "--version",
@@ -135,7 +158,7 @@ def create_legacy_parser() -> argparse.ArgumentParser:
         default=os.getcwd(),
         help="Working directory for project-local .msagent config",
     )
-    web_parser.add_argument("-a", "--agent", default=None, help="Agent name")
+    web_parser.add_argument("-a", "--agent", default=None, help=AGENT_HELP)
     web_parser.add_argument("-m", "--model", default=None, help="LLM model alias")
 
     return parser
@@ -143,7 +166,16 @@ def create_legacy_parser() -> argparse.ArgumentParser:
 
 def create_session_parser() -> argparse.ArgumentParser:
     """Create the internal parser used for the default interactive session."""
-    parser = argparse.ArgumentParser(prog=APP_NAME)
+    parser = argparse.ArgumentParser(
+        prog=APP_NAME,
+        description="Start a chat session with msAgent.",
+        epilog=(
+            "subcommands:\n"
+            "  config      Configure msAgent\n"
+            "  web         Start a LangGraph server for deep-agents-ui"
+        ),
+        formatter_class=MsAgentHelpFormatter,
+    )
     parser.set_defaults(cli_command=DEFAULT_SESSION_COMMAND, version=False)
     parser.add_argument("message", nargs="?", default=None, help="Message to send")
     parser.add_argument(
@@ -176,7 +208,7 @@ def _add_runtime_options(parser: argparse.ArgumentParser, *, include_timer: bool
         default=os.getcwd(),
         help="Working directory for the session (default: current directory)",
     )
-    parser.add_argument("-a", "--agent", default=None, help="Agent name")
+    parser.add_argument("-a", "--agent", default=None, help=AGENT_HELP)
     parser.add_argument("-m", "--model", default=None, help="LLM model alias")
     parser.set_defaults(resume=False)
     if include_timer:

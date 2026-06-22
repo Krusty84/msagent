@@ -32,7 +32,24 @@ DEFAULT_API_ENV_MAP = {
 
 DEFAULT_SESSION_COMMAND = "__session__"
 PUBLIC_COMMANDS = {"config", "web"}
-ROOT_ONLY_FLAGS = {"-h", "--help", "--version"}
+ROOT_ONLY_FLAGS = {"--version"}
+
+AGENT_HELP = (
+    "Agent name. Available agents:\n"
+    "Profiler  Performance profiling and optimization.\n"
+    "Accuracy  Accuracy analysis and debugging.\n"
+    "Quantizer Model quantization and adaptation.\n"
+    "Modeling  LLM/VLM simulation modeling.\n"
+    "Operator  Ascend operator performance tuning.\n"
+    "Minos     Documentation UX and code review."
+)
+
+SESSION_DESCRIPTION = (
+    "Start a chat session with msAgent.\n\n"
+    "subcommands:\n"
+    "  config      Configure msAgent\n"
+    "  web         Start a LangGraph server for deep-agents-ui"
+)
 
 
 def normalize_argv(argv: list[str]) -> list[str]:
@@ -49,6 +66,7 @@ def create_legacy_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog=APP_NAME,
         description="msAgent - AI Assistant with MCP support",
+        formatter_class=argparse.RawTextHelpFormatter,
     )
     parser.add_argument(
         "--version",
@@ -135,7 +153,7 @@ def create_legacy_parser() -> argparse.ArgumentParser:
         default=os.getcwd(),
         help="Working directory for project-local .msagent config",
     )
-    web_parser.add_argument("-a", "--agent", default=None, help="Agent name")
+    web_parser.add_argument("-a", "--agent", default=None, help=AGENT_HELP)
     web_parser.add_argument("-m", "--model", default=None, help="LLM model alias")
 
     return parser
@@ -143,27 +161,36 @@ def create_legacy_parser() -> argparse.ArgumentParser:
 
 def create_session_parser() -> argparse.ArgumentParser:
     """Create the internal parser used for the default interactive session."""
-    parser = argparse.ArgumentParser(prog=APP_NAME)
+    parser = argparse.ArgumentParser(
+        prog=APP_NAME,
+        description=SESSION_DESCRIPTION,
+        formatter_class=argparse.RawTextHelpFormatter,
+    )
     parser.set_defaults(cli_command=DEFAULT_SESSION_COMMAND, version=False)
-    parser.add_argument("message", nargs="?", default=None, help="Message to send")
+    parser.add_argument(
+        "message",
+        nargs="?",
+        default=None,
+        help='Message to send.\nexample: msagent "analyze this repo"',
+    )
     parser.add_argument(
         "--stream",
         dest="stream",
         action="store_true",
         default=True,
-        help="Stream output",
+        help="Stream output.\nexample: msagent --stream",
     )
     parser.add_argument(
         "--no-stream",
         dest="stream",
         action="store_false",
-        help="Render the final reply without token streaming",
+        help='Render the final reply without token streaming.\nexample: msagent --no-stream "summarize logs"',
     )
     parser.add_argument(
         "-v",
         "--verbose",
         action="store_true",
-        help="Enable verbose logging to console and .msagent/app.log",
+        help="Enable verbose logging to console and .msagent/app.log.\nexample: msagent -v",
     )
     _add_runtime_options(parser, include_timer=True)
     return parser
@@ -174,16 +201,16 @@ def _add_runtime_options(parser: argparse.ArgumentParser, *, include_timer: bool
         "-w",
         "--working-dir",
         default=os.getcwd(),
-        help="Working directory for the session (default: current directory)",
+        help="Working directory for the session (default: current directory).\nexample: msagent -w /path/to/project",
     )
-    parser.add_argument("-a", "--agent", default=None, help="Agent name")
+    parser.add_argument("-a", "--agent", default=None, help=AGENT_HELP)
     parser.add_argument("-m", "--model", default=None, help="LLM model alias")
     parser.set_defaults(resume=False)
     if include_timer:
         parser.add_argument(
             "--timer",
             action="store_true",
-            help="Enable startup timing",
+            help="Enable startup timing.\nexample: msagent --timer",
         )
     else:
         parser.set_defaults(timer=False)
@@ -192,7 +219,7 @@ def _add_runtime_options(parser: argparse.ArgumentParser, *, include_timer: bool
         "--approval-mode",
         choices=[mode.value for mode in ApprovalMode],
         default=ApprovalMode.ACTIVE.value,
-        help="Tool approval mode",
+        help="Tool approval mode.\nexample: msagent -am active",
     )
 
 

@@ -32,7 +32,7 @@ DEFAULT_API_ENV_MAP = {
 
 DEFAULT_SESSION_COMMAND = "__session__"
 PUBLIC_COMMANDS = {"config", "web"}
-ROOT_ONLY_FLAGS = {"-h", "--help", "--version"}
+ROOT_ONLY_FLAGS = {"--version"}
 
 
 def normalize_argv(argv: list[str]) -> list[str]:

@@ -1,84 +1,205 @@
-# Benchmark Builder
+# Benchmark 使用指南
 
-这是一个用于评估 Agent 的 benchmark harness。它会读取 case YAML，给被测 Agent 一个任务和数据目录，保存 Agent 运行 trace，然后用 LLM as a judge 进行评分。
+`tests/benchmark` 是一个用于评估 Agent 的 benchmark harness。它会读取 case YAML，
+把输入数据复制到隔离工作区，运行被测 Agent，保存 trace，再用 LLM as a judge
+根据标准答案要点和评分 rubric 打分。
 
-核心流程：
+适合用来回答这类问题：
 
-1. 读取单个 case YAML，或读取目录下所有 `.yaml` / `.yml` case。
-2. 将 case 的 `input_data_path` 复制到隔离工作区中的 `input_data/`。
-3. 只把 `prompt` 和 `input_data/` 暴露给被测 Agent。
-4. 要求 Agent 输出统一 JSON 答案。
-5. 将 Agent trace、最终答案、`must_include` 和 `scoring_prompt` 交给 judge。
-6. judge 判断答案是否覆盖 `must_include`，并按 `scoring_prompt` 给出 0 到 5 分。
-   如 case 配置了 `must_include_regex`，benchmark 会额外用正则确定性校验最终
-   `answer` 文本。
-7. 输出 trace、judge、metrics、scores 和 Markdown report。
+- 某个 Agent 能不能在固定输入数据上给出稳定、正确的结论。
+- Agent 是否真的调用了要求的方法或工具，而不是只给出看起来正确的答案。
+- 不同 Agent、不同模型、不同 skill 在同一批 case 上的效果、耗时、token 和工具调用差异。
+
+## 文档入口
+
+- [QUICKSTART.md](QUICKSTART.md)：最快跑通 benchmark 的命令。
+- [CASE_GUIDE.md](CASE_GUIDE.md)：如何新增 benchmark case。
+- [DEMO.md](DEMO.md)：几个 case 的完整示例和结果解读。
 
 ## 目录结构
 
 ```text
-benchmarks/
-  *.yaml                     # 每个文件一个 benchmark case
-data/
-  */                         # case 输入数据
-src/
-  third_party/
-    codex_cli.py             # Codex CLI Agent 和 judge adapter
-    claude_cli.py            # Claude CLI Agent 和 judge adapter
-  msagent_cli.py             # msAgent CLI Agent 和 judge adapter
-  judge.py                   # 本地 heuristic judge，仅用于 smoke test
-  metrics.py                 # token、耗时和 tool call 聚合
-  schema.py                  # case YAML 加载和校验
-  mock_agent.py              # 本地 heuristic agent，仅用于 smoke test
-  trace.py                   # trace event builder
-  run_benchmark.py           # CLI 入口
+tests/benchmark/
+  benchmarks/                 # case YAML，一个 YAML 对应一个 case
+  data/                       # case 输入数据
+  runs/                       # 运行产物，默认不提交具体 run
+  src/
+    run_benchmark.py          # CLI 入口
+    schema.py                 # case 字段校验
+    metrics.py                # token、耗时、工具调用统计
+    judge.py                  # 本地 heuristic judge，用于 smoke test
+    mock_agent.py             # 本地 heuristic agent，用于 smoke test
+    msagent_cli.py            # msAgent adapter
+    third_party/
+      codex_cli.py            # Codex CLI adapter
+      claude_cli.py           # Claude CLI adapter
 ```
 
-## Benchmark 接入标准
+## 快速运行
 
-每个 case YAML 必须包含以下字段：
+从仓库根目录进入 benchmark 目录：
 
-- `input_data_path`：case 数据目录或数据文件路径。相对路径按 YAML 文件所在目录解析。
-- `prompt`：给被测 Agent 的任务说明。
-- `must_include`：答案必须语义覆盖的内容列表。judge 会逐项判断是否覆盖。
-- `must_include_regex`：可选。最终 `answer` 文本必须匹配的正则表达式列表。
-  使用 Python `re.search`，默认 flags 为 `re.IGNORECASE | re.MULTILINE`，不启用
-  `DOTALL`。
-- `must_tool_use`：可选。Agent trace 中必须出现的工具调用列表。确定性校验（不交给
-  LLM judge），大小写不敏感子串匹配，例如 `msprof-mcp` 可命中
-  `msprof-mcp_analyze_kernel_details`。这是一个**硬门槛**：任一要求的工具未被调用，
-  最终 `score` 直接为 0（即使答案正确）。
-- `scoring_prompt`：judge 的评分标准 prompt，用于给出 0 到 5 分。
+```bash
+cd tests/benchmark
+```
 
-`id` 是可选字段；缺省时使用 YAML 文件名作为 case id。
+安装为可执行命令：
 
-工具使用效率相关字段均为可选，缺省时使用全局默认值：
+```bash
+python3 -m pip install -e .
+```
 
-- `tool_budget`：免费工具调用额度，超出部分才计入效率惩罚。默认 `20`。
-- `tool_penalty_per_call`：每超额一次工具调用对应的惩罚系数。默认 `0.02`。
-- `tool_penalty_floor`：效率系数下限，避免被工具数压到过低。默认 `0.5`。
+跑一个本地 smoke case，不调用真实模型：
 
-注意：效率系数目前**只用于报告**（informational），不会折进最终 `score`。详见
-下方“工具使用效率”一节。
+```bash
+benchmark-builder \
+  --config benchmarks/mock_agent_smoke.yaml \
+  --out runs/smoke \
+  --agent heuristic \
+  --judge heuristic
+```
 
-示例：
+不安装也可以直接运行：
+
+```bash
+PYTHONPATH=src python3 -m run_benchmark \
+  --config benchmarks/mock_agent_smoke.yaml \
+  --out runs/smoke \
+  --agent heuristic \
+  --judge heuristic
+```
+
+跑完整目录时，把 `--config` 指向 `benchmarks`：
+
+```bash
+PYTHONPATH=src python3 -m run_benchmark \
+  --config benchmarks \
+  --out runs/all-smoke \
+  --agent heuristic \
+  --judge heuristic
+```
+
+## 使用 msAgent
+
+如果系统 PATH 里已经有 `msagent` 命令：
+
+```bash
+PYTHONPATH=src python3 -m run_benchmark \
+  --config benchmarks/agent_list.yaml \
+  --out runs/msagent-agent-list \
+  --agent msagent-cli \
+  --judge msagent-cli \
+  --msagent-agent Hermes
+```
+
+从源码或虚拟环境运行 msAgent 时，用 `MSAGENT_CLI` 指定完整命令：
+
+```bash
+MSAGENT_CLI="uv --project /path/to/msagent run msagent" \
+PYTHONPATH=src python3 -m run_benchmark \
+  --config benchmarks/agent_list.yaml \
+  --out runs/msagent-agent-list \
+  --agent msagent-cli \
+  --judge msagent-cli \
+  --msagent-agent Hermes
+```
+
+常用 msAgent 相关选项：
+
+- `--msagent-agent Hermes`：选择 msAgent 内置 agent；不传时使用 `MSAGENT_AGENT`，再不传默认 `Hermes`。
+- `--model deepseek-chat`：给被测 Agent 指定模型。
+- `--judge-model deepseek-chat`：给 judge 单独指定模型；不传时沿用 `--model`。
+- `MSAGENT_APPROVAL_MODE=aggressive`：msAgent approval mode，默认就是 `aggressive`。
+
+msAgent adapter 会为每个 case 创建临时隔离工作区，并复制当前仓库的 `.msagent`
+配置。运行 trace 会写到 `runs/<run_id>/runtime/{agent,judge}/`。
+
+## 使用 Codex CLI 或 Claude CLI
+
+Codex CLI：
+
+```bash
+PYTHONPATH=src python3 -m run_benchmark \
+  --config benchmarks/mock_agent_smoke.yaml \
+  --out runs/codex-cli \
+  --agent codex-cli \
+  --judge codex-cli
+```
+
+如果命令不在 PATH 里，可以设置：
+
+```bash
+export CODEX_CLI=/path/to/codex
+```
+
+Claude CLI：
+
+```bash
+PYTHONPATH=src python3 -m run_benchmark \
+  --config benchmarks/mock_agent_smoke.yaml \
+  --out runs/claude-cli \
+  --agent claude-cli \
+  --judge claude-cli
+```
+
+如果命令不在 PATH 里，可以设置：
+
+```bash
+export CLAUDE_CLI=/path/to/claude
+```
+
+## 常用参数
+
+```text
+--config            必填。单个 case YAML，或包含多个 YAML 的目录。
+--out               必填。运行产物输出目录。
+--agent             被测 Agent：codex-cli / claude-cli / msagent-cli / heuristic。
+--judge             Judge：codex-cli / claude-cli / msagent-cli / heuristic。
+--model             被测 Agent 模型。
+--judge-model       Judge 模型；不传时默认使用 --model。
+--timeout-seconds   单个 agent/judge 子进程超时时间，默认 900 秒。
+--msagent-agent     msAgent persona，默认 Hermes。
+```
+
+`heuristic` 只用于本地 smoke test，能验证读取 case、复制数据、生成报告等管线是否正常。
+真实评测请使用 `msagent-cli`、`codex-cli` 或 `claude-cli`。
+
+## Case 是什么
+
+每个 case YAML 描述一次评测任务。最小示例：
 
 ```yaml
-input_data_path: ../data/cases/mock_agent_smoke
+id: agent_pick
+input_data_path: ../data/msagent_agents
 prompt: >
-  请根据 input_data 中的数据回答问题。
+  根据 input_data 中的资料回答：如果我要做 msModelSlim 的模型分析与适配，应该使用
+  哪个 agent？
 must_include:
-  - 必须覆盖的事实或结论 A
-  - 必须覆盖的事实或结论 B
+  - Zephyr
 must_include_regex:
-  - "rank\\s*3"
+  - "Zephyr"
 must_tool_use:
   - read_file
 scoring_prompt: >
-  按 0-5 分评价答案质量，重点看结论是否准确、证据是否充分、推理是否清晰。
+  按 0-5 分评分。重点看是否正确选出 Zephyr，并说明它负责 msModelSlim 模型分析与适配。
+  选错 agent 应给 0 分。
 ```
 
-旧格式 `ground_truth` 不再支持；`slow_cards`、precision、recall、F1 等旧的 slow-card 专用评分也已移除。
+字段含义简表：
+
+| 字段 | 必填 | 说明 |
+| --- | :---: | --- |
+| `id` | 否 | case 标识；不写时使用 YAML 文件名 |
+| `input_data_path` | 是 | 输入数据目录或文件，相对 YAML 文件解析 |
+| `skill_path` | 否 | 可选 skill 目录；会复制为隔离工作区里的 `skill/` |
+| `prompt` | 是 | 给被测 Agent 的任务说明 |
+| `must_include` | 是 | 最终答案必须语义覆盖的要点 |
+| `must_include_regex` | 否 | 对最终 `answer` 文本做正则硬校验 |
+| `must_tool_use` | 否 | trace 中必须出现的工具调用 |
+| `scoring_prompt` | 是 | judge 的 0-5 分评分标准 |
+| `tool_budget` | 否 | 免费工具调用额度，默认 20，只影响效率报告 |
+
+更完整的 case 编写建议见 [CASE_GUIDE.md](CASE_GUIDE.md)。
 
 ## Agent 输出格式
 
@@ -95,82 +216,45 @@ scoring_prompt: >
 
 注意：
 
-- `must_include` 和 `scoring_prompt` 只提供给 judge，不会提供给被测 Agent。
-- Agent 只能访问隔离工作区中的 `input_data/`。
-- Agent 不应读取 benchmark 源码、case YAML、历史 run 输出或父目录。
+- `prompt` 和复制后的 `input_data/` 会提供给被测 Agent。
+- `must_include`、`must_include_regex` 和 `scoring_prompt` 不会提供给被测 Agent。
+- 如果配置了 `skill_path`，被测 Agent 会看到复制后的 `skill/` 目录，并被要求先读 `skill/SKILL.md`。
+- Agent 不应该读取 benchmark 源码、case YAML、历史 run 输出或父目录。
 
-## LLM As A Judge
+## 评分规则
 
-judge 有两个职责：
+judge 负责两件事：
 
-1. 对 `must_include` 中的每一项判断 `covered=true/false`，使用语义覆盖标准，允许同义表达和合理改写。
-2. 根据 `scoring_prompt` 给出 `rubric_score`，范围为 0 到 5。
+1. 判断 `must_include` 每一项是否被最终答案语义覆盖。
+2. 根据 `scoring_prompt` 给出 `rubric_score`，范围 0 到 5。
 
-`must_include_regex` 不交给 LLM judge；它会在 judge 结果归一化时追加到
-`must_include_results`。最终分数规则：
+runner 还会做两个确定性硬校验：
+
+- `must_include_regex`：用 Python `re.search` 检查最终 `answer` 文本。
+- `must_tool_use`：在 trace 的工具调用里做大小写不敏感子串匹配。
+
+最终分数：
 
 ```text
-if any must_include or must_include_regex item is missing:
-  score = 0
-elif any must_tool_use tool was never called:
-  score = 0
-else:
-  score = rubric_score / 5
+任一 must_include 或 must_include_regex 未覆盖  ->  score = 0
+任一 must_tool_use 未命中                       ->  score = 0
+否则                                           ->  score = rubric_score / 5
 ```
 
-`must_tool_use` 同样是确定性硬门槛，基于 trace 中实际的工具调用判定，
-结果记录在 scores.json 每个 case 的 `must_tool_use_pass` /
-`must_tool_use_results` 字段，以及 report.md 的 `Must Tool Use` / `Missing Tools` 列。
-
-judge 输出会保存为 `judge/<case_id>.judge.json`，其中包含：
-
-```json
-{
-  "must_include_pass": true,
-  "must_include_results": [
-    {
-      "item": "必须覆盖的事实或结论 A",
-      "covered": true,
-      "reason": "答案语义覆盖了该要求。"
-    }
-  ],
-  "rubric_score": 4.5,
-  "strengths": ["答案结论明确。"],
-  "weaknesses": []
-}
-```
-
-## 工具使用效率
-
-benchmark 会根据 trace 中实际的工具调用数量，确定性地计算一个效率系数，用于人工
-评估 Agent 是否使用了过多工具调用。计算来自 metrics 的确定性计数
-（`tool_calls.agent.count`），不交给 LLM judge（judge 只看到截断的 trace 摘要，
-无法准确计数）。
+工具使用效率只写入报告，不折进最终分数：
 
 ```text
 over_budget = max(0, tool_calls - tool_budget)
 efficiency_factor = clamp(1 - over_budget * tool_penalty_per_call, tool_penalty_floor, 1.0)
 ```
 
-当前 `efficiency_factor` **仅用于报告**，不会折进最终 `score`（`applied_to_score:
-false`）。它会出现在 `scores.json` 每个 case 的 `efficiency` 字段、聚合层的
-`average_efficiency_factor`，以及 `report.md` 的 `Tools / Budget / Over / Eff` 列。
+默认：
 
-`efficiency` 字段示例：
+- `tool_budget = 20`
+- `tool_penalty_per_call = 0.02`
+- `tool_penalty_floor = 0.5`
 
-```json
-{
-  "tool_calls": 26,
-  "tool_budget": 20,
-  "over_budget": 6,
-  "tool_penalty_per_call": 0.02,
-  "tool_penalty_floor": 0.5,
-  "efficiency_factor": 0.88,
-  "applied_to_score": false
-}
-```
-
-## 输出文件
+## 输出结果怎么看
 
 每次运行会写入：
 
@@ -181,94 +265,81 @@ runs/<run_id>/
   metrics/<case_id>.metrics.json
   scores.json
   report.md
+  runtime/
+    agent/
+    judge/
 ```
 
-`scores.json` / `report.md` 主要字段：
+常看这几个文件：
 
-- `score`：最终归一化分数，范围为 0 到 1。
-- `judge_score`：judge 给出的 `rubric_score`，范围为 0 到 5。
-- `must_include_pass`：是否覆盖全部必含项。
-- `must_include_results`：逐项覆盖判断。
-- `efficiency`：工具使用效率（informational，不影响 `score`）。
-- `token_usage`、`duration_ms`、`tool_calls`：运行指标。
+- `report.md`：人看的汇总表，适合快速判断哪几个 case 没过。
+- `scores.json`：机器可读的完整评分结果。
+- `traces/<case_id>.trace.json`：Agent 过程 trace，用来排查工具调用和最终答案。
+- `judge/<case_id>.judge.json`：judge 对每个 `must_include` 的判断和理由。
+- `metrics/<case_id>.metrics.json`：token、耗时、工具调用聚合。
+- `runtime/`：底层 CLI 的 stdout、stderr、jsonl 或 msAgent trace。
 
-msAgent 运行会额外启用 `--trace-jsonl`，并把 msAgent trace 保存到
-`runs/<run_id>/runtime/{agent,judge}/`。`token_usage` 来自 msAgent trace 的
-`session_finished.token_usage`，`duration_ms` 是 benchmark 外层进程耗时；
-每个 case 的 metrics 中也会保留 `msagent_session_duration_ms`。
-
-查看 token 和耗时：
+快速查看总分：
 
 ```bash
-jq '.token_usage, .duration_ms' runs/msagent-smoke/scores.json
-jq '.token_usage, .duration_ms' runs/msagent-smoke/metrics/mock_agent_smoke.metrics.json
+jq '.average_score, .scores[] | {case_id, score, judge_score, must_include_pass, must_tool_use_pass}' \
+  runs/smoke/scores.json
 ```
 
-## 运行
-
-安装后运行：
+查看某个 case 缺了什么：
 
 ```bash
-python3 -m pip install -e .
-benchmark-builder --config benchmarks --out runs/codex-run
+jq '.scores[] | select(.score == 0) | {case_id, must_include_results, must_tool_use_results, weaknesses}' \
+  runs/smoke/scores.json
 ```
 
-不安装，直接用 `PYTHONPATH`：
+## 常见问题
 
-```bash
-PYTHONPATH=src python3 -m run_benchmark \
-  --config benchmarks \
-  --out runs/codex-run
-```
+### 跑真实 Agent 前先跑什么
 
-本地 smoke test，不调用真实模型：
+先跑 `heuristic + heuristic` 的 smoke case：
 
 ```bash
 PYTHONPATH=src python3 -m run_benchmark \
-  --config benchmarks \
+  --config benchmarks/mock_agent_smoke.yaml \
   --out runs/smoke \
   --agent heuristic \
   --judge heuristic
 ```
 
-使用 Codex CLI：
+如果这个失败，优先修 case YAML、依赖安装或输出路径问题；如果这个通过，再切真实
+CLI agent。
+
+### 为什么答案对了还是 0 分
+
+通常是两个原因：
+
+- `must_include_regex` 没匹配最终 `answer` 文本。
+- `must_tool_use` 要求的工具没有在 trace 中出现。
+
+这两个都是硬门槛，任何一项失败都会把最终 `score` 置为 0。可以打开
+`runs/<run_id>/report.md` 看 `Missing Items` 和 `Missing Tools`。
+
+### 为什么 token 或工具调用很高
+
+benchmark 会把输入数据复制到隔离工作区，但不会阻止 Agent 探索大文件。写 case 时应在
+`prompt` 和可选 `skill_path` 中提醒 Agent 优先读 compact summary，避免直接打开
+`trace_view.json`、大型数据库、原始 profiler 目录等大文件。
+
+### 能不能只用 msAgent 跑 agent，用别的模型 judge
+
+可以。`--agent` 和 `--judge` 是独立参数，例如：
 
 ```bash
 PYTHONPATH=src python3 -m run_benchmark \
-  --config benchmarks/mock_agent_smoke.yaml \
-  --out runs/codex-cli \
-  --agent codex-cli \
-  --judge codex-cli
-```
-
-使用 Claude CLI：
-
-```bash
-PYTHONPATH=src python3 -m run_benchmark \
-  --config benchmarks/mock_agent_smoke.yaml \
-  --out runs/claude-cli \
-  --agent claude-cli \
-  --judge claude-cli
-```
-
-使用 msAgent：
-
-```bash
-PYTHONPATH=src python3 -m run_benchmark \
-  --config benchmarks/mock_agent_smoke.yaml \
-  --out runs/msagent-cli \
+  --config benchmarks/agent_list.yaml \
+  --out runs/msagent-codex-judge \
   --agent msagent-cli \
-  --judge msagent-cli \
+  --judge codex-cli \
   --msagent-agent Hermes
 ```
 
-从源码运行 msAgent 时可以指定 CLI：
+### 输出目录可以复用吗
 
-```bash
-MSAGENT_CLI="uv --project /path/to/msagent run msagent" \
-PYTHONPATH=src python3 -m run_benchmark \
-  --config benchmarks/mock_agent_smoke.yaml \
-  --out runs/msagent-cli \
-  --agent msagent-cli \
-  --judge msagent-cli
-```
+可以，但新运行会覆盖同名文件。建议每次使用新的 `runs/<run_id>`，例如带上日期、
+模型名或 case 名。

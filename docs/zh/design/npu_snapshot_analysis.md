@@ -1,4 +1,7 @@
+# NPU平台内存快照分析设计文档
+
 ## 修订记录
+
 | 日期 | 修订版本 | 修改描述 | 作者 | RFC文档 |
 | -- | -- | -- | -- | -- |
 | 2026-06-11 | 1.0 | 初始版本，覆盖 ASCEND NPU Memory Snapshot 分析 Agent 的架构、DB 设计、分析能力、可视化方案与测试设计 | @msagent | npu_snapshot_analysis.md |
@@ -142,7 +145,7 @@ sequenceDiagram
 
 #### 2.3 文件目录结构
 
-```
+```text
 skills/ascend-npu-snapshot-analyzer/
 ├── SKILL.md                          # 主技能定义（工作流 + CTE 宏 + 输出规范）
 ├── scripts/
@@ -298,6 +301,7 @@ erDiagram
 #### 4.2 核心分析算法
 
 **峰值分析（时序重放）**：
+
 1. 沿 traces 表按 trace_index 顺序遍历
 2. 遇到 segment_alloc → 累加 Reserved/Allocated
 3. 遇到 segment_free → 扣减 Reserved/Allocated
@@ -305,11 +309,13 @@ erDiagram
 5. 找出最大值及其对应的 trace_index
 
 **泄漏检测（三算法组合）**：
+
 - 算法 A（单调增长）：统计 segment_alloc 和 segment_free 的累积差值，若单调递增且无回落，标记为疑似泄漏
 - 算法 B（长生命周期）：查找 `active_allocated` 状态且对应 alloc 事件在时间线前 20% 的 block
 - 算法 C（堆栈归因）：将 A 和 B 的结果按 stack_id 聚合，按累计大小降序输出 TOP 3 嫌疑堆栈
 
 **碎片分析**：
+
 - 整体碎片率 = (Reserved - Allocated) / Reserved
 - 逐段碎片 = (segment.total_size - segment.allocated_size) / segment.total_size，按降序取 TOP 5
 - 假性碎片 = 状态为 `active_pending_free` 的 block 总和，占比 > 50% 说明碎片主因是异步释放延迟
@@ -318,7 +324,7 @@ erDiagram
 
 Agent 生成报告时，按以下决策树选择模板组合：
 
-```
+```text
 用户请求
     │
     ├─ 包含"对比""diff""before/after" → 跨快照对比模板
@@ -355,7 +361,7 @@ Agent 生成报告时，按以下决策树选择模板组合：
 
 #### 5.3 HTML 报告布局
 
-```
+```text
 ┌───────────────────────────────────────────────────────────────┐
 │  🔍 Ascend NPU Memory Snapshot 分析报告                        │
 │  snapshot_after_training.db                 2026-06-11 14:30  │
@@ -391,7 +397,7 @@ Agent 生成报告时，按以下决策树选择模板组合：
 
 **数据分层金字塔**：
 
-```
+```text
                     ┌───────────────┐
                     │  3. 明细数据   │  ← 按需加载，仅当用户点击展开
                    ┌┴───────────────┴┐
@@ -427,7 +433,7 @@ Agent 生成报告时，按以下决策树选择模板组合：
 
 对于需要交互式钻取明细数据的场景，可启动一个内嵌的轻量 HTTP 查询服务，HTML 通过 `fetch` 异步请求数据。
 
-```
+```text
 ┌──────────────────────────────────────┐
 │               HTML 报告               │
 │                                      │
@@ -492,21 +498,25 @@ Agent 生成报告时，按以下决策树选择模板组合：
 #### 7.2 DFX
 
 **兼容性**：
+
 - Python 3.7+
 - 兼容 `torch_npu.npu.memory._dump_snapshot()` (dict 格式) 和 `torch.cuda.memory._snapshot()` (list 格式)
 - SQLite 3.25+（支持 ATTACH DATABASE）
 
 **可维护性**：
+
 - 每个脚本职责单一，按功能分段清晰
 - 核心函数使用 typing 标注
 - 分析逻辑与展示逻辑分离，可独立修改
 
 **可测试性**：
+
 - 核心函数均为纯函数，易于单元测试
 - 提供 segment/block 构造辅助函数用于测试数据生成
 - 测试覆盖正常路径、边界条件、异常路径
 
 **可靠性**：
+
 - 错误处理完备：文件不存在、格式无效、SQL 语法错误均有明确错误信息
 - 大文件导入采用事务批量提交，失败时自动回滚
 - 趋势图标使用 Unicode 安全字符，避免 Windows GBK 编码问题
@@ -579,6 +589,7 @@ torch_npu.npu.memory._record_memory_history(enabled=None)
 ```
 
 **注意事项**：
+
 - `max_entries` 需根据训练规模调整，过小可能导致 trace 截断，建议设置为 100000 或更大
 - 若需完整的堆栈信息，开启 `stacks="all"` 选项
 - 建议在训练的关键节点（开始、每个 epoch 结束、OOM 前）采集 snapshot，便于后续对比分析
@@ -618,6 +629,7 @@ torch_npu.npu.memory._record_memory_history(enabled=None)
 ### 集成测试
 
 使用真实 NPU 训练采集的 snapshot pickle 文件进行端到端验证：
+
 - pickle 转 DB 全流程
 - 各分析模式输出正确性
 - HTML 报告浏览器兼容性（Chrome/Edge）
@@ -678,6 +690,7 @@ torch_npu.npu.memory._record_memory_history(enabled=None)
 | CTE | Common Table Expression，SQL WITH 子句定义的临时视图 |
 
 **文档更新计划**：
+
 - Phase 2 实现 device_traces 解析后更新本文档的方案设计章节
 - `references/snapshot_schema.md` 随 NPU 版本演进同步更新字段定义
 - `references/analysis_methodology.md` 随检测算法优化同步更新规则和阈值

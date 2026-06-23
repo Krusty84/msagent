@@ -669,6 +669,7 @@ torch_npu.npu.memory._record_memory_history(enabled=None)
 附录
 
 **参考资料链接**：
+
 - PyTorch CUDACachingAllocator 源码：https://github.com/pytorch/pytorch/blob/main/c10/cuda/CUDACachingAllocator.cpp
 - torch.cuda.memory 文档：https://pytorch.org/docs/stable/cuda.html#cuda-memory-management
 - PyTorch memory_viz 工具：https://github.com/pytorch/pytorch/tree/main/torch/cuda/_memory_viz.py

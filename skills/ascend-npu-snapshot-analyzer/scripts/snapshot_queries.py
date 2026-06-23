@@ -309,11 +309,12 @@ def get_net_segment_trend(db_path: str, device_index: Optional[int] = None) -> L
     conn = _connect(db_path)
     query = """
         SELECT
+            d.device_index,
             trace_index,
             SUM(CASE WHEN action IN ('segment_alloc', 'segment_map') THEN 1 ELSE 0 END)
-                OVER (ORDER BY trace_index ROWS UNBOUNDED PRECEDING) -
+                OVER (PARTITION BY d.device_index ORDER BY trace_index ROWS UNBOUNDED PRECEDING) -
             SUM(CASE WHEN action IN ('segment_free', 'segment_unmap') THEN 1 ELSE 0 END)
-                OVER (ORDER BY trace_index ROWS UNBOUNDED PRECEDING) AS net_segments
+                OVER (PARTITION BY d.device_index ORDER BY trace_index ROWS UNBOUNDED PRECEDING) AS net_segments
         FROM traces t
         JOIN devices d ON t.device_id = d.id
     """
@@ -321,7 +322,7 @@ def get_net_segment_trend(db_path: str, device_index: Optional[int] = None) -> L
     if device_index is not None:
         query += " WHERE d.device_index = ?"
         params = (device_index,)
-    query += " ORDER BY trace_index"
+    query += " ORDER BY d.device_index, trace_index"
 
     rows = conn.execute(query, params).fetchall()
     conn.close()
@@ -331,7 +332,7 @@ def get_net_segment_trend(db_path: str, device_index: Optional[int] = None) -> L
 def get_long_lived_blocks(
     db_path: str, device_index: Optional[int] = None, threshold_pct: float = 0.2
 ) -> List[Dict[str, Any]]:
-    """检测长生命周期 block（alloc 事件在时间线前 threshold_pct 的 block）"""
+    """检测长生命周期 block（其所属 segment 的创建事件在时间线前 threshold_pct）"""
     conn = _connect(db_path)
     total_traces = get_trace_count(db_path, device_index)
     threshold_index = int(total_traces * threshold_pct)
@@ -349,12 +350,19 @@ def get_long_lived_blocks(
         JOIN segments s ON b.segment_id = s.id
         JOIN devices d ON s.device_id = d.id
         LEFT JOIN call_stacks cs ON b.stack_id = cs.id
+        JOIN (
+            SELECT addr, MIN(trace_index) AS min_trace_index
+            FROM traces
+            WHERE action IN ('segment_alloc', 'segment_map')
+            GROUP BY addr
+        ) seg_trace ON s.address = seg_trace.addr
         WHERE b.state = 'active_allocated'
+          AND seg_trace.min_trace_index < ?
     """
-    params: tuple = ()
+    params: tuple = (threshold_index,)
     if device_index is not None:
         query += " AND d.device_index = ?"
-        params = (device_index,)
+        params = params + (device_index,)
     query += " ORDER BY b.size DESC"
 
     rows = conn.execute(query, params).fetchall()
@@ -371,16 +379,26 @@ def get_stack_attribution(db_path: str, device_index: Optional[int] = None) -> L
             cs.frames_json,
             SUM(b.size) AS total_size,
             COUNT(b.id) AS block_count,
-            ROUND(SUM(b.size) * 100.0 / (SELECT SUM(size) FROM blocks), 2) AS pct
+            ROUND(SUM(b.size) * 100.0 / (
+                SELECT SUM(b2.size) FROM blocks b2
+                JOIN segments s2 ON b2.segment_id = s2.id
+                JOIN devices d2 ON s2.device_id = d2.id
+                WHERE 1=1
+    """
+    params: tuple = ()
+    if device_index is not None:
+        query += " AND d2.device_index = ?"
+        params = (device_index,)
+    query += """
+            ), 2) AS pct
         FROM blocks b
         JOIN segments s ON b.segment_id = s.id
         JOIN devices d ON s.device_id = d.id
         LEFT JOIN call_stacks cs ON b.stack_id = cs.id
     """
-    params: tuple = ()
     if device_index is not None:
         query += " WHERE d.device_index = ?"
-        params = (device_index,)
+        params = params + (device_index,)
     query += " GROUP BY cs.id ORDER BY total_size DESC LIMIT 10"
 
     rows = conn.execute(query, params).fetchall()
@@ -452,6 +470,9 @@ def get_top_blocks_with_stack(
 
 def execute_sql(db_path: str, sql: str, params: Optional[tuple] = None) -> List[Dict[str, Any]]:
     """执行只读 SQL 查询（供 Agent 直接调用）"""
+    sql_stripped = sql.strip().upper()
+    if not (sql_stripped.startswith("SELECT") or sql_stripped.startswith("WITH") or sql_stripped.startswith("EXPLAIN")):
+        raise ValueError("仅允许 SELECT / WITH / EXPLAIN 查询，拒绝: " + sql[:80])
     conn = _connect(db_path)
     rows = conn.execute(sql, params or ()).fetchall()
     conn.close()

@@ -22,6 +22,7 @@ Ascend NPU Memory Snapshot 高层分析工具
 """
 
 import argparse
+import html
 import json
 import os
 import sys
@@ -130,16 +131,22 @@ def analyze_peak(db_path: str, device_index: Optional[int] = None) -> Dict[str, 
     if not timeline:
         return {"mode": "peak", "error": "无时序数据"}
 
+    per_device = {}
+    current_dev = None
     reserved = 0
-    peak_reserved = 0
-    peak_index = 0
-    peak_allocated = 0
-
-    first_event = timeline[0]
-    baseline_reserved = 0
-    baseline_index = first_event.get("trace_index", 0)
+    device_start_idx = {}
 
     for i, event in enumerate(timeline):
+        dev = event.get("device_index", 0)
+        if current_dev is None:
+            current_dev = dev
+        if dev != current_dev:
+            current_dev = dev
+            reserved = 0
+
+        if dev not in device_start_idx:
+            device_start_idx[dev] = i
+
         action = event["action"]
         size = event.get("size", 0)
 
@@ -148,12 +155,26 @@ def analyze_peak(db_path: str, device_index: Optional[int] = None) -> Dict[str, 
         elif action in ("segment_free", "segment_unmap"):
             reserved -= size
 
-        if reserved > peak_reserved:
-            peak_reserved = reserved
-            peak_allocated = reserved
-            peak_index = i
+        if dev not in per_device:
+            per_device[dev] = {
+                "peak_reserved": 0,
+                "peak_index": i,
+                "peak_event": event,
+                "baseline_reserved": 0,
+                "baseline_index": 0,
+            }
+        pd = per_device[dev]
 
-    peak_event = timeline[peak_index] if peak_index < len(timeline) else {}
+        if reserved > pd["peak_reserved"]:
+            pd["peak_reserved"] = reserved
+            pd["peak_index"] = i
+            pd["peak_event"] = event
+
+    for dev, pd in per_device.items():
+        dev_timeline = [e for e in timeline if e.get("device_index", 0) == dev]
+        cutoff = max(1, len(dev_timeline) // 10)
+        if cutoff < len(dev_timeline):
+            pd["baseline_index"] = dev_timeline[cutoff].get("trace_index", 0)
 
     alloc_events = q.get_peak_alloc_events(db_path, device_index, limit=10)
     peak_contributors = []
@@ -180,29 +201,52 @@ def analyze_peak(db_path: str, device_index: Optional[int] = None) -> Dict[str, 
             "call_path": _format_frames(blk.get("frames_json")),
         })
 
+    devices = []
+    for dev, pd in sorted(per_device.items()):
+        peak_r = pd["peak_reserved"]
+        base_r = pd["baseline_reserved"]
+        devices.append({
+            "device_index": dev,
+            "peak_trace_index": pd["peak_event"].get("trace_index"),
+            "peak": {
+                "reserved": peak_r,
+                "reserved_fmt": _format_bytes(peak_r),
+            },
+            "baseline": {
+                "description": "基线 (该设备时间线前 10% 位置)",
+                "trace_index": pd["baseline_index"],
+                "reserved": base_r,
+                "reserved_fmt": _format_bytes(base_r),
+            },
+            "deltas": {
+                "description": "该设备从基线到峰值的增长量",
+                "reserved": peak_r - base_r,
+                "reserved_fmt": _format_bytes(peak_r - base_r),
+                "reserved_pct": round((peak_r - base_r) / base_r * 100, 1) if base_r > 0 else None,
+            },
+        })
+
+    overall_peak = max(pd["peak_reserved"] for pd in per_device.values())
+    overall_baseline = sum(pd["baseline_reserved"] for pd in per_device.values())
+
     return {
         "mode": "peak",
         "device": device_index,
-        "peak_trace_index": peak_event.get("trace_index"),
+        "devices": devices,
         "peak": {
-            "reserved": peak_reserved,
-            "reserved_fmt": _format_bytes(peak_reserved),
-            "allocated": peak_allocated,
-            "allocated_fmt": _format_bytes(peak_allocated),
+            "reserved": overall_peak,
+            "reserved_fmt": _format_bytes(overall_peak),
         },
         "baseline": {
-            "description": "初始状态 (时间线首个 trace 事件)",
-            "trace_index": baseline_index,
-            "reserved": baseline_reserved,
-            "reserved_fmt": _format_bytes(baseline_reserved),
+            "description": "基线 (各设备时间线前 10% 位置)",
+            "reserved": overall_baseline,
+            "reserved_fmt": _format_bytes(overall_baseline),
         },
         "deltas": {
-            "description": "从初始状态到峰值的增长量",
-            "reserved": peak_reserved - baseline_reserved,
-            "reserved_fmt": _format_bytes(peak_reserved - baseline_reserved),
-            "reserved_pct": round((peak_reserved - baseline_reserved) / baseline_reserved * 100, 1) if baseline_reserved > 0 else float('inf'),
-            "allocated": peak_allocated - baseline_reserved,
-            "allocated_fmt": _format_bytes(peak_allocated - baseline_reserved),
+            "description": "从基线到峰值的增长量",
+            "reserved": overall_peak - overall_baseline,
+            "reserved_fmt": _format_bytes(overall_peak - overall_baseline),
+            "reserved_pct": round((overall_peak - overall_baseline) / overall_baseline * 100, 1) if overall_baseline > 0 else None,
         },
         "peak_alloc_events": {
             "description": "峰值归因: 最大的 segment_alloc / segment_map 事件 (按 size 降序)，这些操作的代码路径是峰值的主要贡献者",
@@ -315,7 +359,7 @@ def analyze_oom(db_path: str, device_index: Optional[int] = None) -> Dict[str, A
 
         pre_allocs = [e for e in pre_events if e["action"] == "alloc"]
         pre_allocs.sort(key=lambda x: x.get("size", 0), reverse=True)
-        last_5 = pre_allocs[-5:] if len(pre_allocs) >= 5 else pre_allocs
+        last_5 = pre_allocs[:5] if len(pre_allocs) >= 5 else pre_allocs
 
         last_5_total = sum(e.get("size", 0) for e in last_5)
 
@@ -501,6 +545,15 @@ def generate_html_report(results: Dict[str, Any], db_path: str, output_path: str
     oom = results.get("oom", {})
     compare = results.get("compare", {})
 
+    _script_dir = os.path.dirname(os.path.abspath(__file__))
+    _echarts_path = os.path.join(_script_dir, "echarts.min.js")
+    if os.path.exists(_echarts_path):
+        with open(_echarts_path, "r", encoding="utf-8") as _f:
+            _echarts_js = _f.read()
+        _echarts_tag = f"<script>{_echarts_js}</script>"
+    else:
+        _echarts_tag = '<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>'
+
     devices_json = json.dumps(devices, ensure_ascii=False, default=str)
     peak_json = json.dumps(peak, ensure_ascii=False, default=str)
     fragment_json = json.dumps(fragment, ensure_ascii=False, default=str)
@@ -508,13 +561,13 @@ def generate_html_report(results: Dict[str, Any], db_path: str, output_path: str
     oom_json = json.dumps(oom, ensure_ascii=False, default=str)
     compare_json = json.dumps(compare, ensure_ascii=False, default=str)
 
-    html = f"""<!DOCTYPE html>
+    html_template = f"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Ascend NPU Memory Snapshot 分析报告</title>
-<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+{_echarts_tag}
 <style>
 * {{ margin: 0; padding: 0; box-sizing: border-box; }}
 body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f7fa; color: #333; }}
@@ -568,7 +621,7 @@ tr:hover {{ background: #f8f9fa; }}
 
 <div class="header" id="overview">
     <h1>Ascend NPU Memory Snapshot 分析报告</h1>
-    <div class="meta">文件: {os.path.basename(db_path)} | 分析时间: <span id="analysis-time"></span></div>
+    <div class="meta">文件: {html.escape(os.path.basename(db_path))} | 分析时间: <span id="analysis-time"></span></div>
     <div class="health-card health-{health.get('level', 'warn').lower().replace('需关注', 'warn').replace('严重', 'err').replace('健康', 'ok')}">
         {health.get('icon', '?')} 健康状态: {health.get('text', '未知')}
     </div>
@@ -651,17 +704,21 @@ var compareData = {compare_json};
 }})();
 
 (function() {{
+    var peakDevices = peakData.devices || [];
+    var devNames = peakDevices.map(function(d) {{ return 'Device ' + d.device_index; }});
+    var peakReserved = peakDevices.map(function(d) {{ return (d.peak?.reserved || 0) / (1024*1024*1024); }});
+    var baseReserved = peakDevices.map(function(d) {{ return (d.baseline?.reserved || 0) / (1024*1024*1024); }});
+
     var chart = echarts.init(document.getElementById('chart-peak'));
     chart.setOption({{
-        title: {{ text: '内存时序曲线 (峰值分析)', subtext: '峰值时刻 trace_index = ' + (peakData.peak_trace_index || 'N/A') + ' | 基线: ' + (peakData.baseline?.description || '初始状态') }},
+        title: {{ text: '内存峰值分析 (按设备)', subtext: '基线: 各设备时间线前 10% 位置' }},
         tooltip: {{ trigger: 'axis' }},
-        xAxis: {{ type: 'category', data: ['基线 (初始)', '峰值'] }},
+        legend: {{ data: ['峰值 Reserved', '基线 Reserved'] }},
+        xAxis: {{ type: 'category', data: devNames }},
         yAxis: {{ type: 'value', name: 'GB' }},
         series: [
-            {{ name: 'Reserved', type: 'line', data: [
-                (peakData.baseline?.reserved || 0) / (1024*1024*1024),
-                (peakData.peak?.reserved || 0) / (1024*1024*1024)
-            ], markLine: {{ data: [{{ type: 'average', name: '峰值' }}] }} }}
+            {{ name: '峰值 Reserved', type: 'bar', data: peakReserved, itemStyle: {{ color: '#c62828' }} }},
+            {{ name: '基线 Reserved', type: 'bar', data: baseReserved, itemStyle: {{ color: '#5470c6' }} }}
         ]
     }});
 }})();
@@ -669,14 +726,25 @@ var compareData = {compare_json};
 (function() {{
     var peakHtml = '';
     var deltas = peakData.deltas || {{}};
-    peakHtml += '<div class="insight" style="margin-bottom:16px"><strong>' + (deltas.description || '增幅') + '</strong>: ';
-    peakHtml += 'Reserved 从 ' + (peakData.baseline?.reserved_fmt || 'N/A') + ' 增长到 ' + (peakData.peak?.reserved_fmt || 'N/A');
-    peakHtml += ' (<span style="color:#c62828;font-weight:700">+' + (deltas.reserved_fmt || 'N/A') + ', +' + (deltas.reserved_pct || 'N/A') + '%</span>)</div>';
+    peakHtml += '<div class="insight" style="margin-bottom:16px"><strong>总体增幅</strong>: ';
+    peakHtml += '全局峰值 ' + (peakData.peak?.reserved_fmt || 'N/A') + ' ';
+    peakHtml += '(<span style="color:#c62828;font-weight:700">+' + (deltas.reserved_fmt || 'N/A') + (deltas.reserved_pct != null ? ', +' + deltas.reserved_pct + '%' : '') + '</span>)</div>';
+
+    var peakDevices = peakData.devices || [];
+    if (peakDevices.length > 0) {{
+        peakHtml += '<h3>各设备峰值详情</h3>';
+        peakHtml += '<table><tr><th>设备</th><th>峰值 Reserved</th><th>基线 Reserved</th><th>增幅</th><th>峰值 trace_index</th></tr>';
+        peakDevices.forEach(function(d) {{
+            var deltas = d.deltas || {{}};
+            peakHtml += '<tr><td>Device ' + d.device_index + '</td><td style="font-weight:600">' + (d.peak?.reserved_fmt || 'N/A') + '</td><td>' + (d.baseline?.reserved_fmt || 'N/A') + '</td><td style="color:#c62828;font-weight:600">+' + (deltas.reserved_fmt || 'N/A') + (deltas.reserved_pct != null ? ' (+' + deltas.reserved_pct + '%)' : '') + '</td><td>' + (d.peak_trace_index || 'N/A') + '</td></tr>';
+        }});
+        peakHtml += '</table>';
+    }}
 
     if (peakData.peak_alloc_events && peakData.peak_alloc_events.top && peakData.peak_alloc_events.top.length > 0) {{
         peakHtml += '<h3 style="margin-top:16px">峰值归因: 最大的 Segment 分配操作 (segment_alloc / segment_map)</h3>';
         peakHtml += '<p style="color:#888;font-size:13px;margin-bottom:8px">以下操作分配了最大的 segment，是峰值内存的主要贡献者。调用路径指向触发这些分配的代码。</p>';
-        peakHtml += '<table><tr><th>#</th><th>大小</th><th>操作</th><th>地址</th><th>调用路径 (最后3帧)</th></tr>';
+        peakHtml += '<table><tr><th>#</th><th>大小</th><th>操作</th><th>地址</th><th>调用路径</th></tr>';
         peakData.peak_alloc_events.top.forEach(function(evt, i) {{
             peakHtml += '<tr><td>' + (i+1) + '</td><td style="font-weight:600">' + (evt.size_fmt || 'N/A') + '</td><td>' + (evt.action || '') + '</td><td style="font-family:monospace;font-size:12px">' + (evt.addr || 'N/A') + '</td><td style="font-size:12px;color:#555;max-width:400px;word-break:break-all">' + (evt.call_path || '') + '</td></tr>';
         }});
@@ -686,7 +754,7 @@ var compareData = {compare_json};
     if (peakData.peak_blocks && peakData.peak_blocks.top && peakData.peak_blocks.top.length > 0) {{
         peakHtml += '<h3 style="margin-top:16px">峰值归因: 最大的活跃 Block (active_allocated)</h3>';
         peakHtml += '<p style="color:#888;font-size:13px;margin-bottom:8px">以下 block 是峰值时刻占用内存最大的 tensor 分配。调用路径指向创建这些 tensor 的代码。</p>';
-        peakHtml += '<table><tr><th>#</th><th>大小</th><th>请求大小</th><th>调用路径 (最后3帧)</th></tr>';
+        peakHtml += '<table><tr><th>#</th><th>大小</th><th>请求大小</th><th>调用路径</th></tr>';
         peakData.peak_blocks.top.forEach(function(blk, i) {{
             peakHtml += '<tr><td>' + (i+1) + '</td><td style="font-weight:600">' + (blk.size_fmt || 'N/A') + '</td><td>' + (blk.requested_fmt || 'N/A') + '</td><td style="font-size:12px;color:#555;max-width:400px;word-break:break-all">' + (blk.call_path || '') + '</td></tr>';
         }});
@@ -811,7 +879,7 @@ var compareData = {compare_json};
 </html>"""
 
     with open(output_path, "w", encoding="utf-8") as f:
-        f.write(html)
+        f.write(html_template)
 
     return output_path
 

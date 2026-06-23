@@ -209,6 +209,8 @@ class TestAnalyzePeak(unittest.TestCase):
         self.assertIn("deltas", result)
         self.assertIn("peak_alloc_events", result)
         self.assertIn("peak_blocks", result)
+        self.assertIn("devices", result)
+        self.assertGreaterEqual(len(result["devices"]), 1)
 
     def test_peak_timeline(self):
         result = analyze_peak(self.db_path)
@@ -266,7 +268,8 @@ class TestAnalyzeLeak(unittest.TestCase):
         )
         for i in range(10):
             conn.execute(
-                "INSERT INTO traces (device_id, trace_index, action, size) VALUES (1, ?, 'segment_alloc', 1024)", (i,)
+                "INSERT INTO traces (device_id, trace_index, action, size, addr) VALUES (1, ?, 'segment_alloc', 1024, 0x1000)",
+                (i,),
             )
         conn.commit()
         conn.close()

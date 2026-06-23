@@ -34,11 +34,13 @@ class BuildManager:
     用法:
         python build.py                             完整构建
         python build.py --version/-v <version>      指定构建版本号
+        python build.py --extra/-e KEY=VALUE        指定额外构建选项，可多次使用
         python build.py test                        单元测试（待补）
 
     参数说明:
         - 参数: command    : 构建动作: 为空时为全构建, test 为运行单元测试。
         - 参数: --version  : 构建版本号，不传时默认 1.0.0。
+        - 参数: --extra    : 额外构建选项，格式为 KEY=VALUE，可多次指定。
     """
 
     def __init__(self):
@@ -57,11 +59,26 @@ class BuildManager:
             default='1.0.0',
             help='Build version (default: 1.0.0)',
         )
+        ap.add_argument(
+            '-e',
+            '--extra',
+            metavar='KEY=VALUE',
+            action='append',
+            default=[],
+            help='Extra build options in KEY=VALUE format, can be specified multiple times',
+        )
         self.args = ap.parse_args()
 
     def _execute_command(self, cmd, timeout_seconds=36000, cwd=None, env=None):
         logging.info("Running: %s", " ".join(cmd))
         subprocess.run(cmd, timeout=timeout_seconds, check=True, cwd=cwd, env=env)
+
+    def _get_extra_options(self):
+        opts = {}
+        for opt in self.args.extra:
+            key, _, val = opt.partition('=')
+            opts[key] = val
+        return opts
 
     def _archive_artifacts(self, src_dir, pattern):
         artifacts_dir = self.project_root / "artifacts"
@@ -91,6 +108,9 @@ class BuildManager:
         else:
             # -------------------- 产品构建 --------------------
             logging.info("WHL_VERSION: %s", self.args.version)
+            extra_options = self._get_extra_options()
+            for key, val in extra_options.items():
+                logging.info("--extra: %s = %s", key, val)
             self._build_whl()
 
 

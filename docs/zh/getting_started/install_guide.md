@@ -48,8 +48,6 @@
 
 源码安装支持脚本构建安装和手动构建安装方式。脚本构建安装为工具提供的源码构建脚本可一键执行生成安装包；手动构建安装则需要安装uv依赖，通过命令行构建。
 
-#### 3.3.1 方式一：脚本构建安装
-
 1. 克隆本仓库。
 
    ```shell
@@ -83,31 +81,6 @@
    Successfully installed mindstudio-agent-{version}
    ```
 
-#### 3.3.2 方式二：手动构建安装
-
-1. 克隆本仓库。
-
-   ```shell
-   git clone https://gitcode.com/Ascend/msagent.git
-   ```
-
-2. 安装依赖。
-
-   ```shell
-   pip install uv
-   ```
-
-3. 执行编译打包。
-
-   ```shell
-   cd msagent
-   test -d skills
-   uv lock --check
-   uv build --wheel --out-dir dist .
-   ```
-
-   编译完成后在`dist`目录下生成whl包，名称格式为`mindstudio_agent-{version}-py3-none-any`。其中`version`为版本号。
-
 4. 安装whl包
 
    ```shell
@@ -119,3 +92,26 @@
    ```ColdFusion
    Successfully installed mindstudio-agent-{version}
    ```
+
+## 4. 升级与卸载
+
+`msagent` 会在当前工作目录下生成 `.msagent/` 本地目录，用于保存缓存、会话历史、日志和运行时配置等内容。
+
+- 升级前，先删除当前工作目录下的 `.msagent/` 文件夹，避免旧缓存影响新版本行为。
+- 卸载时，如果后续不再使用 `msagent`，也建议一并删除 `.msagent/` 文件夹。
+
+常见操作示例：
+
+- 升级：
+
+```shell
+rm -rf .msagent
+pip install mindstudio-agent
+```
+
+- 卸载：
+
+```shell
+rm -rf .msagent
+pip uninstall mindstudio-agent
+```

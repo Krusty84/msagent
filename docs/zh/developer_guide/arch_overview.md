@@ -7,6 +7,7 @@
 ## 1.2 动机
 
 随着 Ascend NPU 生态的发展，开发者在调试和优化模型时面临诸多挑战：
+
 - 性能问题定位复杂，需要专业的 profiling 分析能力
 - 精度问题排查困难，缺乏智能化的分析工具
 - 模型量化流程繁琐，需要专业知识辅助
@@ -17,12 +18,14 @@ MindStudio-Agent 旨在通过智能化 Agent 降低这些工作的复杂度，�
 ## 1.3 目标
 
 **目标：**
+
 - 提供统一的 Agent 框架，支持多个专业化 Agent 的开发和管理
 - 支持灵活的 LLM 提供商接入（OpenAI、Anthropic、Google 等）
 - 提供可扩展的工具和技能系统
 - 实现会话记忆和上下文管理
 
 **非目标：**
+
 - 本文档不涉及具体 Skill 的实现细节
 - 不涉及特定 Agent（如 Profiler、Accuracy）的逻辑
 - 不涉及底层硬件加速细节
@@ -91,12 +94,14 @@ MindStudio-Agent 采用模块化架构设计，基于 deepagents 运行时构建
 ### 3.1.2 核心模块说明
 
 #### 1. Agents 模块
+
 - **职责**：
   - Agent 工厂类（AgentFactory）：负责创建和管理 Agent 实例
   - 上下文管理：处理 Agent 运行时的上下文信息
   - 状态管理：管理 Agent 的内部状态
 
 #### 2. Configs 模块
+
 - **职责**：
   - Agent 配置：定义 Agent 的配置结构（AgentConfig）
   - LLM 配置：定义 LLM 的配置结构（LLMConfig）
@@ -104,27 +109,32 @@ MindStudio-Agent 采用模块化架构设计，基于 deepagents 运行时构建
   - 注册中心：管理配置的注册和加载
 
 #### 3. Tools 模块
+
 - **职责**：
   - 工具工厂：创建和管理工具实例
   - 工具目录：提供工具的注册、发现和调用机制
   - 内置工具：提供一些通用工具（如 web_search）
 
 #### 4. LLMs 模块
+
 - **职责**：
   - LLM 工厂：创建和管理 LLM 实例
   - 支持多种 LLM 提供商：OpenAI、Anthropic、Google 等
 
 #### 5. MCP 模块
+
 - **职责**：
   - MCP 客户端：与 MCP 服务通信
   - MCP 工厂：创建和管理 MCP 客户端实例
 
 #### 6. Middlewares 模块
+
 - **职责**：
   - 提供中间件机制，支持在 Agent 执行流程中插入自定义逻辑
   - 内置中间件：如 ToolResultEvictionMiddleware 等
 
 #### 7. CLI 模块
+
 - **职责**：
   - 提供命令行交互界面
   - 处理用户输入和命令执行
@@ -193,16 +203,19 @@ sequenceDiagram
 ## 3.3 安全隐私与 DFX 设计
 
 ### 3.3.1 安全设计
+
 - 配置文件中的敏感信息（如 API Key）通过环境变量管理
 - 支持工具执行的审批机制（ApprovalConfig）
 - 提供沙箱环境（SandboxConfig）用于安全执行代码
 
 ### 3.3.2 可维护性设计
+
 - 模块化架构，职责分明
 - 清晰的目录结构
 - 完善的日志系统
 
 ### 3.3.3 可测试性设计
+
 - 提供 testing 模块支持测试
 - 支持单元测试、集成测试等
 
@@ -222,8 +235,10 @@ sequenceDiagram
 ### 3.4.2 接口定义与设计
 
 #### 3.4.2.1 AgentFactory.create_agent
+
 - **接口描述**：创建 Agent 实例
 - **接口原型**：
+
   ```python
   @staticmethod
   def create_agent(
@@ -235,6 +250,7 @@ sequenceDiagram
       additional_middlewares: list[AgentMiddleware] | None = None,
   ) -> CompiledStateGraph:
   ```
+
 - **输入/输出参数**：
   | 参数名称 | 输入/输出 | 类型 | 描述 |
   |---------|----------|------|------|
@@ -248,12 +264,14 @@ sequenceDiagram
 ### 3.4.3 使用说明
 
 1. **配置 LLM**：
+
    ```bash
    export OPENAI_API_KEY="your-key"
-   msagent config --llm-provider openai --llm-base-url "https://api.deepseek.com/v1" --llm-model "deepseek-chat"
+   msagent config --llm-provider openai --llm-base-url "https://api.deepseek.com" --llm-model "deepseek-chat"
    ```
 
 2. **启动 Agent**：
+
    ```bash
    msagent --agent Profiler
    ```

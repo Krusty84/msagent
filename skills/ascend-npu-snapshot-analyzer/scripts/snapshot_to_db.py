@@ -82,6 +82,7 @@ class _CallStackResolver:
         return None
 
     def flush_all(self):
+        """当前实现为即时写入 (resolve 内 INSERT OR IGNORE)，无需 flush，保留接口供未来扩展"""
         pass
 
 

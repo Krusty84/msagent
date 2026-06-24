@@ -53,7 +53,7 @@ def _health_status(frag_pct: float, segment_count: int, has_oom: bool) -> Dict[s
 
 def _metric_status(value: float, thresholds: tuple) -> str:
     low, high = thresholds
-    if value <= low:
+    if value < low:
         return "[OK]"
     elif value <= high:
         return "[WARN]"
@@ -120,9 +120,9 @@ def _format_frames(frames_json: Optional[str], max_frames: int = 5) -> str:
                 parts.append(str(f))
             if len(parts) >= max_frames:
                 break
-        return " → ".join(parts) if parts else "(无有效堆栈帧)"
+        return html.escape(" → ".join(parts) if parts else "(无有效堆栈帧)")
     except (json.JSONDecodeError, TypeError):
-        return str(frames_json)[:120]
+        return html.escape(str(frames_json)[:120])
 
 
 def analyze_peak(db_path: str, device_index: Optional[int] = None) -> Dict[str, Any]:
@@ -175,6 +175,16 @@ def analyze_peak(db_path: str, device_index: Optional[int] = None) -> Dict[str, 
         cutoff = max(1, len(dev_timeline) // 10)
         if cutoff < len(dev_timeline):
             pd["baseline_index"] = dev_timeline[cutoff].get("trace_index", 0)
+            baseline_r = 0
+            for j in range(cutoff + 1):
+                event = dev_timeline[j]
+                action = event["action"]
+                size = event.get("size", 0)
+                if action in ("segment_alloc", "segment_map"):
+                    baseline_r += size
+                elif action in ("segment_free", "segment_unmap"):
+                    baseline_r -= size
+            pd["baseline_reserved"] = baseline_r
 
     alloc_events = q.get_peak_alloc_events(db_path, device_index, limit=10)
     peak_contributors = []
@@ -226,7 +236,7 @@ def analyze_peak(db_path: str, device_index: Optional[int] = None) -> Dict[str, 
             },
         })
 
-    overall_peak = max(pd["peak_reserved"] for pd in per_device.values())
+    overall_peak = sum(pd["peak_reserved"] for pd in per_device.values())
     overall_baseline = sum(pd["baseline_reserved"] for pd in per_device.values())
 
     return {
@@ -473,47 +483,49 @@ def analyze_compare(db_path: str, ref_path: str) -> Dict[str, Any]:
     ]
 
     conn_a = q._connect(db_path)
-    conn_b = q._connect(ref_path)
+    try:
+        conn_b = q._connect(ref_path)
+        try:
+            a_addrs = set(r[0] for r in conn_a.execute("SELECT address FROM segments").fetchall())
+            b_addrs = set(r[0] for r in conn_b.execute("SELECT address FROM segments").fetchall())
+            new_addrs = b_addrs - a_addrs
 
-    a_addrs = set(r[0] for r in conn_a.execute("SELECT address FROM segments").fetchall())
-    b_addrs = set(r[0] for r in conn_b.execute("SELECT address FROM segments").fetchall())
-    new_addrs = b_addrs - a_addrs
+            new_segments = []
+            for addr in list(new_addrs)[:5]:
+                row = conn_b.execute(
+                    "SELECT address, total_size, cs.frames_json FROM segments s "
+                    "LEFT JOIN call_stacks cs ON s.stack_id = cs.id WHERE s.address = ?",
+                    (addr,),
+                ).fetchone()
+                if row:
+                    new_segments.append({
+                        "address": hex(row[0]),
+                        "size": row[1],
+                        "size_fmt": _format_bytes(row[1]),
+                        "frames": row[2],
+                    })
 
-    new_segments = []
-    for addr in list(new_addrs)[:5]:
-        row = conn_b.execute(
-            "SELECT address, total_size, cs.frames_json FROM segments s "
-            "LEFT JOIN call_stacks cs ON s.stack_id = cs.id WHERE s.address = ?",
-            (addr,),
-        ).fetchone()
-        if row:
-            new_segments.append({
-                "address": hex(row[0]),
-                "size": row[1],
-                "size_fmt": _format_bytes(row[1]),
-                "frames": row[2],
-            })
+            grown_segments = []
+            for addr in a_addrs & b_addrs:
+                a_row = conn_a.execute("SELECT total_size FROM segments WHERE address = ?", (addr,)).fetchone()
+                b_row = conn_b.execute("SELECT total_size FROM segments WHERE address = ?", (addr,)).fetchone()
+                if a_row and b_row and b_row[0] > a_row[0]:
+                    grown_segments.append({
+                        "address": hex(addr),
+                        "size_a": a_row[0],
+                        "size_a_fmt": _format_bytes(a_row[0]),
+                        "size_b": b_row[0],
+                        "size_b_fmt": _format_bytes(b_row[0]),
+                        "growth": b_row[0] - a_row[0],
+                        "growth_fmt": _format_bytes(b_row[0] - a_row[0]),
+                    })
 
-    grown_segments = []
-    for addr in a_addrs & b_addrs:
-        a_row = conn_a.execute("SELECT total_size FROM segments WHERE address = ?", (addr,)).fetchone()
-        b_row = conn_b.execute("SELECT total_size FROM segments WHERE address = ?", (addr,)).fetchone()
-        if a_row and b_row and b_row[0] > a_row[0]:
-            grown_segments.append({
-                "address": hex(addr),
-                "size_a": a_row[0],
-                "size_a_fmt": _format_bytes(a_row[0]),
-                "size_b": b_row[0],
-                "size_b_fmt": _format_bytes(b_row[0]),
-                "growth": b_row[0] - a_row[0],
-                "growth_fmt": _format_bytes(b_row[0] - a_row[0]),
-            })
-
-    grown_segments.sort(key=lambda x: x["growth"], reverse=True)
-    grown_segments = grown_segments[:3]
-
-    conn_a.close()
-    conn_b.close()
+            grown_segments.sort(key=lambda x: x["growth"], reverse=True)
+            grown_segments = grown_segments[:3]
+        finally:
+            conn_b.close()
+    finally:
+        conn_a.close()
 
     one_line = (
         f"Reserved {_trend(_diff(a_reserved, b_reserved))} "
@@ -554,12 +566,12 @@ def generate_html_report(results: Dict[str, Any], db_path: str, output_path: str
     else:
         _echarts_tag = '<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>'
 
-    devices_json = json.dumps(devices, ensure_ascii=False, default=str)
-    peak_json = json.dumps(peak, ensure_ascii=False, default=str)
-    fragment_json = json.dumps(fragment, ensure_ascii=False, default=str)
-    leak_json = json.dumps(leak, ensure_ascii=False, default=str)
-    oom_json = json.dumps(oom, ensure_ascii=False, default=str)
-    compare_json = json.dumps(compare, ensure_ascii=False, default=str)
+    devices_json = json.dumps(devices, ensure_ascii=False, default=str).replace("</", "<\\/")
+    peak_json = json.dumps(peak, ensure_ascii=False, default=str).replace("</", "<\\/")
+    fragment_json = json.dumps(fragment, ensure_ascii=False, default=str).replace("</", "<\\/")
+    leak_json = json.dumps(leak, ensure_ascii=False, default=str).replace("</", "<\\/")
+    oom_json = json.dumps(oom, ensure_ascii=False, default=str).replace("</", "<\\/")
+    compare_json = json.dumps(compare, ensure_ascii=False, default=str).replace("</", "<\\/")
 
     html_template = f"""<!DOCTYPE html>
 <html lang="zh-CN">

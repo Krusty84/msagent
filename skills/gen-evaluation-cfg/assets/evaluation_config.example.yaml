@@ -28,7 +28,7 @@ evaluation:
     request_rate: 1.0
     retry: 3
     batch_size: 4
-    max_out_len: 16384
+    max_out_len: 32768
     trust_remote_code: false
     pred_postprocessor: extract_non_reasoning_content
     generation_kwargs:
@@ -76,8 +76,8 @@ inference_engine:
     data-parallel-size: 1 # 固定为 1，与模型无关
     quantization: ascend  # 测评非量化的浮点权重时，此行改为 dtype: bfloat16
     enable-prefix-caching: false
-    max-model-len: 16384
-    max-num-batched-tokens: 16384
+    max-model-len: 33792
+    max-num-batched-tokens: 33792
     gpu-memory-utilization: 0.9
     enable-auto-tool-choice: true
     tool-call-parser: hermes

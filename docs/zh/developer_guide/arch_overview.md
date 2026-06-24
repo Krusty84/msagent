@@ -250,7 +250,7 @@ sequenceDiagram
 1. **配置 LLM**：
    ```bash
    export OPENAI_API_KEY="your-key"
-   msagent config --llm-provider openai --llm-base-url "https://api.deepseek.com/v1" --llm-model "deepseek-chat"
+   msagent config --llm-provider openai --llm-base-url "https://api.deepseek.com" --llm-model "deepseek-chat"
    ```
 
 2. **启动 Agent**：

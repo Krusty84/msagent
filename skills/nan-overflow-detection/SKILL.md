@@ -110,7 +110,6 @@ python3 "<skill_root>/scripts/cross_rank_analyzer.py" <input_path> [output_path]
 5. 利用 stack.json 获取代码位置
 6. 如果找到的第一个可能异常节点，被排除异常可能，则继续找后续可能是异常的节点，重复进行定位
 
-
 ### 异常节点判定逻辑
 
 ```python

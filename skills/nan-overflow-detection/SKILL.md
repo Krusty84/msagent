@@ -118,7 +118,7 @@ def is_anomaly(op_data):
     # 输入有异常或者输出有异常
     is_input_anomaly = check_anomaly(input_args)
     is_output_anomaly = check_anomaly(outputs)
-    return  is_input_anomaly or is_output_anomaly
+    return is_input_anomaly or is_output_anomaly
 ```
 
 ## 输出

@@ -1,5 +1,5 @@
 ---
-name: ascend_pytorch_profiler_db_explorer
+name: ascend-profiler-db-explorer
 description: 面向 Ascend PyTorch Profiler / msprof DB（如 ascend_pytorch_profiler*.db、msprof_*.db）的 SQL 分析技能。将自然语言问题（算子耗时、通信、下发、调度、schema/table 查询）转为安全可执行 SQL，并按需从官方文档提取表结构详情。
 keywords: [db, sqlite, sql, table, schema, ascend-pytorch-profiler-db, ascend_pytorch_profiler, 算子耗时, 通信耗时, 下发分析, 调度分析]
 ---
@@ -36,7 +36,7 @@ keywords: [db, sqlite, sql, table, schema, ascend-pytorch-profiler-db, ascend_py
 
 当用户问题包含以下词或近义表达时，优先触发本技能：
 
-- `ascend-pytorch-profiler-db` / `ascend_pytorch_profiler*.db` / `msprof_*.db`
+- `ascend-profiler-db-explorer` / `ascend-pytorch-profiler-db` / `ascend_pytorch_profiler*.db` / `msprof_*.db`
 - `sqlite` / `table` / `schema` / `字段`
 - `TopK 算子` / `通信耗时` / `下发分析` / `调度瓶颈`
 

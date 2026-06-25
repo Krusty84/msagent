@@ -704,7 +704,7 @@ tools:
 
 skills:
   patterns:
-    - default:ascend_pytorch_profiler_db_explorer
+    - default:ascend-profiler-db-explorer
     - "!default:op-mfu-calculator"
 ```
 

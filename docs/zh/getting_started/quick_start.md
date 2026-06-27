@@ -105,9 +105,11 @@ Skill 是面向特定场景的专项能力模块（如性能分析、模型量�
 | `/tool-output` 或 `Ctrl+O` | 打开全屏工具输出查看器。 |
 | 左右方向键 | 切换多个工具输出。 |
 | 上下方向键、`PageUp`/`PageDown` | 滚动内容。 |
-| `Enter` / `Ctrl+O` / 鼠标点击 | 展开或折叠完整输出。 |
+| `Enter` / `Ctrl+O` / 鼠标点击 | 展开或折叠完整输出。 | 
 | `Esc` | 关闭查看器。 |
 
 ![tool_output](../figures/tool_output.png)
+
+> **💡 提示：** Skill 完成数据分析后，可通过手动追加 Prompt（如"请根据上述分析结果，输出一份完整的 Markdown 分析报告"）要求 Agent 整理输出完整报告。
 
 更完整的命令和快捷键说明请参见《[msAgent使用指南](../user_guide/usemap.md)》。

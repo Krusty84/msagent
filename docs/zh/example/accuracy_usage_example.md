@@ -64,7 +64,7 @@ Agent：更新结果。
 
 人：输入“训练侧的父模块Module._fsdp_wrapped_module.model.layers.23._fsdp_wrapped_module.Qwen2DecoderLayer.forward.0和父模块中最后一个子模块Module._fsdp_wrapped_module.model.layers.23._fsdp_wrapped_module.mlp.Qwen2MLP.forward.0的输出不一致，而推理侧Module.model.layers.23.Qwen2DecoderLayer.forward.0和Module.model.layers.23.mlp.Qwen2MLP.forward.0的output是一致的，这个是为什么？实际上训练侧和推理侧的Layer23的子模块的output是一致的”
 
-Agent：给出分析
+Agent：
 
 ---
 
@@ -99,7 +99,7 @@ Agent：给出分析
 
 ---
 
-**训练侧的Layer是单输入单输出（直接输出hidden_states），而推理侧的为多输入多输出。具体的，推理侧的input0是位置编码，input1和input2是上一层的residual和mlp.output，输出则是residual和mlp.output。**这就解释了：
+**训练侧的Layer是单输入单输出（直接输出hidden_states），而推理侧的为多输入多输出。具体的，推理侧的input0是位置编码，input1和input2是上一层的residual和mlp.output，输出则是residual和mlp.output。** 这就解释了：
 
 1、训推子模块能对上，因为都是mlp.output；
 

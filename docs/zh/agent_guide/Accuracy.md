@@ -33,4 +33,4 @@
 - 可提出疑问或指出错误，修正Agent的错误观点
 - 可提出分析方向、关键点，指导Agent沿相关线索进一步分析
 
-分析示例可参考 [`accuracy_usage_example.md`](../user_guide/document-ux-review.md)。
+分析示例可参考 [`accuracy_usage_example.md`](../example/accuracy_usage_example.md)。

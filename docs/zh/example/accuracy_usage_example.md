@@ -1,3 +1,5 @@
+# Accuracy 使用示例
+
 ## 1、获取分析报告
 dump了某模型训练和推理的数据，接下来用msAgent进行分析。
 
@@ -24,10 +26,12 @@ Agent：更新结果。
 <img src="../figures/accuracy_usage_example_2.png" width="1577" title="" crop="0,0,1,1" id="ueffb9a2d" class="ne-image">
 
 ## 2、查看分析报告中的分析逻辑和依据
+
 ### 2.1 Agent分析报告内容(部分)
 ---
 
 #### 数值验证
+
 使用正确输出索引(output.1)对比结果:
 
 | Layer | 训练端 Norm | 推理端 output.1 | 差异 | 状态 |
@@ -39,14 +43,16 @@ Agent：更新结果。
 | 20 | 1767.31 | 1760.00 | 0.41% | ✓ 对齐 |
 | 23 | 538.36 | 684.00 | 27.05% | ✗ 异常 |
 
-
 #### 首尾层异常分析
+
 + Layer 0: 推理端 output.0=55.0 接近训练端 55.09，但 output.1=5.12 异常低
+
 + Layer 23: 推理端 output.1=684 与训练端 538.36 差异 27%
 
 ---
 
 ### 2.2 人工检查
+
 从数值验证看，Layer 1、23有较大问题。
 
 使用msprobe的分级可视化工具进行人工查看后发现
@@ -60,6 +66,7 @@ Agent：更新结果。
 **故人工复核的结论是：训推结果基本一致。**
 
 ## 3、进一步研讨，搞清楚原理，和Agent结果对齐
+
 将上述的人工复核结论反馈给Agent，进行进一步研讨，搞清楚现象的原因
 
 人：输入“训练侧的父模块Module._fsdp_wrapped_module.model.layers.23._fsdp_wrapped_module.Qwen2DecoderLayer.forward.0和父模块中最后一个子模块Module._fsdp_wrapped_module.model.layers.23._fsdp_wrapped_module.mlp.Qwen2MLP.forward.0的输出不一致，而推理侧Module.model.layers.23.Qwen2DecoderLayer.forward.0和Module.model.layers.23.mlp.Qwen2MLP.forward.0的output是一致的，这个是为什么？实际上训练侧和推理侧的Layer23的子模块的output是一致的”
@@ -113,13 +120,8 @@ Agent：
 
 好，这下对齐了。
 
-## 4、总结：
+## 4、总结
+
 1、在这个案例中，Qwen2模型的训推实现有明显区别（子模块、算子存在融合），但整体模块结构可以大致对上，在提供construct信息后，Agent可以大致对齐层。
 
 2、但训推的层的输入输出数量、走向也存在明显区别，此时Agent做了基本情况的遍历验证，但对于特殊情况应对不足（Layer1/23的输出方式），在进行人工引导后Agent判断正确。
-
-
-
-
-
-

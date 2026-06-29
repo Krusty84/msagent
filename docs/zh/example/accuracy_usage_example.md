@@ -62,9 +62,7 @@ Agent：更新结果。
 ## 3、进一步研讨，搞清楚原理，和Agent结果对齐
 将上述的人工复核结论反馈给Agent，进行进一步研讨，搞清楚现象的原因
 
-人：输入“训练侧的父模块Module._fsdp_wrapped_module.model.layers.23._fsdp_wrapped_module.Qwen2DecoderLayer.forward.0和父模块中最后一个子模块Module._fsdp_wrapped_module.model.layers.23._fsdp_wrapped_module.mlp.Qwen2MLP.forward.0的输出不一致，而推理侧Module.model.layers.
-
-           23.Qwen2DecoderLayer.forward.0和Module.model.layers.23.mlp.Qwen2MLP.forward.0的output是一致的，这个是为什么？实际上训练侧和推理侧的Layer23的子模块的output是一致的”
+人：输入“训练侧的父模块Module._fsdp_wrapped_module.model.layers.23._fsdp_wrapped_module.Qwen2DecoderLayer.forward.0和父模块中最后一个子模块Module._fsdp_wrapped_module.model.layers.23._fsdp_wrapped_module.mlp.Qwen2MLP.forward.0的输出不一致，而推理侧Module.model.layers.23.Qwen2DecoderLayer.forward.0和Module.model.layers.23.mlp.Qwen2MLP.forward.0的output是一致的，这个是为什么？实际上训练侧和推理侧的Layer23的子模块的output是一致的”
 
 Agent：给出分析
 

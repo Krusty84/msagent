@@ -186,11 +186,25 @@ def detect_terminal_theme() -> str:
     Tries multiple detection methods in order:
     1. OSC 11 terminal query (most accurate)
     2. COLORFGBG environment variable
-    3. OS-level dark mode (macOS/Linux)
+    3. OS-level dark mode (macOS/Linux) — only trusted if OSC 11 succeeded,
+       because gsettings reflects the desktop theme, not the actual terminal
+       (common mismatch when connecting via SSH).
     4. Default to 'dark'
 
     Returns:
         'dark' or 'light'
     """
-    result = _detect_via_osc11() or _detect_via_colorfgbg() or _detect_via_os()
-    return result or "dark"
+    osc_result = _detect_via_osc11()
+    if osc_result is not None:
+        return osc_result
+
+    colorfgbg_result = _detect_via_colorfgbg()
+    if colorfgbg_result is not None:
+        return colorfgbg_result
+
+    # OSC 11 failed (likely SSH), only trust OS setting for 'dark'
+    os_result = _detect_via_os()
+    if os_result == "dark":
+        return "dark"
+
+    return "dark"

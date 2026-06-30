@@ -55,6 +55,7 @@ pip install mindstudio-agent
   | [Profiler](../agent_guide/Profiler.md) | 性能调优 | `msagent --agent Profiler` |
   | [Accuracy](../agent_guide/Accuracy.md) | 精度调试 | `msagent --agent Accuracy` |
   | [Quantizer](../agent_guide/Quantizer.md) | 模型量化 | `msagent --agent Quantizer` |
+  | [Modeling](../agent_guide/Modeling.md) | 仿真建模与自动寻优 | `msagent --agent Modeling` |
   | [Operator](../agent_guide/Operator.md) | 算子调优 | `msagent --agent Operator` |
   | [Minos](../agent_guide/Minos.md) | 文档辅助 | `msagent --agent Minos` |
 

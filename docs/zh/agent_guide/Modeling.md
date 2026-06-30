@@ -1,8 +1,8 @@
 # Modeling 仿真建模
 
-`Modeling` 是面向 `msmodeling` 场景的领域 Agent，负责承接大模型（LLM/VLM）仿真建模相关的环境初始化、性能建模、单点仿真、吞吐规划和设备画像类问题。
+`Modeling` 是面向 `msmodeling` 场景的领域 Agent，负责承接大模型（LLM/VLM）仿真建模相关的环境初始化、性能建模、单点仿真、吞吐规划、设备画像以及服务化自动寻优类问题。
 
-> 当前版本已经接入首批 `msmodeling` 专项 skills，可在统一入口下承接参数补齐、命令规划、设备建模引导与执行前确认；涉及真实性能结果时，仍应以实际运行输出为准。
+> 当前版本已经接入 `msmodeling` 专项 skills（含服务化自动寻优链路），可在统一入口下承接参数补齐、命令规划、设备建模引导、服务化自动寻优工具部署安装、寻优参数推荐与 config.toml 配置；涉及真实性能结果时，仍应以实际运行输出为准。
 
 ## Agent 定位
 
@@ -19,12 +19,14 @@
 - `msmodeling-text-generate-executor`：用于单点仿真参数补齐、候选命令生成、执行前确认与结果总结
 - `msmodeling-throughput-optimizer-executor`：用于吞吐规划、硬件对比、聚合/分离/P:D 配比搜索的参数补齐与结果总结
 - `msmodeling-device-config`：用于把自然语言硬件规格转换为设备画像建模输入，并显式标注待校准项
+- `msmodeling-optix-deploy`：用于部署安装 `msmodeling optix` 服务化自动寻优 CLI 工具，包括仓库检查、pip 安装与 CLI 验证
+- `msmodeling-optix-param-recommend`：用于根据硬件、模型、负载和优化目标，推荐 MindIE/vLLM 服务化自动寻优参数、搜索范围、benchmark 配置与 `config.toml` 片段
 
 ## 核心能力
 
 - 解释当前已接入的大模型仿真建模与部署规划能力边界、典型使用方式
-- 梳理 `text_generate`、`throughput_optimizer` 和设备画像场景的关键输入参数
-- 帮助用户区分环境初始化、单点验证、吞吐规划、设备建模等已支持任务类型
+- 梳理 `text_generate`、`throughput_optimizer`、设备画像以及服务化自动寻优部署场景的关键输入参数
+- 帮助用户区分环境初始化、单点验证、吞吐规划、设备建模、服务化自动寻优部署与参数推荐等已支持任务类型
 - 根据本地仓库文档与实现，给出候选命令、输入清单、检查项和验证路径
 - 在没有真实运行结果时，明确区分“仿真/规划建议”和“实测结论”
 
@@ -36,6 +38,8 @@
 - 想梳理 `python -m cli.inference.text_generate` 运行前需要准备哪些参数
 - 想评估 `python -m cli.inference.throughput_optimizer` 的规划思路或输入项
 - 想为新硬件准备 device profile
+- 想部署安装 `msmodeling optix` 服务化自动寻优工具
+- 想根据硬件、模型、业务负载和优化目标获取 MindIE/vLLM 服务化自动寻优参数推荐和 `config.toml` 配置
 
 ## 推荐使用方式
 
@@ -43,17 +47,21 @@
 - 如果你要初始化环境，请说明是否要使用默认 `myenv`、是否允许安装 `uv` / `requirements.txt`、是否需要设置 `PYTHONPATH` 或 `HF_ENDPOINT`
 - 如果你要的是单点仿真，请说明：模型、device profile、设备数、输入/输出长度、Prefill/Decode 模式
 - 如果你要的是吞吐规划，请说明：模型、硬件、设备数、输入输出长度、SLO、部署模式（聚合 / 分离 / P:D 比例）
-- 如果你要做设备建模，请尽量提供硬件规格、资料来源、建模粒度和希望写入的 profile 名称
+- 如果你要部署服务化自动寻优工具，请说明是否使用默认的阿里云 PyPI 镜像，以及你的运行环境是否为 Ascend 推理系列产品
+- 如果你要获取服务化自动寻优参数推荐，请尽量提供：推理框架（mindie/vllm）、硬件信息（单卡显存、world_size、每节点卡数、节点数）、模型 config.json 路径或模型名、业务负载 token 长度、优化目标（throughput/ttft/tpot/balanced）
 
 ## 当前边界说明
 
-- 对已接入的 4 个专项 skill，Agent 可以直接承接：
+- 对已接入的 6 个专项 skill，Agent 可以直接承接：
   - 环境依赖安装与检查
   - 参数渐进式补齐
   - 候选命令生成
   - 执行前确认
   - 执行后结果总结
-- 环境安装类任务涉及网络安装、删除或覆盖已有环境、fallback 安装到已有 Python 环境时，必须先说明影响并取得确认
+  - 服务化自动寻优工具部署安装与验证
+  - 基于历史经验与启发式规则的寻优参数推荐与 config.toml 配置
+- 环境安装类任务（含服务化自动寻优工具部署）涉及网络安装、删除或覆盖已有环境、卸载 Python 包时，必须先说明影响并取得确认
+- 寻优参数推荐会优先匹配历史实战经验配置，命中时直接采用经验值；超出经验边界的部分回退到脚本通用推断，两者来源会明确标注
 - 当前未接入的链路不在本 Agent 适用范围内，Agent 不应伪造自动化流程或声称可以直接执行
 - 若需要真实性能结果，仍应以实际运行和验证输出为准
 
@@ -65,3 +73,5 @@
 | 单点仿真参数梳理 | `请帮我梳理 Qwen3-32B 在 A3 上跑 text_generate 需要补齐哪些参数。` |
 | 吞吐规划咨询 | `我想比较同一个模型在两种硬件上的部署吞吐规划，应该怎么准备 throughput_optimizer 输入？` |
 | 设备建模入口 | `我要给一块新硬件做 device profile，先帮我确认需要哪些规格。` |
+| 服务化自动寻优部署 | `请帮我安装 msmodeling optix 寻优工具并验证是否可用。` |
+| 寻优参数推荐 | `我在 Atlas A3 上部署 Qwen3-32B，使用 vLLM，目标吞吐优先，帮我推荐寻优参数和 config.toml 配置。` |

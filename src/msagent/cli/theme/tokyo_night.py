@@ -90,7 +90,7 @@ class TokyoNightTheme(BaseTheme):
     # Semantic color accessors for BaseTheme protocol
     @property
     def primary_text(self) -> str:
-        return self.colors.light_blue_white
+        return self.colors.sky_blue
 
     @property
     def secondary_text(self) -> str:

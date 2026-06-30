@@ -220,6 +220,11 @@ def _add_runtime_options(parser: argparse.ArgumentParser, *, include_timer: bool
         default=ApprovalMode.ACTIVE.value,
         help="Tool approval mode (default: active)",
     )
+    parser.add_argument(
+        "--trace-jsonl",
+        default=None,
+        help="Write JSONL trace events to this file",
+    )
 
 
 async def dispatch_legacy_command(args: argparse.Namespace) -> int:
@@ -254,6 +259,7 @@ async def _handle_chat(args: argparse.Namespace) -> int:
         approval_mode=args.approval_mode,
         verbose=args.verbose,
         stream=args.stream,
+        trace_jsonl=args.trace_jsonl,
     )
     return await handle_chat_command(chat_args)
 

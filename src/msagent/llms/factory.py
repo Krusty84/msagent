@@ -22,15 +22,18 @@ from __future__ import annotations
 
 import os
 from typing import Any
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import urlparse
 
 import httpx
 from langchain.chat_models import init_chat_model
 from pydantic import SecretStr
 
 from msagent.configs.llm import LLMConfig
+from msagent.core.logging import get_logger
 from msagent.core.settings import LLMSettings
 from msagent.utils.langchain_openai_compat import patch_chat_openai_reasoning_content_support
+
+logger = get_logger(__name__)
 
 _SUPPORTED_PROVIDER_MAP: dict[str, str] = {
     "openai": "openai",
@@ -102,7 +105,7 @@ class LLMFactory:
         if cfg.max_tokens > 0:
             kwargs["max_tokens"] = cfg.max_tokens
 
-        normalized_base_url = self._normalize_base_url(provider, cfg.base_url)
+        normalized_base_url = self._normalize_base_url(cfg.base_url)
         if normalized_base_url:
             kwargs["base_url"] = normalized_base_url
             provider_base_url_key = _PROVIDER_BASE_URL_KWARG.get(provider)
@@ -122,10 +125,21 @@ class LLMFactory:
             kwargs["stream_usage"] = bool(cfg.streaming)
 
             resolved_trust_env = self._resolve_openai_trust_env(cfg.trust_env, normalized_base_url)
+            logger.debug(
+                "OpenAI-compatible client config: base_url=%s trust_env_config=%s resolved_trust_env=%s "
+                "http_proxy_present=%s https_proxy_present=%s all_proxy_present=%s no_proxy_present=%s",
+                normalized_base_url,
+                cfg.trust_env,
+                resolved_trust_env,
+                bool(os.getenv("HTTP_PROXY")),
+                bool(os.getenv("HTTPS_PROXY")),
+                bool(os.getenv("ALL_PROXY")),
+                bool(os.getenv("NO_PROXY")),
+            )
             if cfg.http2 or not resolved_trust_env:
                 # Custom OpenAI-compatible gateways are often private endpoints.
-                # Disable trust_env by default there to avoid unstable global proxy
-                # interception causing TLS EOF errors.
+                # Only create explicit clients when HTTP/2 is requested or the
+                # caller explicitly disables environment-derived proxy/SSL settings.
                 timeout = kwargs["timeout"]
                 kwargs["http_client"] = httpx.Client(
                     timeout=timeout,
@@ -182,26 +196,14 @@ class LLMFactory:
         return raw
 
     @staticmethod
-    def _normalize_base_url(provider: str, base_url: str | None) -> str | None:
-        """Normalize provider-specific base URLs for compatibility."""
+    def _normalize_base_url(base_url: str | None) -> str | None:
+        """Return a trimmed base URL or ``None`` when unset."""
         if base_url is None:
             return None
 
         normalized = base_url.strip()
         if not normalized:
             return None
-
-        if provider != "openai":
-            return normalized
-
-        parsed = urlparse(normalized)
-        host = (parsed.hostname or "").lower()
-        path = parsed.path.rstrip("/")
-
-        # DeepSeek OpenAI-compatible endpoint requires /v1.
-        if host.endswith("deepseek.com") and path in {"", "/"}:
-            parsed = parsed._replace(path="/v1")
-            return urlunparse(parsed)
 
         return normalized
 
@@ -225,4 +227,4 @@ class LLMFactory:
     ) -> bool:
         if trust_env is not None:
             return bool(trust_env)
-        return cls._should_use_openai_responses_api(base_url)
+        return True

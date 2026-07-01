@@ -23,7 +23,7 @@ CONFIG_SKILL_SCRIPT = "skills/msmodeling-optix-param-recommend/scripts/auto_conf
 CONFIG_PATH_HINT = "optix/config.toml"
 VLLM_COMMAND_ARG_BY_NAME = {
     "MAX_MODEL_LEN": "--max-model-len",
-    "TENSOR_PARALLEL_SIZE": "--tensor_parallel_size",
+    "TENSOR_PARALLEL_SIZE": "--tensor-parallel-size",
     "PIPELINE_PARALLEL_SIZE": "--pipeline-parallel-size",
     "GPU_MEMORY_UTILIZATION": "--gpu_memory_utilization",
     "BLOCK_SIZE": "--block-size",

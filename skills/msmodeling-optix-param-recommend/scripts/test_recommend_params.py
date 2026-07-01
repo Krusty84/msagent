@@ -123,13 +123,13 @@ def test_missing_required_fields_returns_need_more_info():
     assert result["next_question"]
 
 
-def test_vllm_recommendation_defaults_to_ais_bench_and_parallel_constraint(tmp_path):
+def test_vllm_recommendation_defaults_to_vllm_benchmark_and_parallel_constraint(tmp_path):
     module = load_module()
 
     result = module.recommend(base_context(tmp_path, "vllm"))
 
     assert result["status"] == "ok"
-    assert result["benchmark_policy"] == "ais_bench"
+    assert result["benchmark_policy"] == "vllm_benchmark"
     assert "DP * TP * PP == world_size" in result["constraints"][0]["expression"]
     items = {item["name"]: item for item in result["recommendations"]}
     names = set(items)
@@ -139,8 +139,8 @@ def test_vllm_recommendation_defaults_to_ais_bench_and_parallel_constraint(tmp_p
     assert items["ENABLE_PREFIX_CACHING"]["search"] is False
     assert items["ENABLE_CHUNKED_PREFILL"]["value"] == "vllm_default"
     assert items["ENABLE_CHUNKED_PREFILL"]["search"] is False
-    assert "[ais_bench.command]" in result["toml_snippet"]
-    assert "[[ais_bench.target_field]]" not in result["toml_snippet"]
+    assert "[vllm_benchmark.command]" in result["toml_snippet"]
+    assert "[[vllm_benchmark.target_field]]" not in result["toml_snippet"]
     parsed = tomllib.loads(result["toml_snippet"])
     vllm_fields = {item["name"]: item for item in parsed["vllm"]["target_field"]}
     assert "ENABLE_PREFIX_CACHING" not in vllm_fields
@@ -150,7 +150,7 @@ def test_vllm_recommendation_defaults_to_ais_bench_and_parallel_constraint(tmp_p
     assert handoff["handoff_type"] == "target_fields_and_commands"
     assert not any(field["name"] == "ENABLE_PREFIX_CACHING" for field in handoff["target_fields"])
     assert any("--add-search-param" in command for command in handoff["apply_commands"])
-    assert any("--cli-arg=--tensor_parallel_size" in command for command in handoff["apply_commands"])
+    assert any("--cli-arg=--tensor-parallel-size" in command for command in handoff["apply_commands"])
     assert not any("--add-fixed-param" in command for command in handoff["apply_commands"])
     assert "--enable-prefix-caching" not in handoff["vllm_command_others"]
     assert "--enable-chunked-prefill" not in handoff["vllm_command_others"]

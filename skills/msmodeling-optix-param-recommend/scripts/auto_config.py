@@ -194,7 +194,8 @@ def update_target_field(content: str, field_name: str, updates: Dict[str, Any]) 
 
     for key, value in updates.items():
         if isinstance(value, str):
-            value_str = f'"{value}"'
+            escaped_value = value.replace('\\', '\\\\').replace('"', '\\"')
+            value_str = f'"{escaped_value}"'
         elif isinstance(value, bool):
             value_str = str(value).lower()
         else:
@@ -513,7 +514,8 @@ def generate_target_field_block(
         lines.append(f'dtype = "{dtype}"')
         if value is not None:
             if dtype == "str":
-                lines.append(f'value = "{value}"')
+                escaped_value = str(value).replace('\\', '\\\\').replace('"', '\\"')
+                lines.append(f'value = "{escaped_value}"')
             elif dtype == "bool":
                 lines.append(f'value = {str(value).lower()}')
             else:
@@ -988,6 +990,7 @@ Examples:
         help="Config file path (default: optix/config.toml)",
     )
     parser.add_argument("--dry-run", action="store_true", help="Preview changes without writing")
+    parser.add_argument("--force", action="store_true", help="Force overwrite existing parameters")
 
     # Scenario related parameters
     parser.add_argument("--benchmark", choices=["ais_bench", "vllm_benchmark"], help="Benchmark tool")

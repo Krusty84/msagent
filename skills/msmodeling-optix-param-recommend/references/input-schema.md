@@ -26,7 +26,7 @@
 }
 ```
 
-`benchmark_policy` 是可选字段。缺省时使用 `ais_bench`。
+`benchmark_policy` 是可选字段。缺省时 vLLM 使用 `vllm_benchmark`，MindIE 使用 `ais_bench`。
 
 `discovery` 是可选字段。缺省时不做 `--help` 参数发现。
 

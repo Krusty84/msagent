@@ -4,7 +4,7 @@
 
 ## 通用规则
 
-- 默认 benchmark：`ais_bench`。
+- 默认 benchmark：vLLM 使用 `vllm_benchmark`，MindIE 使用 `ais_bench`。
 - 核心约束：`DP * TP * PP == world_size`。
 - 首次寻优优先推荐 `DP * TP * PP == world_size`，即尽量用满卡。
 - TP 从 `world_size` 的因子中选择，同时要求能整除 `num_attention_heads`。
@@ -208,7 +208,7 @@ name = "REQUESTRATE"
 
 benchmark 类型会影响 benchmark 侧 target field 和性能指标解释，但不应该覆盖基于硬件和模型推导出的服务侧参数范围。
 
-第一版中，用户未指定 benchmark 时始终输出 `ais_bench` 字段。
+用户未指定 benchmark 时，vLLM 默认使用 `vllm_benchmark`，MindIE 默认使用 `ais_bench`。
 
 ## 启动命令发现
 

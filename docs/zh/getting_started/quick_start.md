@@ -106,7 +106,7 @@ Skill 是面向特定场景的专项能力模块（如性能分析、模型量�
 | `/tool-output` 或 `Ctrl+O` | 打开全屏工具输出查看器。 |
 | 左右方向键 | 切换多个工具输出。 |
 | 上下方向键、`PageUp`/`PageDown` | 滚动内容。 |
-| `Enter` / `Ctrl+O` / 鼠标点击 | 展开或折叠完整输出。 | 
+| `Enter` / `Ctrl+O` / 鼠标点击 | 展开或折叠完整输出。 |
 | `Esc` | 关闭查看器。 |
 
 ![tool_output](../figures/tool_output.png)

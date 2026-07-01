@@ -139,6 +139,11 @@ def test_vllm_recommendation_defaults_to_vllm_benchmark_and_parallel_constraint(
     assert items["ENABLE_PREFIX_CACHING"]["search"] is False
     assert items["ENABLE_CHUNKED_PREFILL"]["value"] == "vllm_default"
     assert items["ENABLE_CHUNKED_PREFILL"]["search"] is False
+    # COMPILATION_CONFIG: flag prefix embedded in dtype_param values
+    assert items["COMPILATION_CONFIG"]["target_field"] is True
+    assert items["COMPILATION_CONFIG"]["search"] is True
+    assert items["COMPILATION_CONFIG"]["value"] == ""
+    assert "--compilation-config" in items["COMPILATION_CONFIG"]["dtype_param"][1]
     assert "[vllm_benchmark.command]" in result["toml_snippet"]
     assert "dataset_name = \"random\"" in result["toml_snippet"]
     assert "num_prompts = 3000" in result["toml_snippet"]
@@ -150,6 +155,8 @@ def test_vllm_recommendation_defaults_to_vllm_benchmark_and_parallel_constraint(
     vllm_fields = {item["name"]: item for item in parsed["vllm"]["target_field"]}
     assert "ENABLE_PREFIX_CACHING" not in vllm_fields
     assert "ENABLE_CHUNKED_PREFILL" not in vllm_fields
+    # COMPILATION_CONFIG has target_field=True; --compilation-config flag is inside dtype_param
+    assert "COMPILATION_CONFIG" in vllm_fields
     handoff = result["config_skill_handoff"]
     assert handoff["consumer_skill"] == "msmodeling-optix-param-recommend"
     assert handoff["handoff_type"] == "target_fields_and_commands"

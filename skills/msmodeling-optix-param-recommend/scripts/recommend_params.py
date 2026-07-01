@@ -1331,7 +1331,13 @@ def target_field_toml(engine: str, item: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def build_toml(engine: str, benchmark: str, recs: List[Dict[str, Any]], world_size: int) -> str:
+def build_toml(
+    engine: str,
+    benchmark: str,
+    recs: List[Dict[str, Any]],
+    world_size: int,
+    workload: Optional[Dict[str, Any]] = None,
+) -> str:
     if engine == "vllm":
         constraint_expr = "$DATA_PARALLEL_SIZE * $TENSOR_PARALLEL_SIZE * $PIPELINE_PARALLEL_SIZE == $NPU_COUNT"
     else:
@@ -1349,12 +1355,21 @@ def build_toml(engine: str, benchmark: str, recs: List[Dict[str, Any]], world_si
     engine_items = [item for item in recs if item["section"] == engine and item.get("target_field", True)]
     sections.extend(target_field_toml(engine, item) + "\n" for item in engine_items)
     if benchmark == "ais_bench":
-        sections.append("[ais_bench.command]\nnum_prompts = 3000\n")
+        sections.append("[ais_bench.command]")
+        sections.append("num_prompts = 3000")
+        sections.append("")
         sections.append("# CONCURRENCY and REQUESTRATE for ais_bench are kept in JSON handoff.")
         sections.append("# They are not emitted as ais_bench target-field blocks because the current Settings loader")
         sections.append("# calls range_to_enum(self.ais_bench) instead of range_to_enum(self.ais_bench.target_field).")
     elif benchmark == "vllm_benchmark":
-        sections.append("[vllm_benchmark.command]\nnum_prompts = 3000\n")
+        wl = workload or {}
+        input_len = wl.get("input_len_avg", 1024)
+        output_len = wl.get("output_len_avg", 256)
+        sections.append("[vllm_benchmark.command]")
+        sections.append('dataset_name = "random"')
+        sections.append("num_prompts = 3000")
+        sections.append(f'others = "--random-input-len {input_len} --random-output-len {output_len} --temperature 0"')
+        sections.append("")
         sections.append("# CONCURRENCY and REQUESTRATE are emitted as [[vllm.target_field]] above.")
         sections.append("# The framework auto-injects --max-concurrency $CONCURRENCY and --request-rate $REQUESTRATE")
         sections.append("# into vllm bench serve. Both variables are resolved from [[vllm.target_field]].")
@@ -1434,7 +1449,9 @@ def recommend(context: Dict[str, Any]) -> Dict[str, Any]:
         },
         "recommendations": recs,
         "config_skill_handoff": build_config_skill_handoff(engine, recs),
-        "toml_snippet": build_toml(engine, benchmark, recs, to_int(context["hardware"]["world_size"])),
+        "toml_snippet": build_toml(
+            engine, benchmark, recs, to_int(context["hardware"]["world_size"]), context.get("workload")
+        ),
         "next_command": command,
     }
 

@@ -140,6 +140,11 @@ def test_vllm_recommendation_defaults_to_vllm_benchmark_and_parallel_constraint(
     assert items["ENABLE_CHUNKED_PREFILL"]["value"] == "vllm_default"
     assert items["ENABLE_CHUNKED_PREFILL"]["search"] is False
     assert "[vllm_benchmark.command]" in result["toml_snippet"]
+    assert "dataset_name = \"random\"" in result["toml_snippet"]
+    assert "num_prompts = 3000" in result["toml_snippet"]
+    assert "--random-input-len" in result["toml_snippet"]
+    assert "--random-output-len" in result["toml_snippet"]
+    assert "--temperature 0" in result["toml_snippet"]
     assert "[[vllm_benchmark.target_field]]" not in result["toml_snippet"]
     parsed = tomllib.loads(result["toml_snippet"])
     vllm_fields = {item["name"]: item for item in parsed["vllm"]["target_field"]}

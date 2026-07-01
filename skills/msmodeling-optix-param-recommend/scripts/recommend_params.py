@@ -23,15 +23,15 @@ CONFIG_SKILL_SCRIPT = "skills/msmodeling-optix-param-recommend/scripts/auto_conf
 CONFIG_PATH_HINT = "optix/config.toml"
 VLLM_COMMAND_ARG_BY_NAME = {
     "MAX_MODEL_LEN": "--max-model-len",
-    "TENSOR_PARALLEL_SIZE": "--tensor_parallel_size",
+    "TENSOR_PARALLEL_SIZE": "--tensor-parallel-size",
     "PIPELINE_PARALLEL_SIZE": "--pipeline-parallel-size",
     "GPU_MEMORY_UTILIZATION": "--gpu_memory_utilization",
     "BLOCK_SIZE": "--block-size",
     "MAX_NUM_PARTIAL_PREFILLS": "--max-num-partial-prefills",
     "LONG_PREFILL_TOKEN_THRESHOLD": "--long-prefill-token-threshold",  # nosec B105
+    "COMPILATION_CONFIG": "--compilation-config",
 }
 VLLM_INLINE_FLAG_NAMES = {
-    "COMPILATION_CONFIG",
     "DISABLE_CHUNKED_MM_INPUT",
     "ENABLE_EXPERT_PARALLEL",
 }
@@ -685,10 +685,12 @@ def benchmark_recommendations(
         f"(HBM={hbm_ceiling}, KV={kv_ceiling}, burst-ratio={burst_ratio}×)."
     )
 
+    engine = str(context.get("engine", "")).lower() if context else ""
+    section = "vllm" if engine == "vllm" else "ais_bench"
     return [
         recommendation(
             "CONCURRENCY",
-            "ais_bench",
+            section,
             "int",
             concurrency_default,
             concurrency_reason,
@@ -698,7 +700,7 @@ def benchmark_recommendations(
         ),
         recommendation(
             "REQUESTRATE",
-            "ais_bench",
+            section,
             "float",
             max(1, concurrency_default // 2),
             "Request rate starts below concurrency; optimizer can raise it after measuring throughput.",
@@ -1348,9 +1350,14 @@ def build_toml(engine: str, benchmark: str, recs: List[Dict[str, Any]], world_si
     sections.extend(target_field_toml(engine, item) + "\n" for item in engine_items)
     if benchmark == "ais_bench":
         sections.append("[ais_bench.command]\nnum_prompts = 3000\n")
-        sections.append("# CONCURRENCY and REQUESTRATE recommendations are kept in JSON handoff.")
+        sections.append("# CONCURRENCY and REQUESTRATE for ais_bench are kept in JSON handoff.")
         sections.append("# They are not emitted as ais_bench target-field blocks because the current Settings loader")
         sections.append("# calls range_to_enum(self.ais_bench) instead of range_to_enum(self.ais_bench.target_field).")
+    elif benchmark == "vllm_benchmark":
+        sections.append("[vllm_benchmark.command]\nnum_prompts = 3000\n")
+        sections.append("# CONCURRENCY and REQUESTRATE are emitted as [[vllm.target_field]] above.")
+        sections.append("# The framework auto-injects --max-concurrency $CONCURRENCY and --request-rate $REQUESTRATE")
+        sections.append("# into vllm bench serve. Both variables are resolved from [[vllm.target_field]].")
     return "\n".join(sections)
 
 

@@ -4,7 +4,7 @@
 
 ## 通用规则
 
-- 默认 benchmark：`ais_bench`。
+- 默认 benchmark：vLLM 使用 `vllm_benchmark`，MindIE 使用 `ais_bench`。
 - 核心约束：`DP * TP * PP == world_size`。
 - 首次寻优优先推荐 `DP * TP * PP == world_size`，即尽量用满卡。
 - TP 从 `world_size` 的因子中选择，同时要求能整除 `num_attention_heads`。
@@ -144,7 +144,7 @@ presence flag 字段需要谨慎处理。vLLM 已有模型感知默认值的 fla
 
 | 规则 | 说明 |
 |------|------|
-| `CONCURRENCY` 和 `REQUESTRATE` 是 vLLM 引擎的**必需** target_field | 删除会导致 `$CONCURRENCY` / `$REQUESTRATE` 原样传入 → `invalid int value: '$CONCURRENCY'` |
+| `CONCURRENCY` 和 `REQUESTRATE` 是 vLLM 引擎的**必需** target_field，**必须写在 `[[vllm.target_field]]` 中** | 删除或错放在 `ais_bench` section 会导致 `$CONCURRENCY` / `$REQUESTRATE` 原样传入 → `invalid int value: '$CONCURRENCY'` |
 | `MAX_NUM_SEQS` 和 `MAX_NUM_BATCHED_TOKENS` 是 vLLM 引擎的**必需** target_field | 删除会导致 `$MAX_NUM_SEQS` / `$MAX_NUM_BATCHED_TOKENS` 原样传入 |
 | `--max-num-seqs` 和 `--max-num-batched-tokens` **不要**写入 `vllm.command.others` | 框架已自动注入，重复会导致命令行参数重复 |
 | `--max-concurrency` 和 `--request-rate` **不要**写入 `vllm_benchmark.others` | 框架已自动注入，重复会导致命令行参数重复 |
@@ -152,7 +152,7 @@ presence flag 字段需要谨慎处理。vLLM 已有模型感知默认值的 fla
 **正确做法**：
 - `vllm.command.others`：只包含框架未注入的参数（如 `--max-model-len`、`--tensor-parallel-size`、`--gpu-memory-utilization`、`--block-size`、`--speculative-config`）
 - `vllm_benchmark.others`：只包含框架未注入的参数（如 `--random-input-len`、`--random-output-len`、`--temperature`）
-- 四个必需 target_field（`MAX_NUM_SEQS`、`MAX_NUM_BATCHED_TOKENS`、`CONCURRENCY`、`REQUESTRATE`）必须在 `[[vllm.target_field]]` 中定义，不可删除
+- 四个必需 target_field（`MAX_NUM_SEQS`、`MAX_NUM_BATCHED_TOKENS`、`CONCURRENCY`、`REQUESTRATE`）必须在 `[[vllm.target_field]]` 中定义（注意是 vllm section，不是 ais_bench section），不可删除
 
 **错误示例**：
 
@@ -208,7 +208,7 @@ name = "REQUESTRATE"
 
 benchmark 类型会影响 benchmark 侧 target field 和性能指标解释，但不应该覆盖基于硬件和模型推导出的服务侧参数范围。
 
-第一版中，用户未指定 benchmark 时始终输出 `ais_bench` 字段。
+用户未指定 benchmark 时，vLLM 默认使用 `vllm_benchmark`，MindIE 默认使用 `ais_bench`。
 
 ## 启动命令发现
 

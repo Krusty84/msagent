@@ -344,9 +344,10 @@ dtype_param = ["{\"cudagraph_mode\": \"FULL_DECODE_ONLY\"}"]
 value = "{\"cudagraph_mode\": \"FULL_DECODE_ONLY\"}"
 ```
 
-### 2. `$COMPILATION_CONFIG` 占位符展开缺少 flag 前缀
+### 2. `$COMPILATION_CONFIG` 占位符展开缺少 flag 前缀（已修复）
 
-**规避**：固定值直接写 `--compilation-config '<json>'` 到 `others`；不要用 `$VAR` 占位符。
+脚本已修正：`COMPILATION_CONFIG` 现在生成 `--compilation-config $COMPILATION_CONFIG`（带 flag 前缀）。
+若使用固定值，直接在 `others` 中写 `--compilation-config '<json>'` 更加稳妥。
 
 ### 3. `others` 遗漏 `--max-model-len` 导致 OOM
 
@@ -367,6 +368,11 @@ benchmark 的 I/O 长度必须反映实际业务负载。正确做法是先尝�
 ### 7. 删除强制性 target_field 导致 `$VAR` 原样传入
 
 `MAX_NUM_SEQS`、`MAX_NUM_BATCHED_TOKENS`、`CONCURRENCY`、`REQUESTRATE` 由框架自动注入，不可删除，也不应在 `others` 中重复。
+
+> **⚠️ 特别强调**：vLLM 场景下，`CONCURRENCY` 和 `REQUESTRATE` **必须定义在 `[[vllm.target_field]]` 中**（不是 `ais_bench` section）。
+> 框架启动 `vllm bench serve` 时会自动注入 `--max-concurrency $CONCURRENCY` 和 `--request-rate $REQUESTRATE`，
+> 这两个 `$VAR` 只能从 `[[vllm.target_field]]` 中解析。如果你把它们放在 `ais_bench` 或遗漏掉，
+> vLLM 会报 `invalid int value: '$CONCURRENCY'`。
 
 ## 快速命令
 

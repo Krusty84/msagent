@@ -995,7 +995,7 @@ Examples:
     # Scenario related parameters
     parser.add_argument("--benchmark", choices=["ais_bench", "vllm_benchmark"], help="Benchmark tool")
     parser.add_argument("--host", default="127.0.0.1", help="Service host")
-    parser.add_argument("--port", type=int, default=8000, help="Service port")
+    parser.add_argument("--port", type=str, default="8000", help="Service port")
     parser.add_argument("--ttft-slo", type=float, help="First token latency limit (seconds)")
     parser.add_argument("--tpot-slo", type=float, help="Non-first token latency limit (seconds)")
     parser.add_argument("--time-budget", help="Time budget (e.g.: 8h, 30m)")

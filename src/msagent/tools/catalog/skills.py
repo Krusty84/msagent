@@ -28,7 +28,12 @@ from typing import Any
 from langchain_core.tools import ToolException, tool
 from pydantic import BaseModel, Field
 
-from msagent.skills.factory import DEFAULT_SKILL_CATEGORY, SkillFactory
+from msagent.skills.factory import (
+    DEFAULT_SKILL_CATEGORY,
+    SkillFactory,
+    classify_skill_group,
+    skill_group_sort_key,
+)
 
 
 def _context_value(context: Any, key: str) -> Any:
@@ -78,6 +83,27 @@ async def _fallback_skill_catalog() -> list[Any]:
     return [skill for category in loaded.values() for skill in category.values()]
 
 
+def _skill_sort_key(skill: Any) -> tuple[int, str, str]:
+    return skill_group_sort_key(
+        str(getattr(skill, "name", "")),
+        category=str(getattr(skill, "category", DEFAULT_SKILL_CATEGORY)),
+    )
+
+
+def _skill_payload(skill: Any) -> dict[str, str]:
+    category = str(getattr(skill, "category", DEFAULT_SKILL_CATEGORY))
+    name = str(getattr(skill, "name", ""))
+    description = str(getattr(skill, "description", ""))
+    display_name = name if category == DEFAULT_SKILL_CATEGORY else f"{category}/{name}"
+    return {
+        "group": classify_skill_group(name, category=category),
+        "display_name": display_name,
+        "category": category,
+        "name": name,
+        "description": description,
+    }
+
+
 class FetchSkillsInput(BaseModel):
     pattern: str = Field(default=".*", description="Regex used to filter skills")
 
@@ -95,21 +121,10 @@ async def fetch_skills(*, pattern: str = ".*", runtime: Any = None) -> str:
         catalog = await _fallback_skill_catalog()
 
     payload: list[dict[str, str]] = []
-    for skill in catalog:
-        category = getattr(skill, "category", DEFAULT_SKILL_CATEGORY)
-        name = getattr(skill, "name", "")
-        description = getattr(skill, "description", "")
-        display_name = name if category == DEFAULT_SKILL_CATEGORY else f"{category}/{name}"
-
-        if compiled.search(f"{display_name}\n{description}"):
-            payload.append(
-                {
-                    "display_name": display_name,
-                    "category": category,
-                    "name": name,
-                    "description": description,
-                }
-            )
+    for skill in sorted(catalog, key=_skill_sort_key):
+        item = _skill_payload(skill)
+        if compiled.search(f"{item['display_name']}\n{item['description']}"):
+            payload.append(item)
 
     return json.dumps(payload, ensure_ascii=False)
 

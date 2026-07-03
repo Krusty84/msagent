@@ -28,7 +28,12 @@ from typing import Any
 from langchain_core.tools import ToolException, tool
 from pydantic import BaseModel, Field
 
-from msagent.skills.factory import DEFAULT_SKILL_CATEGORY, SkillFactory
+from msagent.skills.factory import (
+    DEFAULT_SKILL_CATEGORY,
+    SkillFactory,
+    classify_skill_group,
+    skill_group_sort_key,
+)
 
 
 def _context_value(context: Any, key: str) -> Any:
@@ -95,15 +100,24 @@ async def fetch_skills(*, pattern: str = ".*", runtime: Any = None) -> str:
         catalog = await _fallback_skill_catalog()
 
     payload: list[dict[str, str]] = []
-    for skill in catalog:
+    sorted_catalog = sorted(
+        catalog,
+        key=lambda skill: skill_group_sort_key(
+            str(getattr(skill, "name", "")),
+            category=str(getattr(skill, "category", DEFAULT_SKILL_CATEGORY)),
+        ),
+    )
+    for skill in sorted_catalog:
         category = getattr(skill, "category", DEFAULT_SKILL_CATEGORY)
         name = getattr(skill, "name", "")
         description = getattr(skill, "description", "")
         display_name = name if category == DEFAULT_SKILL_CATEGORY else f"{category}/{name}"
+        group = classify_skill_group(name, category=category)
 
         if compiled.search(f"{display_name}\n{description}"):
             payload.append(
                 {
+                    "group": group,
                     "display_name": display_name,
                     "category": category,
                     "name": name,

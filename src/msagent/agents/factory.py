@@ -20,13 +20,16 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import string
 import os
 import tempfile
+from functools import partial
 from fnmatch import fnmatch
 from importlib import import_module
 from pathlib import Path
+from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Any, Callable
 
 from deepagents import create_deep_agent
@@ -40,6 +43,7 @@ from langchain.agents.middleware.types import AgentMiddleware
 from msagent.agents.local_context import ensure_local_context_prompt
 from msagent.configs import AgentConfig, BaseAgentConfig, RetryPolicyConfig, SubAgentConfig
 from msagent.core.constants import CONFIG_CONVERSATION_HISTORY_DIR
+from msagent.core.settings import settings
 from msagent.llms.factory import LLMFactory
 from msagent.middlewares.tool_result_eviction import ToolResultEvictionMiddleware
 from msagent.tools.catalog import (
@@ -52,6 +56,7 @@ from msagent.tools.catalog import (
 from msagent.tools.factory import ToolFactory
 from msagent.tools.web_search import web_search
 from msagent.utils.deepagents_compat import patch_deepagents_windows_absolute_paths
+from msagent.skills.factory import classify_skill_group, skill_group_sort_key
 
 if TYPE_CHECKING:
     from langchain_core.tools import BaseTool
@@ -70,6 +75,52 @@ _TAVILY_VALIDATE_TIMEOUT_SECONDS = 5.0
 _TAVILY_KEY_VALIDATION_CACHE: dict[str, bool] = {}
 _SEARCH_TOOL_NAME_KEYWORDS = ("search", "web_search")
 _SEARCH_TOOL_DESCRIPTION_KEYWORDS = ("search", "web", "internet", "query")
+_THIRD_PARTY_PROMPTS_PATCHED = False
+_FILTERED_SKILLS_SYSTEM_PROMPT_PREFIX = """
+
+## Skills
+
+Use only the skills listed below. Call `get_skill(name, category)` before using a skill, then follow the SKILL.md workflow.
+"""
+_COMPACT_BASE_AGENT_PROMPT = """You are a tool-using agent. Be concise, accurate, and action-oriented.
+
+- Read relevant context before editing or concluding.
+- Prefer acting directly over narrating intent.
+- Verify important results against the user's request.
+- Ask only when ambiguity or risk is material."""
+_COMPACT_TODO_SYSTEM_PROMPT = """## `write_todos`
+
+Use `write_todos` only for complex multi-step work or when the user explicitly asks for todo tracking.
+- Never call `write_todos` more than once in the same turn.
+- Mark active work as `in_progress`.
+- Mark tasks `completed` immediately after finishing them."""
+_COMPACT_FILESYSTEM_SYSTEM_PROMPT = """## Filesystem Tools
+
+Use filesystem tools instead of shell for reading, searching, and editing files.
+- Read a file before editing it.
+- Use pagination (`offset` / `limit`) for large files.
+- All file paths must be absolute and start with `/`."""
+_COMPACT_EXECUTION_SYSTEM_PROMPT = """## Execute Tool `execute`
+
+Use `execute` for shell commands, scripts, tests, and builds.
+- Prefer dedicated filesystem tools over `cat`, `grep`, or `find`.
+- Use absolute paths and quote paths that contain spaces."""
+_COMPACT_TASK_SYSTEM_PROMPT = """## `task`
+
+Use `task` to delegate independent multi-step work or parallelizable investigations to subagents.
+- Avoid `task` for trivial work.
+- Reconcile subagent results in the main thread."""
+_COMPACT_MEMORY_SYSTEM_PROMPT = """<agent_memory>
+{agent_memory}
+</agent_memory>
+
+<memory_guidelines>
+Persist only durable preferences, role instructions, and reusable task context.
+- Do not store transient details or secrets.
+- Ask for missing identifiers before acting.
+- If the user explicitly asks to remember durable information, update memory promptly.
+</memory_guidelines>
+"""
 
 
 class _ToolPatternFilterMiddleware(AgentMiddleware[Any, Any, Any]):
@@ -157,13 +208,157 @@ class _SystemMessageMiddleware(AgentMiddleware[Any, Any, Any]):
 
         return request.override(system_message=system_message.model_copy(update={"content": rendered_content}))
 
+    @staticmethod
+    def _serialize_system_message_content(content: Any) -> str:
+        if isinstance(content, str):
+            return content
+        try:
+            return json.dumps(content, ensure_ascii=False, indent=2)
+        except TypeError:
+            return str(content)
+
+    @classmethod
+    def _write_system_prompt_dump(cls, request) -> None:
+        dump_path = getattr(settings, "system_prompt_dump_path", None)
+        if not dump_path:
+            return
+
+        system_message = getattr(request, "system_message", None)
+        if system_message is None:
+            return
+
+        try:
+            output_path = Path(str(dump_path)).expanduser()
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_text(
+                cls._serialize_system_message_content(system_message.content),
+                encoding="utf-8",
+            )
+        except Exception as exc:
+            logger.warning("Failed to dump rendered system prompt to %s: %s", dump_path, exc)
+
     def wrap_model_call(self, request, handler):
         request = self._render_request_system_message(request)
+        self._write_system_prompt_dump(request)
         return handler(request)
 
     async def awrap_model_call(self, request, handler):
         request = self._render_request_system_message(request)
+        self._write_system_prompt_dump(request)
         return await handler(request)
+
+
+class _FilteredSkillsMiddleware(SkillsMiddleware):
+    """Inject only the skills allowed by the current agent patterns."""
+
+    def __init__(self, *, backend: Any, sources: list[str], allowed_skills: dict[str, str]) -> None:
+        super().__init__(backend=backend, sources=sources)
+        self._allowed_skills = allowed_skills
+        self.system_prompt_prefix = _FILTERED_SKILLS_SYSTEM_PROMPT_PREFIX
+
+    @staticmethod
+    def _normalize_skill_path(path: str) -> str:
+        return PurePosixPath(path.replace("\\", "/")).as_posix()
+
+    def _skill_category(self, skill: dict[str, Any]) -> str:
+        return self._allowed_skills.get(
+            self._normalize_skill_path(str(skill.get("path", ""))),
+            "default",
+        )
+
+    def _filter_skills_metadata(self, skills_metadata: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if not self._allowed_skills:
+            return []
+        return [
+            skill
+            for skill in skills_metadata
+            if self._normalize_skill_path(str(skill.get("path", ""))) in self._allowed_skills
+        ]
+
+    def _sorted_filtered_skills(self, skills_metadata: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return sorted(
+            self._filter_skills_metadata(skills_metadata),
+            key=lambda skill: skill_group_sort_key(
+                str(skill.get("name", "")),
+                category=self._skill_category(skill),
+            ),
+        )
+
+    def _format_skills_list(self, skills: list[dict[str, Any]]) -> str:
+        sorted_skills = self._sorted_filtered_skills(skills)
+        if not sorted_skills:
+            return "- No skills enabled for the current agent."
+
+        grouped_lines: list[str] = []
+        current_group: str | None = None
+
+        for skill in sorted_skills:
+            category = self._skill_category(skill)
+            group_label = classify_skill_group(str(skill.get("name", "")), category=category)
+            if group_label != current_group:
+                if grouped_lines:
+                    grouped_lines.append("")
+                grouped_lines.append(f"### {group_label}")
+                current_group = group_label
+            grouped_lines.append(f"- `{category}/{skill['name']}`: {skill['description']}")
+            grouped_lines.append(f"  Read `{skill['path']}` for full instructions.")
+        return "\n".join(grouped_lines)
+
+    def modify_request(self, request):
+        skills_metadata = self._filter_skills_metadata(list(request.state.get("skills_metadata", [])))
+        skills_list = self._format_skills_list(skills_metadata)
+        skills_section = f"{self.system_prompt_prefix}\n{skills_list}\n"
+        system_message = getattr(request, "system_message", None)
+        if system_message is None:
+            return request
+        from deepagents.middleware._utils import append_to_system_message
+
+        return request.override(system_message=append_to_system_message(system_message, skills_section))
+
+    def before_agent(self, state, runtime, config):
+        update = super().before_agent(state, runtime, config)
+        if update is None:
+            return None
+        return {"skills_metadata": self._sorted_filtered_skills(list(update.get("skills_metadata", [])))}
+
+    async def abefore_agent(self, state, runtime, config):
+        update = await super().abefore_agent(state, runtime, config)
+        if update is None:
+            return None
+        return {"skills_metadata": self._sorted_filtered_skills(list(update.get("skills_metadata", [])))}
+
+
+def patch_third_party_prompt_defaults() -> None:
+    """Patch verbose third-party prompts with compact project defaults."""
+    global _THIRD_PARTY_PROMPTS_PATCHED
+    if _THIRD_PARTY_PROMPTS_PATCHED:
+        return
+
+    import deepagents.graph as deepagents_graph
+    import deepagents.middleware.filesystem as deepagents_filesystem
+    import deepagents.middleware.memory as deepagents_memory
+    import deepagents.middleware.subagents as deepagents_subagents
+    from langchain.agents.middleware.todo import TodoListMiddleware, WRITE_TODOS_TOOL_DESCRIPTION
+
+    for module, attr, prompt in (
+        (deepagents_graph, "BASE_AGENT_PROMPT", _COMPACT_BASE_AGENT_PROMPT),
+        (deepagents_filesystem, "FILESYSTEM_SYSTEM_PROMPT", _COMPACT_FILESYSTEM_SYSTEM_PROMPT),
+        (deepagents_filesystem, "EXECUTION_SYSTEM_PROMPT", _COMPACT_EXECUTION_SYSTEM_PROMPT),
+        (deepagents_memory, "MEMORY_SYSTEM_PROMPT", _COMPACT_MEMORY_SYSTEM_PROMPT),
+    ):
+        setattr(module, attr, prompt)
+
+    deepagents_graph.TodoListMiddleware = partial(
+        TodoListMiddleware,
+        system_prompt=_COMPACT_TODO_SYSTEM_PROMPT,
+        tool_description=WRITE_TODOS_TOOL_DESCRIPTION,
+    )
+    deepagents_graph.SubAgentMiddleware = partial(
+        deepagents_subagents.SubAgentMiddleware,
+        system_prompt=_COMPACT_TASK_SYSTEM_PROMPT,
+    )
+
+    _THIRD_PARTY_PROMPTS_PATCHED = True
 
 
 class AgentFactory:
@@ -185,6 +380,7 @@ class AgentFactory:
         context_schema: type[Any] | None = None,
         mcp_client: Any | None = None,
         skills_dir: Path | list[Path] | None = None,
+        allowed_skills: list[Any] | None = None,
         checkpointer: BaseCheckpointSaver | None = None,
         llm_config: LLMConfig | None = None,
         sandbox_bindings: list[Any] | None = None,
@@ -192,6 +388,7 @@ class AgentFactory:
     ) -> CompiledStateGraph:
         del sandbox_bindings
 
+        patch_third_party_prompt_defaults()
         patch_deepagents_windows_absolute_paths()
         working_dir = (working_dir or Path.cwd()).resolve()
         resolved_llm = llm_config or config.llm
@@ -261,6 +458,7 @@ class AgentFactory:
         all_tools = [*runtime_tools, *mcp_tools]
 
         skills_sources = self._resolve_existing_paths(skills_dir)
+        allowed_skill_map = self._build_allowed_skill_map(allowed_skills)
         memory_sources = self._ensure_memory_file(working_dir)
         enable_skills_middleware = self._should_enable_skills_middleware(
             config=config,
@@ -298,9 +496,10 @@ class AgentFactory:
             )
         if enable_skills_middleware:
             middleware.append(
-                SkillsMiddleware(
+                _FilteredSkillsMiddleware(
                     backend=metadata_backend,
                     sources=skills_sources,
+                    allowed_skills=allowed_skill_map,
                 )
             )
         tool_output_max_tokens = (
@@ -908,6 +1107,41 @@ class AgentFactory:
         )
 
     @staticmethod
+    def _normalize_skill_path(path: Any) -> str:
+        return PurePosixPath(str(path or "").replace("\\", "/")).as_posix()
+
+    @classmethod
+    def _build_allowed_skill_map(cls, allowed_skills: list[Any] | None) -> dict[str, str]:
+        return {
+            cls._normalize_skill_path(getattr(skill, "path", "")): str(getattr(skill, "category", "default"))
+            for skill in (allowed_skills or [])
+            if getattr(skill, "path", None) is not None
+        }
+
+    @staticmethod
+    def _skill_sort_key(skill: Any) -> tuple[int, str, str]:
+        return skill_group_sort_key(
+            str(getattr(skill, "name", "unknown")),
+            category=str(getattr(skill, "category", "default")),
+        )
+
+    @staticmethod
+    def _skill_group_label(skill: Any) -> str:
+        return classify_skill_group(
+            str(getattr(skill, "name", "unknown")),
+            category=str(getattr(skill, "category", "default")),
+        )
+
+    @staticmethod
+    def _format_skill_summary(skill: Any) -> str:
+        scripts: list[str] = getattr(skill, "get_script_relative_paths", lambda: [])()
+        scripts_text = f" (scripts: {', '.join(f'`{p}`' for p in scripts)})" if scripts else ""
+        return (
+            f"- {getattr(skill, 'display_name', getattr(skill, 'name', 'unknown'))}: "
+            f"{getattr(skill, 'description', '')}{scripts_text}"
+        )
+
+    @staticmethod
     def _build_skills_text(skills: list[Any], use_catalog: bool) -> str:
         if not skills:
             return ""
@@ -916,13 +1150,15 @@ class AgentFactory:
             "Available skills:",
             "Always call `get_skill(name, category)` before using a skill.",
         ]
-        for skill in skills:
-            scripts: list[str] = getattr(skill, "get_script_relative_paths", lambda: [])()
-            scripts_text = f" (scripts: {', '.join(f'`{p}`' for p in scripts)})" if scripts else ""
-            lines.append(
-                f"- {getattr(skill, 'display_name', getattr(skill, 'name', 'unknown'))}: "
-                f"{getattr(skill, 'description', '')}{scripts_text}"
-            )
+        sorted_skills = sorted(skills, key=AgentFactory._skill_sort_key)
+        current_group: str | None = None
+        for skill in sorted_skills:
+            group_label = AgentFactory._skill_group_label(skill)
+            if group_label != current_group:
+                lines.append("")
+                lines.append(f"{group_label}:")
+                current_group = group_label
+            lines.append(AgentFactory._format_skill_summary(skill))
 
         if not use_catalog:
             lines.append("When scripts are present under `scripts/`, prefer running those scripts.")

@@ -29,6 +29,89 @@ from yaml import YAMLError  # type: ignore[import-untyped]
 from msagent.core.constants import DEFAULT_CONFIG_DIR
 
 DEFAULT_SKILL_CATEGORY = "default"
+SKILL_GROUP_PROFILING = "Profiling"
+SKILL_GROUP_DOCUMENTATION = "Documentation and External References"
+SKILL_GROUP_MSMODELING = "msmodeling"
+SKILL_GROUP_QUANTIZATION = "msmodelslim / Quantization"
+SKILL_GROUP_OTHER = "Other"
+SKILL_GROUP_ORDER = {
+    SKILL_GROUP_PROFILING: 0,
+    SKILL_GROUP_DOCUMENTATION: 1,
+    SKILL_GROUP_MSMODELING: 2,
+    SKILL_GROUP_QUANTIZATION: 3,
+    SKILL_GROUP_OTHER: 100,
+}
+
+_SKILL_GROUP_ALIASES = {
+    "profiling": SKILL_GROUP_PROFILING,
+    "document": SKILL_GROUP_DOCUMENTATION,
+    "documentation": SKILL_GROUP_DOCUMENTATION,
+    "docs": SKILL_GROUP_DOCUMENTATION,
+    "reference": SKILL_GROUP_DOCUMENTATION,
+    "references": SKILL_GROUP_DOCUMENTATION,
+    "github": SKILL_GROUP_DOCUMENTATION,
+    "gitcode": SKILL_GROUP_DOCUMENTATION,
+    "msmodeling": SKILL_GROUP_MSMODELING,
+    "msmodelslim": SKILL_GROUP_QUANTIZATION,
+    "quant": SKILL_GROUP_QUANTIZATION,
+    "quantization": SKILL_GROUP_QUANTIZATION,
+}
+
+
+def _normalize_skill_token(value: str) -> str:
+    return str(value or "").strip().lower().replace("_", "-")
+
+
+def _humanize_skill_group(token: str) -> str:
+    parts = [part for part in token.replace("-", " ").split() if part]
+    if not parts:
+        return SKILL_GROUP_OTHER
+    return " ".join(part.upper() if part.isupper() else part.capitalize() for part in parts)
+
+
+def _skill_group_label_from_token(token: str) -> str:
+    normalized_token = _normalize_skill_token(token)
+    if not normalized_token or normalized_token == DEFAULT_SKILL_CATEGORY:
+        return SKILL_GROUP_OTHER
+    return _SKILL_GROUP_ALIASES.get(normalized_token, _humanize_skill_group(normalized_token))
+
+
+def _skill_group_token(name: str, category: str) -> str:
+    normalized_category = _normalize_skill_token(category)
+    if normalized_category and normalized_category != DEFAULT_SKILL_CATEGORY:
+        return normalized_category
+
+    normalized_name = _normalize_skill_token(name)
+    if not normalized_name:
+        return DEFAULT_SKILL_CATEGORY
+
+    for separator in ("-", "_"):
+        if separator in normalized_name:
+            return normalized_name.split(separator, 1)[0]
+    return normalized_name
+
+
+def classify_skill_group(
+    name: str,
+    *,
+    category: str = DEFAULT_SKILL_CATEGORY,
+) -> str:
+    """Map a skill to a stable human-readable group label without hardcoded skill-name lists."""
+    return _skill_group_label_from_token(_skill_group_token(name, category))
+
+
+def skill_group_sort_key(
+    name: str,
+    *,
+    category: str = DEFAULT_SKILL_CATEGORY,
+) -> tuple[int, str, str]:
+    """Return a stable sort key that groups related skills together."""
+    group = classify_skill_group(name, category=category)
+    return (
+        SKILL_GROUP_ORDER.get(group, SKILL_GROUP_ORDER[SKILL_GROUP_OTHER] - 1),
+        group,
+        str(name).casefold(),
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +132,10 @@ class Skill:
         if self.category == DEFAULT_SKILL_CATEGORY:
             return self.name
         return f"{self.category}/{self.name}"
+
+    @property
+    def group_label(self) -> str:
+        return classify_skill_group(self.name, category=self.category)
 
     def get_script_relative_paths(self, limit: int = 8) -> list[str]:
         scripts_dir = self.root_dir / "scripts"

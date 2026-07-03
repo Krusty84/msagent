@@ -23,10 +23,12 @@ from __future__ import annotations
 import logging
 import string
 import os
+import json
 import tempfile
 from fnmatch import fnmatch
 from importlib import import_module
 from pathlib import Path
+from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Any, Callable
 
 from deepagents import create_deep_agent
@@ -40,6 +42,7 @@ from langchain.agents.middleware.types import AgentMiddleware
 from msagent.agents.local_context import ensure_local_context_prompt
 from msagent.configs import AgentConfig, BaseAgentConfig, RetryPolicyConfig, SubAgentConfig
 from msagent.core.constants import CONFIG_CONVERSATION_HISTORY_DIR
+from msagent.core.settings import settings
 from msagent.llms.factory import LLMFactory
 from msagent.middlewares.tool_result_eviction import ToolResultEvictionMiddleware
 from msagent.tools.catalog import (
@@ -70,6 +73,14 @@ _TAVILY_VALIDATE_TIMEOUT_SECONDS = 5.0
 _TAVILY_KEY_VALIDATION_CACHE: dict[str, bool] = {}
 _SEARCH_TOOL_NAME_KEYWORDS = ("search", "web_search")
 _SEARCH_TOOL_DESCRIPTION_KEYWORDS = ("search", "web", "internet", "query")
+_FILTERED_SKILLS_SYSTEM_PROMPT = """
+
+## Skills
+
+Use only the skills listed below. Call `get_skill(name, category)` before using a skill, then follow the SKILL.md workflow.
+
+{skills_list}
+"""
 
 
 class _ToolPatternFilterMiddleware(AgentMiddleware[Any, Any, Any]):
@@ -157,13 +168,104 @@ class _SystemMessageMiddleware(AgentMiddleware[Any, Any, Any]):
 
         return request.override(system_message=system_message.model_copy(update={"content": rendered_content}))
 
+    @staticmethod
+    def _serialize_system_message_content(content: Any) -> str:
+        if isinstance(content, str):
+            return content
+        try:
+            return json.dumps(content, ensure_ascii=False, indent=2)
+        except TypeError:
+            return str(content)
+
+    @staticmethod
+    def _write_system_prompt_dump(request) -> None:
+        dump_path_raw = getattr(settings, "system_prompt_dump_path", None)
+        if not dump_path_raw:
+            return
+
+        system_message = getattr(request, "system_message", None)
+        if system_message is None:
+            return
+
+        try:
+            dump_path = Path(str(dump_path_raw)).expanduser()
+            if not dump_path.is_absolute():
+                dump_path = dump_path.resolve()
+            dump_path.parent.mkdir(parents=True, exist_ok=True)
+            dump_path.write_text(
+                _SystemMessageMiddleware._serialize_system_message_content(system_message.content),
+                encoding="utf-8",
+            )
+        except Exception:
+            logger.warning("Failed to dump rendered system prompt to %s", dump_path_raw, exc_info=True)
+
     def wrap_model_call(self, request, handler):
         request = self._render_request_system_message(request)
+        self._write_system_prompt_dump(request)
         return handler(request)
 
     async def awrap_model_call(self, request, handler):
         request = self._render_request_system_message(request)
+        self._write_system_prompt_dump(request)
         return await handler(request)
+
+
+class _FilteredSkillsMiddleware(SkillsMiddleware):
+    """Inject only the skills allowed by the current agent patterns."""
+
+    def __init__(self, *, backend: Any, sources: list[str], allowed_skills: dict[str, str]) -> None:
+        super().__init__(backend=backend, sources=sources)
+        self._allowed_skills = allowed_skills
+        self.system_prompt_template = _FILTERED_SKILLS_SYSTEM_PROMPT
+
+    @staticmethod
+    def _normalize_skill_path(path: str) -> str:
+        return PurePosixPath(path.replace("\\", "/")).as_posix()
+
+    def _filter_skills_metadata(self, skills_metadata: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if not self._allowed_skills:
+            return []
+        return [
+            skill
+            for skill in skills_metadata
+            if self._normalize_skill_path(str(skill.get("path", ""))) in self._allowed_skills
+        ]
+
+    def _format_skills_list(self, skills: list[dict[str, Any]]) -> str:
+        filtered = self._filter_skills_metadata(skills)
+        if not filtered:
+            return "- No skills enabled for the current agent."
+
+        lines: list[str] = []
+        for skill in filtered:
+            skill_path = self._normalize_skill_path(str(skill.get("path", "")))
+            category = self._allowed_skills.get(skill_path, "default")
+            lines.append(f"- `{category}/{skill['name']}`: {skill['description']}")
+            lines.append(f"  Read `{skill['path']}` for full instructions.")
+        return "\n".join(lines)
+
+    def modify_request(self, request):
+        skills_metadata = self._filter_skills_metadata(list(request.state.get("skills_metadata", [])))
+        skills_list = self._format_skills_list(skills_metadata)
+        skills_section = self.system_prompt_template.format(skills_list=skills_list)
+        system_message = getattr(request, "system_message", None)
+        if system_message is None:
+            return request
+        from deepagents.middleware._utils import append_to_system_message
+
+        return request.override(system_message=append_to_system_message(system_message, skills_section))
+
+    def before_agent(self, state, runtime, config):
+        update = super().before_agent(state, runtime, config)
+        if update is None:
+            return None
+        return {"skills_metadata": self._filter_skills_metadata(list(update.get("skills_metadata", [])))}
+
+    async def abefore_agent(self, state, runtime, config):
+        update = await super().abefore_agent(state, runtime, config)
+        if update is None:
+            return None
+        return {"skills_metadata": self._filter_skills_metadata(list(update.get("skills_metadata", [])))}
 
 
 class AgentFactory:
@@ -185,6 +287,7 @@ class AgentFactory:
         context_schema: type[Any] | None = None,
         mcp_client: Any | None = None,
         skills_dir: Path | list[Path] | None = None,
+        allowed_skills: list[Any] | None = None,
         checkpointer: BaseCheckpointSaver | None = None,
         llm_config: LLMConfig | None = None,
         sandbox_bindings: list[Any] | None = None,
@@ -261,6 +364,13 @@ class AgentFactory:
         all_tools = [*runtime_tools, *mcp_tools]
 
         skills_sources = self._resolve_existing_paths(skills_dir)
+        allowed_skill_map = {
+            PurePosixPath(str(getattr(skill, "path", "")).replace("\\", "/")).as_posix(): str(
+                getattr(skill, "category", "default")
+            )
+            for skill in (allowed_skills or [])
+            if getattr(skill, "path", None) is not None
+        }
         memory_sources = self._ensure_memory_file(working_dir)
         enable_skills_middleware = self._should_enable_skills_middleware(
             config=config,
@@ -298,9 +408,10 @@ class AgentFactory:
             )
         if enable_skills_middleware:
             middleware.append(
-                SkillsMiddleware(
+                _FilteredSkillsMiddleware(
                     backend=metadata_backend,
                     sources=skills_sources,
+                    allowed_skills=allowed_skill_map,
                 )
             )
         tool_output_max_tokens = (

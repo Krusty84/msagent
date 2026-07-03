@@ -13,17 +13,11 @@
 
 ## Skill 调用规则
 
-当任务匹配以下场景时，调用 `get_skill(name="<skill-name>")` 读取对应 SKILL.md 并严格按其流程执行。`<skill-name>` 必须使用 SKILL.md 中的 `name` 字段，而不是目录名：
+当任务匹配当前运行时可见的 skill 场景时，调用 `get_skill(name="<skill-name>", category="<category>")` 读取对应 SKILL.md 并严格按其流程执行。
 
-| Skill 名称 | 适用场景                                                                                                          |
-|------------|---------------------------------------------------------------------------------------------------------------|
-| `github-raw-fetch` | GitHub 源码、配置、README、Markdown、docs 查阅，或读取 GitHub 文件页面原文                                                        |
-| `ascend-profiler-data-validation` | MindStudio profiler、`msprof` 命令行、框架 profiler 数据完整性校验                                                          |
-| `ascend-cluster-fast-slow-rank-detector` | Ascend 多卡/集群快慢卡、慢节点、负载不均衡、集群瓶颈分析                                                                              |
-| `op-mfu-calculator` | `matmul`、`GEMM`、`FlashAttention` 等算子的 MFU 计算、公式推导与结果解释                                                        |
-| `ascend-profiler-db-explorer` | Ascend PyTorch Profiler / `msprof` DB 的 SQL 查询、schema/table 查询、算子耗时、通信耗时、下发与调度分析                              |
-| `document-ux-review` | 按仓库 README、安装文档或 quick start 实操走查，评估文档可用性与新手上手体验                                                              |
-| `ascend-msprof-analyze-cli` | 基于采集得到的 profiling 数据进行统计、比对和诊断，帮助定位计算、通信、调度及集群场景下的性能瓶颈。profiling 数据一般是`*_ascend_pt` 或 `*_ascend_ms` 目录或它们的父目录 |
+- `<skill-name>` 必须使用当前可见 skill 列表中的 `name` 字段，不要臆造目录名或未加载 skill
+- `category` 已知时显式传入，未知时可省略
+- skill 的适用范围、脚本入口和补充资料以运行时注入的 Skills 列表与对应 SKILL.md 为准
 
 `msprof` 工具类咨询优先使用 `github-raw-fetch` 读取 `https://github.com/kali20gakki/msprof/blob/master/agent_router.md`
 

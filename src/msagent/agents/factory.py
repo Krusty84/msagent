@@ -23,6 +23,7 @@ from __future__ import annotations
 import logging
 import string
 import os
+import json
 import tempfile
 from fnmatch import fnmatch
 from importlib import import_module
@@ -40,6 +41,7 @@ from langchain.agents.middleware.types import AgentMiddleware
 from msagent.agents.local_context import ensure_local_context_prompt
 from msagent.configs import AgentConfig, BaseAgentConfig, RetryPolicyConfig, SubAgentConfig
 from msagent.core.constants import CONFIG_CONVERSATION_HISTORY_DIR
+from msagent.core.settings import settings
 from msagent.llms.factory import LLMFactory
 from msagent.middlewares.tool_result_eviction import ToolResultEvictionMiddleware
 from msagent.tools.catalog import (
@@ -157,12 +159,45 @@ class _SystemMessageMiddleware(AgentMiddleware[Any, Any, Any]):
 
         return request.override(system_message=system_message.model_copy(update={"content": rendered_content}))
 
+    @staticmethod
+    def _serialize_system_message_content(content: Any) -> str:
+        if isinstance(content, str):
+            return content
+        try:
+            return json.dumps(content, ensure_ascii=False, indent=2)
+        except TypeError:
+            return str(content)
+
+    @staticmethod
+    def _write_system_prompt_dump(request) -> None:
+        dump_path_raw = getattr(settings, "system_prompt_dump_path", None)
+        if not dump_path_raw:
+            return
+
+        system_message = getattr(request, "system_message", None)
+        if system_message is None:
+            return
+
+        try:
+            dump_path = Path(str(dump_path_raw)).expanduser()
+            if not dump_path.is_absolute():
+                dump_path = dump_path.resolve()
+            dump_path.parent.mkdir(parents=True, exist_ok=True)
+            dump_path.write_text(
+                _SystemMessageMiddleware._serialize_system_message_content(system_message.content),
+                encoding="utf-8",
+            )
+        except Exception:
+            logger.warning("Failed to dump rendered system prompt to %s", dump_path_raw, exc_info=True)
+
     def wrap_model_call(self, request, handler):
         request = self._render_request_system_message(request)
+        self._write_system_prompt_dump(request)
         return handler(request)
 
     async def awrap_model_call(self, request, handler):
         request = self._render_request_system_message(request)
+        self._write_system_prompt_dump(request)
         return await handler(request)
 
 

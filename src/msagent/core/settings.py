@@ -87,6 +87,11 @@ class Settings(BaseSettings):
         description="The log level",
         validation_alias="MSAGENT_LOG_LEVEL",
     )
+    system_prompt_dump_path: str | None = Field(
+        default=None,
+        description="Optional file path used to dump the rendered system prompt before model calls",
+        validation_alias="MSAGENT_SYSTEM_PROMPT_DUMP_PATH",
+    )
     suppress_grpc_warnings: bool = Field(default=True, description="Suppress gRPC warnings")
     llm: LLMSettings = Field(default_factory=LLMSettings, description="The LLM settings")
     tool_settings: ToolSettings = Field(default_factory=ToolSettings, description="The tool settings")

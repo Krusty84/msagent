@@ -29,6 +29,89 @@ from yaml import YAMLError  # type: ignore[import-untyped]
 from msagent.core.constants import DEFAULT_CONFIG_DIR
 
 DEFAULT_SKILL_CATEGORY = "default"
+SKILL_GROUP_PROFILING_CORE = "Profiling Core Analysis"
+SKILL_GROUP_PROFILING_EXTENDED = "Profiling Specialized Diagnostics"
+SKILL_GROUP_PROFILING_LEGACY = "Profiling Collection and Legacy Skills"
+SKILL_GROUP_DOCUMENTATION = "Documentation and External References"
+SKILL_GROUP_MSMODELING = "msmodeling"
+SKILL_GROUP_QUANTIZATION = "msmodelslim / Quantization"
+SKILL_GROUP_OTHER = "Other"
+SKILL_GROUP_ORDER = {
+    SKILL_GROUP_PROFILING_CORE: 0,
+    SKILL_GROUP_PROFILING_EXTENDED: 1,
+    SKILL_GROUP_PROFILING_LEGACY: 2,
+    SKILL_GROUP_DOCUMENTATION: 3,
+    SKILL_GROUP_MSMODELING: 4,
+    SKILL_GROUP_QUANTIZATION: 5,
+    SKILL_GROUP_OTHER: 6,
+}
+
+_PROFILING_CORE_SKILL_NAMES = {
+    "ascend-cluster-fast-slow-rank-detector",
+    "ascend-communication-analysis",
+    "ascend-computation-analysis",
+    "ascend-msprof-analyze-cli",
+    "ascend-profiler-data-validation",
+    "ascend-profiler-db-explorer",
+    "ascend-schedule-analysis",
+    "op-mfu-calculator",
+}
+_PROFILING_EXTENDED_SKILL_NAMES = {
+    "ascend-npu-snapshot-analyzer",
+    "ascendc-operator-performance-optim",
+    "deterministic-calculation-analysis",
+    "mindstudio-cpu-binding",
+    "msot-msopprof-operator-profiler",
+    "nan-overflow-detection",
+    "rl-consistency-analysis",
+}
+_DOCUMENTATION_SKILL_NAMES = {
+    "document-ux-review",
+    "github-raw-fetch",
+    "gitcode-code-reviewer",
+}
+_QUANTIZATION_SKILL_NAMES = {
+    "gen-evaluation-cfg",
+    "tune-practice-cfg",
+}
+
+
+def classify_skill_group(
+    name: str,
+    *,
+    category: str = DEFAULT_SKILL_CATEGORY,
+) -> str:
+    """Map a skill to a stable human-readable group label."""
+    normalized_name = str(name or "").strip().lower()
+    normalized_category = str(category or DEFAULT_SKILL_CATEGORY).strip().lower()
+
+    if normalized_name in _PROFILING_CORE_SKILL_NAMES:
+        return SKILL_GROUP_PROFILING_CORE
+    if normalized_name in _PROFILING_EXTENDED_SKILL_NAMES:
+        return SKILL_GROUP_PROFILING_EXTENDED
+    if normalized_category == "profiling" or normalized_name == "profiling":
+        return SKILL_GROUP_PROFILING_LEGACY
+    if normalized_name in _DOCUMENTATION_SKILL_NAMES:
+        return SKILL_GROUP_DOCUMENTATION
+    if normalized_name.startswith("msmodeling-"):
+        return SKILL_GROUP_MSMODELING
+    if (
+        normalized_name.startswith("msmodelslim-")
+        or normalized_name.startswith("quant-")
+        or normalized_name in _QUANTIZATION_SKILL_NAMES
+    ):
+        return SKILL_GROUP_QUANTIZATION
+    return SKILL_GROUP_OTHER
+
+
+def skill_group_sort_key(
+    name: str,
+    *,
+    category: str = DEFAULT_SKILL_CATEGORY,
+) -> tuple[int, str, str]:
+    """Return a stable sort key that groups related skills together."""
+    group = classify_skill_group(name, category=category)
+    return (SKILL_GROUP_ORDER.get(group, len(SKILL_GROUP_ORDER)), group, str(name).casefold())
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +132,10 @@ class Skill:
         if self.category == DEFAULT_SKILL_CATEGORY:
             return self.name
         return f"{self.category}/{self.name}"
+
+    @property
+    def group_label(self) -> str:
+        return classify_skill_group(self.name, category=self.category)
 
     def get_script_relative_paths(self, limit: int = 8) -> list[str]:
         scripts_dir = self.root_dir / "scripts"

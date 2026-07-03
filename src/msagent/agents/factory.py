@@ -24,9 +24,11 @@ import logging
 import string
 import os
 import tempfile
+from functools import partial
 from fnmatch import fnmatch
 from importlib import import_module
 from pathlib import Path
+from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Any, Callable
 
 from deepagents import create_deep_agent
@@ -70,6 +72,52 @@ _TAVILY_VALIDATE_TIMEOUT_SECONDS = 5.0
 _TAVILY_KEY_VALIDATION_CACHE: dict[str, bool] = {}
 _SEARCH_TOOL_NAME_KEYWORDS = ("search", "web_search")
 _SEARCH_TOOL_DESCRIPTION_KEYWORDS = ("search", "web", "internet", "query")
+_THIRD_PARTY_PROMPTS_PATCHED = False
+_FILTERED_SKILLS_SYSTEM_PROMPT_PREFIX = """
+
+## Skills
+
+Use only the skills listed below. Call `get_skill(name, category)` before using a skill, then follow the SKILL.md workflow.
+"""
+_COMPACT_BASE_AGENT_PROMPT = """You are a tool-using agent. Be concise, accurate, and action-oriented.
+
+- Read relevant context before editing or concluding.
+- Prefer acting directly over narrating intent.
+- Verify important results against the user's request.
+- Ask only when ambiguity or risk is material."""
+_COMPACT_TODO_SYSTEM_PROMPT = """## `write_todos`
+
+Use `write_todos` only for complex multi-step work or when the user explicitly asks for todo tracking.
+- Never call `write_todos` more than once in the same turn.
+- Mark active work as `in_progress`.
+- Mark tasks `completed` immediately after finishing them."""
+_COMPACT_FILESYSTEM_SYSTEM_PROMPT = """## Filesystem Tools
+
+Use filesystem tools instead of shell for reading, searching, and editing files.
+- Read a file before editing it.
+- Use pagination (`offset` / `limit`) for large files.
+- All file paths must be absolute and start with `/`."""
+_COMPACT_EXECUTION_SYSTEM_PROMPT = """## Execute Tool `execute`
+
+Use `execute` for shell commands, scripts, tests, and builds.
+- Prefer dedicated filesystem tools over `cat`, `grep`, or `find`.
+- Use absolute paths and quote paths that contain spaces."""
+_COMPACT_TASK_SYSTEM_PROMPT = """## `task`
+
+Use `task` to delegate independent multi-step work or parallelizable investigations to subagents.
+- Avoid `task` for trivial work.
+- Reconcile subagent results in the main thread."""
+_COMPACT_MEMORY_SYSTEM_PROMPT = """<agent_memory>
+{agent_memory}
+</agent_memory>
+
+<memory_guidelines>
+Persist only durable preferences, role instructions, and reusable task context.
+- Do not store transient details or secrets.
+- Ask for missing identifiers before acting.
+- If the user explicitly asks to remember durable information, update memory promptly.
+</memory_guidelines>
+"""
 
 
 class _ToolPatternFilterMiddleware(AgentMiddleware[Any, Any, Any]):
@@ -166,6 +214,105 @@ class _SystemMessageMiddleware(AgentMiddleware[Any, Any, Any]):
         return await handler(request)
 
 
+class _FilteredSkillsMiddleware(SkillsMiddleware):
+    """Load skills metadata, then keep only the skills allowed by the current agent patterns."""
+
+    def __init__(self, *, backend: Any, sources: list[str], allowed_skill_paths: set[str]) -> None:
+        super().__init__(backend=backend, sources=sources)
+        self._allowed_skill_paths = allowed_skill_paths
+        self.system_prompt_prefix = _FILTERED_SKILLS_SYSTEM_PROMPT_PREFIX
+
+    @staticmethod
+    def _normalize_skill_path(path: str) -> str:
+        return PurePosixPath(path.replace("\\", "/")).as_posix()
+
+    def _filter_skills_metadata(self, skills_metadata: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if not self._allowed_skill_paths:
+            return []
+        return [
+            skill
+            for skill in skills_metadata
+            if self._normalize_skill_path(str(skill.get("path", ""))) in self._allowed_skill_paths
+        ]
+
+    def _sorted_filtered_skills(self, skills_metadata: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return sorted(
+            self._filter_skills_metadata(skills_metadata),
+            key=lambda skill: (
+                str(skill.get("category", "default")).casefold(),
+                str(skill.get("name", "")).casefold(),
+            ),
+        )
+
+    def _format_skills_list(self, skills_metadata: list[dict[str, Any]]) -> str:
+        sorted_skills = self._sorted_filtered_skills(skills_metadata)
+        if not sorted_skills:
+            return "- No skills enabled for the current agent."
+
+        lines: list[str] = []
+        for skill in sorted_skills:
+            category = str(skill.get("category", "default"))
+            lines.append(f"- `{category}/{skill['name']}`: {skill['description']}")
+            lines.append(f"  Read `{skill['path']}` for full instructions.")
+        return "\n".join(lines)
+
+    def modify_request(self, request):
+        skills_metadata = list(request.state.get("skills_metadata", []))
+        skills_list = self._format_skills_list(skills_metadata)
+        skills_section = f"{self.system_prompt_prefix}\n{skills_list}\n"
+        system_message = getattr(request, "system_message", None)
+        if system_message is None:
+            return request
+        from deepagents.middleware._utils import append_to_system_message
+
+        return request.override(system_message=append_to_system_message(system_message, skills_section))
+
+    def before_agent(self, state, runtime, config):
+        update = super().before_agent(state, runtime, config)
+        if update is None:
+            return None
+        return {"skills_metadata": self._sorted_filtered_skills(list(update.get("skills_metadata", [])))}
+
+    async def abefore_agent(self, state, runtime, config):
+        update = await super().abefore_agent(state, runtime, config)
+        if update is None:
+            return None
+        return {"skills_metadata": self._sorted_filtered_skills(list(update.get("skills_metadata", [])))}
+
+
+def patch_third_party_prompt_defaults() -> None:
+    """Patch verbose third-party prompts with compact project defaults."""
+    global _THIRD_PARTY_PROMPTS_PATCHED
+    if _THIRD_PARTY_PROMPTS_PATCHED:
+        return
+
+    import deepagents.graph as deepagents_graph
+    import deepagents.middleware.filesystem as deepagents_filesystem
+    import deepagents.middleware.memory as deepagents_memory
+    import deepagents.middleware.subagents as deepagents_subagents
+    from langchain.agents.middleware.todo import TodoListMiddleware, WRITE_TODOS_TOOL_DESCRIPTION
+
+    for module, attr, prompt in (
+        (deepagents_graph, "BASE_AGENT_PROMPT", _COMPACT_BASE_AGENT_PROMPT),
+        (deepagents_filesystem, "FILESYSTEM_SYSTEM_PROMPT", _COMPACT_FILESYSTEM_SYSTEM_PROMPT),
+        (deepagents_filesystem, "EXECUTION_SYSTEM_PROMPT", _COMPACT_EXECUTION_SYSTEM_PROMPT),
+        (deepagents_memory, "MEMORY_SYSTEM_PROMPT", _COMPACT_MEMORY_SYSTEM_PROMPT),
+    ):
+        setattr(module, attr, prompt)
+
+    deepagents_graph.TodoListMiddleware = partial(
+        TodoListMiddleware,
+        system_prompt=_COMPACT_TODO_SYSTEM_PROMPT,
+        tool_description=WRITE_TODOS_TOOL_DESCRIPTION,
+    )
+    deepagents_graph.SubAgentMiddleware = partial(
+        deepagents_subagents.SubAgentMiddleware,
+        system_prompt=_COMPACT_TASK_SYSTEM_PROMPT,
+    )
+
+    _THIRD_PARTY_PROMPTS_PATCHED = True
+
+
 class AgentFactory:
     """Factory for creating deepagents-based graphs."""
 
@@ -185,6 +332,7 @@ class AgentFactory:
         context_schema: type[Any] | None = None,
         mcp_client: Any | None = None,
         skills_dir: Path | list[Path] | None = None,
+        allowed_skills: list[Any] | None = None,
         checkpointer: BaseCheckpointSaver | None = None,
         llm_config: LLMConfig | None = None,
         sandbox_bindings: list[Any] | None = None,
@@ -192,6 +340,7 @@ class AgentFactory:
     ) -> CompiledStateGraph:
         del sandbox_bindings
 
+        patch_third_party_prompt_defaults()
         patch_deepagents_windows_absolute_paths()
         working_dir = (working_dir or Path.cwd()).resolve()
         resolved_llm = llm_config or config.llm
@@ -261,6 +410,7 @@ class AgentFactory:
         all_tools = [*runtime_tools, *mcp_tools]
 
         skills_sources = self._resolve_existing_paths(skills_dir)
+        allowed_skill_paths = self._build_allowed_skill_paths(allowed_skills)
         memory_sources = self._ensure_memory_file(working_dir)
         enable_skills_middleware = self._should_enable_skills_middleware(
             config=config,
@@ -282,6 +432,7 @@ class AgentFactory:
             config=config,
             agent_backend=agent_backend,
             skills_sources=skills_sources,
+            allowed_skills=allowed_skills,
             catalog_runtime_tools=catalog_runtime_tools,
             catalog_mcp_tools=catalog_mcp_tools,
             mcp_module_map=mcp_module_map,
@@ -298,9 +449,10 @@ class AgentFactory:
             )
         if enable_skills_middleware:
             middleware.append(
-                SkillsMiddleware(
+                _FilteredSkillsMiddleware(
                     backend=metadata_backend,
                     sources=skills_sources,
+                    allowed_skill_paths=allowed_skill_paths,
                 )
             )
         tool_output_max_tokens = (
@@ -411,6 +563,7 @@ class AgentFactory:
         config: AgentConfig,
         agent_backend: Any,
         skills_sources: list[str],
+        allowed_skills: list[Any] | None,
         catalog_runtime_tools: list[Any],
         catalog_mcp_tools: list[Any],
         mcp_module_map: dict[str, str],
@@ -472,13 +625,15 @@ class AgentFactory:
                     )
                 spec["tools"] = [*rt, *mcp]
 
-            if self._should_enable_skills_middleware(config=sub, skills_sources=skills_sources):
-                spec["skills"] = list(skills_sources)
-
             extra_mw = self._subagent_extra_middleware(
                 sub=sub,
                 agent_backend=agent_backend,
                 fallback_retry=main_retry,
+                skills_sources=skills_sources,
+                allowed_skills=self._filter_skills_by_patterns(
+                    allowed_skills,
+                    patterns=list(getattr(getattr(sub, "skills", None), "patterns", []) or []),
+                ),
             )
             if extra_mw:
                 spec["middleware"] = extra_mw
@@ -492,6 +647,8 @@ class AgentFactory:
         sub: SubAgentConfig,
         agent_backend: Any,
         fallback_retry: RetryPolicyConfig | None,
+        skills_sources: list[str],
+        allowed_skills: list[Any] | None,
     ) -> list[AgentMiddleware[Any, Any, Any]]:
         extra: list[AgentMiddleware[Any, Any, Any]] = []
         retry_cfg = sub.retry if sub.retry is not None else fallback_retry
@@ -535,6 +692,14 @@ class AgentFactory:
                 ToolResultEvictionMiddleware(
                     backend=agent_backend,
                     tool_token_limit_before_evict=int(sub_tools.output_max_tokens),
+                )
+            )
+        if self._should_enable_skills_middleware(config=sub, skills_sources=skills_sources):
+            extra.append(
+                _FilteredSkillsMiddleware(
+                    backend=FilesystemBackend(virtual_mode=False),
+                    sources=skills_sources,
+                    allowed_skill_paths=self._build_allowed_skill_paths(allowed_skills),
                 )
             )
         return extra
@@ -908,25 +1073,46 @@ class AgentFactory:
         )
 
     @staticmethod
-    def _build_skills_text(skills: list[Any], use_catalog: bool) -> str:
+    def _normalize_skill_path(path: Any) -> str:
+        return PurePosixPath(str(path or "").replace("\\", "/")).as_posix()
+
+    @classmethod
+    def _build_allowed_skill_paths(cls, allowed_skills: list[Any] | None) -> set[str]:
+        return {
+            cls._normalize_skill_path(path)
+            for skill in (allowed_skills or [])
+            if (path := getattr(skill, "path", None)) is not None and str(path).strip()
+        }
+
+    @staticmethod
+    def _filter_skills_by_patterns(skills: list[Any] | None, patterns: list[str]) -> list[Any]:
         if not skills:
-            return ""
+            return []
+        if not patterns:
+            return list(skills)
 
-        lines = [
-            "Available skills:",
-            "Always call `get_skill(name, category)` before using a skill.",
-        ]
+        positive_patterns = [p for p in patterns if p and not p.startswith("!")]
+        negative_patterns = [p[1:] for p in patterns if p.startswith("!")]
+        if not positive_patterns:
+            return []
+
+        def matches(pattern: str, *, category: str, name: str) -> bool:
+            parts = pattern.split(":")
+            if len(parts) != 2:
+                return False
+            category_p, name_p = parts
+            return fnmatch(category, category_p) and fnmatch(name, name_p)
+
+        filtered: list[Any] = []
         for skill in skills:
-            scripts: list[str] = getattr(skill, "get_script_relative_paths", lambda: [])()
-            scripts_text = f" (scripts: {', '.join(f'`{p}`' for p in scripts)})" if scripts else ""
-            lines.append(
-                f"- {getattr(skill, 'display_name', getattr(skill, 'name', 'unknown'))}: "
-                f"{getattr(skill, 'description', '')}{scripts_text}"
-            )
-
-        if not use_catalog:
-            lines.append("When scripts are present under `scripts/`, prefer running those scripts.")
-        return "\n".join(lines)
+            category = str(getattr(skill, "category", "default"))
+            name = str(getattr(skill, "name", ""))
+            if not any(matches(pattern, category=category, name=name) for pattern in positive_patterns):
+                continue
+            if any(matches(pattern, category=category, name=name) for pattern in negative_patterns):
+                continue
+            filtered.append(skill)
+        return filtered
 
     @staticmethod
     def _resolve_retry_on_exceptions(

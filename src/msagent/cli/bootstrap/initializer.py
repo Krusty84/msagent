@@ -211,6 +211,7 @@ class Initializer:
                 mcp_client=mcp_client,
                 llm_config=llm_config,
                 skills_dir=runtime_skills_dirs,
+                allowed_skills=filtered_skills,
                 sandbox_bindings=None,
                 interrupt_on=interrupt_on,
             )

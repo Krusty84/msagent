@@ -26,6 +26,7 @@ import pytest
 from msagent.configs.registry import ConfigRegistry
 from msagent.core.constants import CONFIG_APPROVAL_FILE_NAME, LLM_CONFIG_VERSION
 from msagent.skills.factory import SkillFactory
+from msagent.tools.internal.memory import DEFAULT_MEMORY_FILE_CONTENT
 
 
 def _load_default_msprof_server() -> dict:
@@ -84,6 +85,7 @@ async def test_config_registry_bootstraps_default_layout(tmp_path: Path) -> None
     assert (config_dir / "config.llms.yml").exists()
     assert (config_dir / "config.mcp.json").exists()
     assert (config_dir / CONFIG_APPROVAL_FILE_NAME.name).exists()
+    assert (config_dir / "memory.md").exists()
 
     mcp_config = json.loads((config_dir / "config.mcp.json").read_text())
     assert "msprof-mcp" in mcp_config["mcpServers"]
@@ -126,6 +128,26 @@ async def test_config_registry_bootstraps_default_layout(tmp_path: Path) -> None
     assert modeling["default"] is False
     assert minos["name"] == "Minos"
     assert minos["skills"]["patterns"] == default_minos["skills"]["patterns"]
+
+
+@pytest.mark.asyncio
+async def test_load_user_memory_ignores_default_template(tmp_path: Path) -> None:
+    registry = ConfigRegistry(tmp_path)
+    memory_file = tmp_path / ".msagent" / "memory.md"
+    memory_file.parent.mkdir(parents=True)
+    memory_file.write_text(DEFAULT_MEMORY_FILE_CONTENT, encoding="utf-8")
+
+    assert await registry.load_user_memory() == ""
+
+
+@pytest.mark.asyncio
+async def test_load_user_memory_wraps_user_content(tmp_path: Path) -> None:
+    registry = ConfigRegistry(tmp_path)
+    memory_file = tmp_path / ".msagent" / "memory.md"
+    memory_file.parent.mkdir(parents=True)
+    memory_file.write_text("- 用户喜欢中文回复\n", encoding="utf-8")
+
+    assert await registry.load_user_memory() == "<user-memory>\n- 用户喜欢中文回复\n</user-memory>"
 
 
 @pytest.mark.asyncio

@@ -84,6 +84,7 @@ async def test_config_registry_bootstraps_default_layout(tmp_path: Path) -> None
     assert (config_dir / "config.llms.yml").exists()
     assert (config_dir / "config.mcp.json").exists()
     assert (config_dir / CONFIG_APPROVAL_FILE_NAME.name).exists()
+    assert (config_dir / "memory.md").exists()
 
     mcp_config = json.loads((config_dir / "config.mcp.json").read_text())
     assert "msprof-mcp" in mcp_config["mcpServers"]

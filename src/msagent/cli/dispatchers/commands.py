@@ -10,6 +10,7 @@ from msagent.cli.handlers import (
     AgentHandler,
     CompressionHandler,
     MCPHandler,
+    MemoryHandler,
     ModelHandler,
     SkillsHandler,
     ToolOutputHandler,
@@ -33,6 +34,7 @@ class CommandDispatcher:
         self.agent_handler = AgentHandler(session)
         self.model_handler = ModelHandler(session)
         self.mcp_handler = MCPHandler(session)
+        self.memory_handler = MemoryHandler(session)
         self.tools_handler = ToolsHandler(session)
         self.skills_handler = SkillsHandler(session)
         self.threads_handler = ThreadsHandler(session)
@@ -51,6 +53,8 @@ class CommandDispatcher:
             "/skills": self.cmd_skills,
             "/add-skill": self.cmd_add_skill,
             "/mcp": self.cmd_mcp,
+            "/remember": self.cmd_remember,
+            "/showmemory": self.cmd_showmemory,
             "/offload": self.cmd_offload,
             "/tool-output": self.cmd_tool_output,
             "/clear": self.cmd_clear,
@@ -128,6 +132,14 @@ class CommandDispatcher:
     async def cmd_mcp(self, args: list[str]) -> None:
         """Handle MCP management command."""
         await self.mcp_handler.handle()
+
+    async def cmd_remember(self, args: list[str]) -> None:
+        """Save durable memory. Usage: /remember <content>."""
+        await self.memory_handler.remember(args)
+
+    async def cmd_showmemory(self, args: list[str]) -> None:
+        """Show current project memory."""
+        await self.memory_handler.show(args)
 
     async def cmd_offload(self, args: list[str]) -> None:
         """Summarize older messages and offload raw history to backend storage."""

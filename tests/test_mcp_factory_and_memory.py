@@ -25,7 +25,12 @@ import pytest
 from msagent.configs import MCPConfig
 from msagent.mcp.factory import MCPFactory
 from msagent.tools.factory import ToolFactory
-from msagent.tools.internal.memory import read_memory_file
+from msagent.tools.internal.memory import (
+    DEFAULT_MEMORY_FILE_CONTENT,
+    append_memory_entry,
+    ensure_memory_file,
+    read_memory_file,
+)
 
 
 def test_mcp_factory_uses_default_tool_factory_when_none_provided() -> None:
@@ -70,6 +75,44 @@ def test_read_memory_file_returns_empty_when_memory_does_not_exist(
     tmp_path: Path,
 ) -> None:
     assert read_memory_file(tmp_path) == ""
+
+
+def test_ensure_memory_file_creates_default_template(tmp_path: Path) -> None:
+    memory_file = ensure_memory_file(tmp_path)
+
+    assert memory_file == tmp_path / ".msagent" / "memory.md"
+    assert memory_file.read_text(encoding="utf-8") == DEFAULT_MEMORY_FILE_CONTENT
+
+
+def test_ensure_memory_file_preserves_existing_memory(tmp_path: Path) -> None:
+    memory_file = tmp_path / ".msagent" / "memory.md"
+    memory_file.parent.mkdir(parents=True)
+    memory_file.write_text("existing memory", encoding="utf-8")
+
+    assert ensure_memory_file(tmp_path) == memory_file
+    assert memory_file.read_text(encoding="utf-8") == "existing memory"
+
+
+def test_append_memory_entry_replaces_default_empty_bullet(tmp_path: Path) -> None:
+    memory_file = append_memory_entry("用户喜欢中文回复", tmp_path)
+
+    assert memory_file.read_text(encoding="utf-8") == (
+        "# msagent memory\n"
+        "\n"
+        "Store durable user preferences and project facts here.\n"
+        "\n"
+        "- 用户喜欢中文回复\n"
+    )
+
+
+def test_append_memory_entry_preserves_existing_entries(tmp_path: Path) -> None:
+    memory_file = tmp_path / ".msagent" / "memory.md"
+    memory_file.parent.mkdir(parents=True)
+    memory_file.write_text("# memory\n\n- first\n", encoding="utf-8")
+
+    append_memory_entry("second", tmp_path)
+
+    assert memory_file.read_text(encoding="utf-8") == "# memory\n\n- first\n- second\n"
 
 
 def test_read_memory_file_reads_utf8_content(tmp_path: Path) -> None:

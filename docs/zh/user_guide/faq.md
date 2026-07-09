@@ -108,11 +108,3 @@ OPENAI_API_KEY=your-key
 ## 8. 普通安装和源码运行应该怎么选？
 
 普通用户优先使用 `pip install mindstudio-agent`；源码开发、文档验证或本地调试时，参考 [贡献指南](../developer_guide/contributing.md) 使用 `uv sync --dev` 和 `uv run msagent ...`。
-
-## 9. 每次运行都出现 LangChain warning，会影响使用吗？
-
-`LangChainPendingDeprecationWarning` 通常是上游依赖的兼容性提醒。只要命令正常输出且退出码为 0，一般不影响当前运行；排查真实错误时优先看命令退出码、报错堆栈和 `.msagent/logs/app.log`。
-
-## 10. Windows / Git Bash 下使用有什么注意事项？
-
-建议安装、配置和运行都在同一个 Git Bash 终端中完成，源码运行时优先在仓库根目录执行 `uv run msagent ...`。不要把 `.env`、`.msagent/`、`.venv/`、`dist/`、`docs/_build/` 提交到 Git 仓库。

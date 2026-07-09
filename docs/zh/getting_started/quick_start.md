@@ -32,8 +32,6 @@ msagent --version
    | --- |------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
    | OpenAI 兼容接口 | `export OPENAI_API_KEY="your-key"`<br>`msagent config --llm-provider openai --llm-base-url "https://api.deepseek.com" --llm-model "deepseek-v4-flash" # 以DeepSeek为例`   |
    | 本地 OpenAI 兼容服务 | `export OPENAI_API_KEY="dummy"  # 如本地模型服务无密钥，可填入任意非空字符串`<br>`msagent config --llm-provider openai --llm-base-url "http://127.0.0.1:8000/v1" --llm-model "your-model"` |
-   | Anthropic 兼容服务 | `export ANTHROPIC_API_KEY="your-key"`<br>`msagent config --llm-provider anthropic --llm-base-url "https://example.com/anthropic" --llm-model "claude-sonnet-4-20250514"` |
-   | Google / Gemini 服务 | `export GOOGLE_API_KEY="your-key"`<br>`msagent config --llm-provider google --llm-base-url "https://example.com/google" --llm-model "gemini-2.5-pro"`                  |
 
    如果不希望每次打开终端都执行 `export`，也可以在运行命令的工作目录创建 `.env` 文件并写入对应环境变量，例如 `OPENAI_API_KEY=your-key`。`.env` 仅用于本地运行，请勿提交到 Git 仓库。更多说明见 [FAQ](../user_guide/faq.md)。
 

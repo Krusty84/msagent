@@ -57,16 +57,3 @@ uv run msagent --version
 ```
 
 When running from source, replace `msagent ...` with `uv run msagent ...`.
-
-## Does the LangChain warning affect usage?
-
-`LangChainPendingDeprecationWarning` is usually an upstream dependency warning about future default behavior. If the command exits successfully and prints the expected output, it generally does not block current usage.
-
-For real failures, check the exit code, traceback, and `.msagent/logs/app.log`.
-
-## Windows / Git Bash notes
-
-- Prefer running install, configuration, and `msagent` commands in the same Git Bash terminal.
-- In the source repository, prefer `uv run msagent ...`.
-- Use paths that your shell understands, such as `E:/Code/msagent` or `/e/Code/msagent`.
-- Do not commit `.env`, `.msagent/`, `.venv/`, `dist/`, or `docs/_build/`.

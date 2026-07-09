@@ -55,7 +55,7 @@
 - 当前 Agent 的 `skills.patterns` 是否允许该 Skill
 - 是否被更高优先级目录中的同名 Skill 覆盖
 
-加载自定义 Skill，可参考[添加自定义 Skill](configuration-and-extension.md#添加自定义-skill)
+加载自定义 Skill，可参考[配置与扩展](configuration-and-extension.md)。
 
 ## 4. 运行日志在哪里看？
 
@@ -94,3 +94,25 @@ MobaXterm 默认未设置 `COLORTERM`，导致 prompt_toolkit 无法识别真彩
 ```bash
 export COLORTERM=truecolor
 ```
+
+## 7. `.env` 和 `export` 应该怎么选？
+
+`export` 适合当前终端临时使用；`.env` 适合固定项目目录反复使用。`msagent` 会读取当前工作目录下的 `.env`，常见内容为：
+
+```text
+OPENAI_API_KEY=your-key
+```
+
+不同 provider 使用不同环境变量，例如 `ANTHROPIC_API_KEY` 或 `GOOGLE_API_KEY`。`.env` 只用于本地运行，不应提交到 Git 仓库。可通过 `msagent config --show` 确认 `API Key` 是否显示为 `Set`。
+
+## 8. 普通安装和源码运行应该怎么选？
+
+普通用户优先使用 `pip install mindstudio-agent`；源码开发、文档验证或本地调试时，参考 [贡献指南](../developer_guide/contributing.md) 使用 `uv sync --dev` 和 `uv run msagent ...`。
+
+## 9. 每次运行都出现 LangChain warning，会影响使用吗？
+
+`LangChainPendingDeprecationWarning` 通常是上游依赖的兼容性提醒。只要命令正常输出且退出码为 0，一般不影响当前运行；排查真实错误时优先看命令退出码、报错堆栈和 `.msagent/logs/app.log`。
+
+## 10. Windows / Git Bash 下使用有什么注意事项？
+
+建议安装、配置和运行都在同一个 Git Bash 终端中完成，源码运行时优先在仓库根目录执行 `uv run msagent ...`。不要把 `.env`、`.msagent/`、`.venv/`、`dist/`、`docs/_build/` 提交到 Git 仓库。

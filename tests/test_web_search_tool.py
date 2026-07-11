@@ -49,6 +49,7 @@ async def test_run_duckduckgo_search_returns_plain_text(monkeypatch: pytest.Monk
 
 @pytest.mark.asyncio
 async def test_web_search_returns_plain_text_results(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("BING_SEARCH_API_KEY", raising=False)
     monkeypatch.setattr(
         web_search_module,
         "_run_duckduckgo_search",
@@ -62,6 +63,7 @@ async def test_web_search_returns_plain_text_results(monkeypatch: pytest.MonkeyP
 
 @pytest.mark.asyncio
 async def test_web_search_reports_no_results_as_business_message(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("BING_SEARCH_API_KEY", raising=False)
     monkeypatch.setattr(
         web_search_module,
         "_run_duckduckgo_search",
@@ -77,6 +79,7 @@ async def test_web_search_reports_no_results_as_business_message(monkeypatch: py
 
 @pytest.mark.asyncio
 async def test_web_search_reraises_execution_failures(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("BING_SEARCH_API_KEY", raising=False)
     monkeypatch.setattr(
         web_search_module,
         "_run_duckduckgo_search",
@@ -85,3 +88,37 @@ async def test_web_search_reraises_execution_failures(monkeypatch: pytest.Monkey
 
     with pytest.raises(ToolException, match="DuckDuckGo search timed out after 10s"):
         await web_search.coroutine(query="deepagents")
+
+
+@pytest.mark.asyncio
+async def test_web_search_prefers_bing_when_key_is_available(monkeypatch: pytest.MonkeyPatch) -> None:
+    bing_search = AsyncMock(return_value="bing search result")
+    duckduckgo_search = AsyncMock(return_value="duckduckgo search result")
+    monkeypatch.setenv("BING_SEARCH_API_KEY", "bing-key")
+    monkeypatch.setattr(web_search_module, "_run_bing_search", bing_search)
+    monkeypatch.setattr(web_search_module, "_run_duckduckgo_search", duckduckgo_search)
+
+    result = await web_search.coroutine(query="deepagents")
+
+    assert result == "bing search result"
+    bing_search.assert_awaited_once_with("deepagents")
+    duckduckgo_search.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_web_search_falls_back_to_duckduckgo_when_bing_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BING_SEARCH_API_KEY", "bing-key")
+    monkeypatch.setattr(
+        web_search_module,
+        "_run_bing_search",
+        AsyncMock(side_effect=ToolException("Bing search failed with HTTP 401")),
+    )
+    monkeypatch.setattr(
+        web_search_module,
+        "_run_duckduckgo_search",
+        AsyncMock(return_value="duckduckgo search result"),
+    )
+
+    result = await web_search.coroutine(query="deepagents")
+
+    assert result == "duckduckgo search result"

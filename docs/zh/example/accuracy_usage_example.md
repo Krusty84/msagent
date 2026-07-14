@@ -77,11 +77,11 @@ Agent：
 
 ---
 
-这是一个关于 模块层级输出关系 的重要问题。让我解释可能的原因：                                                                                                                                                                                                                    
+这是一个关于 模块层级输出关系 的重要问题。让我解释可能的原因：
 
-  关键理解：DecoderLayer 的输出 ≠ MLP 的输出                                                                                                                                                                                                                              
+  关键理解：DecoderLayer 的输出 ≠ MLP 的输出
 
-  Qwen2DecoderLayer 的典型结构：                                                                                                                                                                                                                                       
+  Qwen2DecoderLayer 的典型结构：
 
 ```plain
   def forward(self, hidden_states, ...):
@@ -90,21 +90,21 @@ Agent：
       hidden_states = self.input_layernorm(hidden_states)
       hidden_states = self.self_attn(hidden_states, ...)
       hidden_states = residual + hidden_states  # residual connection
-      
-      # MLP block  
+
+      # MLP block
       residual = hidden_states
       hidden_states = self.post_attention_layernorm(hidden_states)
       hidden_states = self.mlp(hidden_states)
       hidden_states = residual + hidden_states  # 关键！residual connection
-      
+
       return hidden_states  # DecoderLayer 的输出
 ```
 
-  核心点：                                                                                                                                                                                                                                                               
+  核心点：
 
-   • DecoderLayer.output = residual + mlp.output（经过 residual connection）                                                                                                                                                                                                          
+   • DecoderLayer.output = residual + mlp.output（经过 residual connection）
 
-   • 不是直接等于 mlp.output                                                      
+   • 不是直接等于 mlp.output
 
 ---
 

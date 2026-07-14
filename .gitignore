@@ -58,6 +58,7 @@ test_data/
 .omx/
 .msagent/
 
+
 # Benchmark runtime outputs
 tests/benchmark/log/
 tests/benchmark/runs/*
@@ -68,3 +69,5 @@ tests/benchmark/data/kv_cache_type_page_seqlen_4096_bs_1_profile_count_0/
 
 # DS_Store
 .DS_Store
+
+AGENT.md

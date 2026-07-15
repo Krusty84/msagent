@@ -190,8 +190,6 @@ class AgentFactory:
         sandbox_bindings: list[Any] | None = None,
         interrupt_on: dict[str, bool | dict[str, Any]] | None = None,
     ) -> CompiledStateGraph:
-        del sandbox_bindings
-
         patch_deepagents_windows_absolute_paths()
         working_dir = (working_dir or Path.cwd()).resolve()
         resolved_llm = llm_config or config.llm
@@ -276,8 +274,19 @@ class AgentFactory:
                 mcp_servers=mcp_servers,
             )
 
+        # Resolve sandbox configuration for this agent.
+        sandbox_config = self._resolve_sandbox_for_agent(config, sandbox_bindings)
+        if sandbox_config is None and config.sandboxes is not None and config.sandboxes.enabled:
+            logger.warning(
+                "⚠️ SECURITY WARNING: Agent '%s' has sandboxes enabled but no usable "
+                "sandbox profile could be applied on this system. "
+                "Tools will run without OS-level isolation, with full access to "
+                "filesystem, environment variables, and network.",
+                config.name,
+            )
+
         middleware: list[AgentMiddleware[Any, Any, Any]] = []
-        agent_backend = self._build_composite_backend(working_dir)
+        agent_backend = self._build_composite_backend(working_dir, sandbox_config=sandbox_config)
         deepagents_subagents = self._build_deepagents_subagent_specs(
             config=config,
             agent_backend=agent_backend,
@@ -886,11 +895,46 @@ class AgentFactory:
         return [str(memory_file)]
 
     @staticmethod
-    def _build_composite_backend(working_dir: Path) -> CompositeBackend:
+    def _build_composite_backend(
+        working_dir: Path,
+        sandbox_config: Any | None = None,
+    ) -> CompositeBackend:
+        """Build the composite backend, optionally wrapped with OS-level sandbox.
+
+        Args:
+            working_dir: The working directory for the agent.
+            sandbox_config: Optional SandboxConfig to apply OS-level sandboxing.
+
+        Returns:
+            A CompositeBackend whose default backend may be sandbox-wrapped.
+        """
+        inherit_env = sandbox_config is None
         local_backend = LocalShellBackend(
             root_dir=str(working_dir),
-            inherit_env=True,
+            inherit_env=inherit_env,
         )
+
+        # Wrap with OS-level sandbox if a valid config is provided.
+        if sandbox_config is not None:
+            try:
+                from msagent.sandboxes.sandbox_backend import SandboxedShellBackend
+
+                local_backend = SandboxedShellBackend(
+                    inner=local_backend,
+                    sandbox_config=sandbox_config,
+                    working_dir=str(working_dir),
+                )
+                logger.info(
+                    "🔒 Agent sandbox enabled: type=%s, os=%s",
+                    sandbox_config.type.value,
+                    sandbox_config.os.value,
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to initialize sandbox backend for type '%s'. Tools will run without OS-level isolation.",
+                    sandbox_config.type.value,
+                )
+
         large_results_backend = FilesystemBackend(
             root_dir=tempfile.mkdtemp(prefix="msagent_large_tool_results_"),
             virtual_mode=True,
@@ -906,6 +950,72 @@ class AgentFactory:
                 "/conversation_history/": conversation_history_backend,
             },
         )
+
+    @staticmethod
+    def _resolve_sandbox_for_agent(
+        config: AgentConfig,
+        sandbox_bindings: list[Any] | None = None,
+    ) -> Any | None:
+        """Resolve the sandbox configuration to apply for this agent.
+
+        Priority:
+        1. Explicitly passed ``sandbox_bindings`` (from caller).
+        2. First enabled profile binding from ``config.sandboxes.profiles``.
+
+        Returns:
+            A ``SandboxConfig`` instance, or ``None`` if no sandbox is configured
+            or the sandbox is not available on the current platform.
+        """
+        from msagent.configs.sandbox import SandboxConfig
+        from msagent.sandboxes import validate_sandbox_config
+
+        # If the caller passed explicit bindings, use the first one that
+        # contains a valid SandboxConfig.
+        if sandbox_bindings:
+            for binding in sandbox_bindings:
+                if isinstance(binding, SandboxConfig):
+                    try:
+                        validate_sandbox_config(binding)
+                        return binding
+                    except (RuntimeError, ValueError):
+                        logger.debug(
+                            "Explicit sandbox binding '%s' is not usable on this host.",
+                            binding.name,
+                        )
+                        continue
+                elif hasattr(binding, "sandbox") and isinstance(getattr(binding, "sandbox"), SandboxConfig):
+                    sb = binding.sandbox
+                    try:
+                        validate_sandbox_config(sb)
+                        return sb
+                    except (RuntimeError, ValueError):
+                        logger.debug(
+                            "Explicit sandbox binding '%s' is not usable on this host.",
+                            sb.name,
+                        )
+                        continue
+
+        # Fall back to agent config sandboxes.
+        agent_sandboxes = config.sandboxes
+        if agent_sandboxes is None or not agent_sandboxes.enabled:
+            return None
+
+        for profile_binding in agent_sandboxes.profiles:
+            sb = profile_binding.sandbox
+            if sb is None:
+                continue
+            try:
+                validate_sandbox_config(sb)
+                return sb
+            except (RuntimeError, ValueError):
+                logger.debug(
+                    "Sandbox profile '%s' (type=%s) is not usable on this host.",
+                    sb.name,
+                    sb.type.value,
+                )
+                continue
+
+        return None
 
     @staticmethod
     def _build_skills_text(skills: list[Any], use_catalog: bool) -> str:

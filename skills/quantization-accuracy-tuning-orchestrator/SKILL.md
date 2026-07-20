@@ -43,7 +43,7 @@ metadata:
 
 - 支持：
     - Decoder-only LLM 的自动量化与调优
-    - VLM 文本主干的自动量化与调优（仅 LLM/文本路径）
+    - VLM 文本主干的自动量化与调优
 - 不支持：
     - 既非 transformers 也非模型目录内 `modeling_*.py` 的实现
     - 多模态生成模型（图像/视频/语音生成）的自动量化与调优

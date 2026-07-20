@@ -48,7 +48,8 @@ metadata:
 | `model_path` | `str` | 模型路径 |
 | `save_path` | `str` | 工作目录，Practice YAML 写入此目录下 |
 | `device` | `str` | 分析设备，如 `"npu"`、`"npu:0"`、`"gpu:0,1"` |
-| `strategy` | `str` | 调优策略：`"standing_high"` 或 `"standing_high_with_experience"` |
+| `strategy` | `str` | 调优策略：`"standing_high"`、`"standing_high_with_experience"` 或 `"vlm_standing_high"` |
+| `calib_dataset` | `str` | 校准数据集。`vlm_standing_high` 时必须是图像目录，或包含图文记录的 `index.json` / `index.jsonl`；不得传入纯文本 `.jsonl`。 |
 | `max_iterations` | `int` | 最大迭代轮次，由用户指定 |
 | `prev_result` | `dict \| None` | 上轮评测结果（EvaluateResult 结构），首轮为 `None` |
 | `anchor_practice` | `str \| None` | 当前已知最优且达标的 Practice YAML 路径（锚点） |
@@ -88,7 +89,7 @@ metadata:
 
 **调度优化**
 
-- 如果你在进行敏感层分析的时候，还有其他卡闲置可用，如果敏感层分析时长较长，则你可以同步地使用其他卡拉起第一轮的量化（注意指定不同的卡，如使用ASCEND_RT_VISIBLE_DEVICES环境变量等方式）以减少串行等待时间。在量化结束后，如果测评需要使用的卡中包含正在进行敏感层分析的卡，则你**必须**等待敏感层分析任务结束后再进行测评任务。
+- 如果你在进行敏感层分析的时候，还有其他已确认的 `selected_npu_ids` 范围内的设备，如果敏感层分析时长较长，则你可以同步地使用其他卡拉起第一轮的量化（注意指定不同的卡，如使用ASCEND_RT_VISIBLE_DEVICES环境变量等方式）以减少串行等待时间。在量化结束后，如果测评需要使用的卡中包含正在进行敏感层分析的卡，则你**必须**等待敏感层分析任务结束后再进行测评任务。
 
 ### ① 敏感层分析
 
@@ -127,7 +128,7 @@ msmodelslim analyze layer \
 **具体动作**：
 
 1. **确定本轮改动**（一次只改一两处字段，从预计算的敏感度得分中选择回退层，遵守同分同退约束）
-2. **构造完整的 Practice YAML 内容**（对齐 `modelslim_v1` 格式，详见 [量化配置格式](references/practice_yaml_format.md)）
+2. **构造完整的 Practice YAML 内容**（LLM 对齐 `modelslim_v1` 格式；VLM 对齐 `multimodal_vlm_modelslim_v1` 格式，详见 [量化配置格式](references/practice_yaml_format.md)）
 3. **写出文件**：将 YAML 内容写入 `{save_path}/practice_round_{N}.yaml`（N 为当前轮次），得到 `practice_path`
 
 | 改动项 | 说明 | 对应 YAML 位置 |

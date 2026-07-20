@@ -91,7 +91,7 @@ quant-tuning-quantize (tool)
 | `model_path` | string | ✅ | 原始模型路径 |
 | `save_path` | string | ✅ | 量化产物保存路径；须体现调优轮次，推荐 `{workdir}/round_{N}/quantized`（如 `round_1/quantized`） |
 | `model_type` | string | ✅ | 模型类型名 |
-| `device` | string | ✅ | 设备类型，如 `npu:0` |
+| `device` | string | ✅ | 设备类型。LLM 可使用 `npu:0`；VLM 推荐使用 `npu`，其设备索引会被服务忽略 |
 | `trust_remote_code` | bool | ❌ | 是否信任远程代码 |
 
 ---
@@ -111,6 +111,8 @@ msmodelslim quant \
 `save_path` 必须包含轮次与产物目录层级，便于 orchestrator 区分各轮权重，例如 `{workdir}/round_1/quantized`、`{workdir}/round_2/quantized`。
 
 **成功判定**：exit code 为 0，且 `${SAVE_PATH}` 下出现量化权重产物。
+
+VLM 服务使用服务器请使用 `--device npu`：`npu:0` 和 `npu:0,1` 可被 CLI 解析，但 VLM 服务会忽略设备索引并给出警告，不能用它们指定 VLM 量化设备。
 
 ### 错误处理
 
@@ -155,7 +157,7 @@ msmodelslim quant \
 - **单轮单次**：每次调用只执行一次量化
 - **config_path 模式**：调优闭环使用 `--config_path`，与 `--quant_type` 互斥
 - **save_path 命名**：每轮使用 `{workdir}/round_{N}/quantized`，N 为当前调优轮次（如 `round_1/quantized`）
-- **device**：优先使用单卡，即以 `--device npu:0`/`--device npu:3` 这种入参形式
+- **device**：LLM 优先使用单卡索引，如 `--device npu:0`；VLM 使用 `--device npu`，设备索引不会生效
 
 ---
 
@@ -173,6 +175,6 @@ msmodelslim quant \
 ## 检查清单
 
 - [ ] `config_path` 指向的 Practice YAML 已通过校验
-- [ ] `device` 格式正确（如 `npu:0`, `npu:0,1,2,3`），优先使用单卡
+- [ ] `device` 格式正确；VLM 使用 `npu`，LLM 可使用 `npu:0` 等单卡索引
 - [ ] `save_path` 为 `{workdir}/round_{N}/quantized` 形式且磁盘空间充足
 - [ ] `msmodelslim quant --help` 可正常执行

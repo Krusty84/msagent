@@ -28,7 +28,7 @@
 
 | Skill | 命令 / 脚本 | 功能用途 |
 | --- | --- | --- |
-| `tune-practice-cfg` | `msmodelslim analyze linear ...` | 敏感层分析 |
+| `tune-practice-cfg` | `msmodelslim analyze layer ...` | 敏感层分析；VLM 使用图文校准数据 |
 | `tune-practice-cfg` | `scripts/validate_practice_yaml.py` | Practice YAML 校验 |
 | `quant-tuning-quantize` | `msmodelslim quant --config_path ...` | 执行量化 |
 | `quant-tuning-evaluate` | `scripts/run_evaluation.py` | 执行评测 |
@@ -170,7 +170,7 @@
 | `model_path` | string | ✓ | 模型路径 |
 | `save_path` | string | ✓ | 工作目录，Practice YAML 写入此目录 |
 | `device` | string | ✓ | 如 `npu:2,3` |
-| `strategy` | string | ✓ | `standing_high` 或 `standing_high_with_experience` |
+| `strategy` | string | ✓ | `standing_high`、`standing_high_with_experience` 或 `vlm_standing_high` |
 | `max_iterations` | int | ✓ | 最大迭代轮次 |
 | `round` | int | ✓ | 当前调优轮次 |
 | `prev_result` | object\|null | | 上轮评测结果，首轮 `null` |

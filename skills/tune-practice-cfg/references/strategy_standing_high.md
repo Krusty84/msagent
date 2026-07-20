@@ -55,3 +55,7 @@
 | 必要输入 | 产出 |
 |----------|------|
 | 模型、离群值抑制策略候选、量化配置模板 | 多轮 Practice YAML |
+
+## VLM 复用说明
+
+`vlm_standing_high` 复用 standing_high 的二分搜索和摸高思想，但每轮产出的 Practice YAML 使用 `apiversion: multimodal_vlm_modelslim_v1`。具体 YAML 字段、VLM 校准数据和 include/exclude 规则见 [量化配置格式](practice_yaml_format.md) 与 [敏感层分析](sensitive_layer_analysis.md)。

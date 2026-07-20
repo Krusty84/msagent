@@ -19,7 +19,7 @@ msmodelslim analyze layer \
 | `model_type` | 模型类型（模型名） | 必填 |
 | `model_path` | 模型路径 | 必填 |
 | `metrics` | 分析指标（linear scope） | `"mse_layer_wise"` |
-| `calib_dataset` | 校准数据集 | `"mix_calib.jsonl"` |
+| `calib_dataset` | 校准数据集 | LLM 可用 `"mix_calib.jsonl"`；VLM 必须使用图像目录或图文 `index.json` / `index.jsonl` |
 | `pattern` | 层匹配模式列表 | `"*"`（全量） |
 | `topk` | 返回 Top-K 敏感层 | `999` |
 | `device` | 执行设备 | `npu` |
@@ -66,6 +66,15 @@ patterns:
 敏感度得分在调优任务开始时计算一次，写入 `{save_path}/analysis_result.yaml`，各轮复用。每轮根据策略从预计算的得分排序中选择回退层，无需重新调用分析命令。
 
 选择回退层时需遵守**同分同退约束**：分析结果按 score 降序排列，分数相同的层作为一个整体（同分组），`topk` 参数选取的是前 K 个**同分组**而非前 K 个单独层。在调优过程中，同分组内的层必须同时回退或同时保留，不可拆分。
+
+## VLM 敏感层分析注意事项
+
+- 当策略为 `vlm_standing_high` 时，敏感层分析的范围以实际 VLM Practice YAML 为准，尤其是 `spec.process[].include` / `exclude`：
+- `--calib_dataset` 必须与 Practice YAML 的 `spec.dataset` 指向同一份 VLM 校准数据，并且每条样本能提供 `image` 和 `text`。纯图像目录使用 `spec.default_text` 作为文本。
+- 禁止使用 LLM 默认的 `mix_calib.jsonl`、`boolq.jsonl` 或任意仅含字符串的 JSONL。否则 Qwen3-VL 适配器会在读取 `item.image` 时失败。
+- `include` 默认为 `"*"`；不要脱离参考 Practice 自行发明层名。
+- `exclude` 建议保留视觉或高风险模块先验，例如 `*merger*`等。
+- 优先使用已有分析结果。
 
 ## 工具不可用时的经验规则
 

@@ -1,207 +1,110 @@
 ---
 name: op-mfu-calculator
-description: 计算算子（如 matmul/GEMM）的 MFU（Machine FLOP Utilization），并给出清晰的公式和推导过程。
+description: 基于 msprof-analyze 工具的昇腾 NPU 算子 MFU 分析技能。支持三种场景：(1) 用户已有 Ascend PyTorch Profiler 采集脚本，直接修改脚本补齐采集配置并用 msprof-analyze 解析 MFU；(2) 用户只关心公式表中已有的某个算子，直接根据算子维度和硬件峰值算力计算 MFU；(3) 用户需要为未注册的新算子扩展 FLOPs 公式。触发场景：算子性能分析、MFU 瓶颈定位、模型计算效率评估。
 ---
 
-# Operator MFU Calculator
+# 算子 MFU 分析
 
-你是一个 **算子 MFU 计算专家**，专门帮用户根据算子维度、运行时间和硬件峰值算力，计算 MFU，并解释结果含义。
+> **本 skill 包含三种模式：模式 A 会直接修改用户的 Profiler 脚本；模式 B 仅做计算，不修改代码；模式 C 会修改 `_flops_formulas.py` 注册新算子。**
 
-## 基本概念
+***
 
-- **MFU 定义**  
-  MFU（Machine FLOP Utilization）定义为：
-  $$
-  \text{MFU} = \frac{\text{实际计算产生的 FLOPs}}{\text{同时间内硬件理论可执行的 FLOPs}}
-  = \frac{\text{Achieved FLOPs}}{\text{Peak FLOPs}}
-  $$
+## 适用范围
 
-- **单位约定**  
-  - FLOPs：浮点运算次数  
-  - TFLOPs/s：每秒万亿次浮点运算  
-  - 计算时要注意单位统一，例如：
-    - 实际 FLOPs / 执行时间 = Achieved FLOPs/s  
-    - Achieved TFLOPs/s = Achieved FLOPs/s ÷ 1e12  
+- **硬件平台**：昇腾 Atlas A2 / A3 系列（Ascend 910B 系列）
+- **分析对象**：已注册 FLOPs 公式的 PyTorch 算子（matmul、attention、norm 等）
+- **分析模式**：
+  - **模式 A**：用户已有 Ascend PyTorch Profiler 采集脚本 → 直接修改脚本补齐采集配置，使用 msprof-analyze 解析
+  - **模式 B**：用户只关心公式表中已有的某个算子 → 根据维度参数直接计算 MFU
+  - **模式 C**：用户需要为未注册的新算子扩展 FLOPs 公式 → 查 op-plugin、注册到 `_flops_formulas.py`、采集验证
 
-## 常见芯片理论峰值算力Peak FLOPs参考
+***
 
-- **华为 Ascend 910B1**
-  - FP16/BF16：**≈ 378.88 TFLOPs/s**
-- **华为 Ascend 910B2**
-  - FP16/BF16：**≈ 353.89 TFLOPs/s**
-- **华为 Ascend 910B3**
-  - FP16/BF16：**≈ 294.91 TFLOPs/s**
-- **华为 Ascend 910B4**
-  - FP16/BF16：**≈ 270 TFLOPs/s**
+## 前置判断：选择分析模式
 
-在帮助用户计算 MFU 时，如果用户没有给出确切的峰值算力，可以：
+在看到用户的具体需求后，首先判断用户属于哪种场景：
 
-1. 先询问具体型号、精度模式（FP32/FP16/BF16/FP8 等），以及是否使用 Tensor Core / Matrix Core。  
-2. 如用户只给出大致型号，可**明确声明在使用上表的典型近似值**，并提醒结果是粗略估算。  
-3. 建议用户优先参考官方文档、供应商报告中给出的峰值算力，以获得更精确的 MFU。
+```
+用户需求？
+├─ 用户已有包含 Ascend PyTorch Profiler 采集的脚本
+│  → 模式 A：采集并解析 MFU
+│
+├─ 用户询问某个具体算子的 MFU，且该算子**已在公式表中**
+│  → 模式 B：直接计算该算子的 MFU
+│
+├─ 用户明确要扩展新算子、注册 FLOPs 公式
+│  → 模式 C：扩展新算子（注册 FLOPs 公式 + 采集验证）
+│
+└─ 用户只问了算子名和维度，但该算子**不在公式表中**（无法判断意图）
+   → 询问用户：是要快速手动估算 MFU（模式 B），还是注册 FLOPs 公式并采集验证（模式 C）？
+```
 
-## Matmul / GEMM FLOPs 计算
+> **关键**：不要混淆三种模式。模式 A 面向已有 Profiler 脚本的用户，直接修改其脚本补齐 `with_flops`、`mstx` 等采集配置，再通过 msprof-analyze 解析出 MFU。模式 B 面向公式表中已有、只需快速估算 MFU 的算子，无需 Profiling 数据，直接根据维度参数手动计算。**模式 C 面向需要注册新算子 FLOPs 公式的场景**，需要查 op-plugin、注册到 `<torch_npu_module_path>/profiler/_flops_formulas.py`、采集验证。如果根据用户提问无法确定是模式 B 还是模式 C，**直接询问用户**，不要自行假设。
+>
+> **重要：无论选择哪种模式，都先按以下步骤与用户确认**：
+> 1. **先简要列出三种模式**：让用户知道有哪些选项。例如"本 skill 有三种分析模式：模式 A 采集 profiling 数据后解析 MFU，适合已有 Profiler 脚本的场景；模式 B 手动估算 MFU，适合公式表中已有的算子；模式 C 注册新算子 FLOPs 公式并采集验证。"
+> 2. **再说明你的判断**：根据用户需求，你认为适合走哪个模式及原因。
+> 3. **最后请用户确认**：得到确认后再按对应模式执行。
 
-当用户提到 **矩阵乘/线性层/attention 中的 matmul** 时，按如下规则估算 FLOPs：
+***
 
-- **标准矩阵乘 (GEMM)**  
-  对于形状为 $(M, K)$ 与 $(K, N)$ 的矩阵乘：
-  $$
-  \text{FLOPs} \approx 2 \times M \times N \times K
-  $$
-  - 这里的 2 来自「一次乘法 + 一次加法」。
+## 模式 A：采集并解析 MFU
 
-- **带 batch 维度的 matmul**  
-  对于形状为 $(B, M, K)$ 与 $(B, K, N)$ 的 batched matmul：
-  $$
-  \text{FLOPs} \approx 2 \times B \times M \times N \times K
-  $$
+> 当用户已有包含 Ascend PyTorch Profiler 采集的脚本时走此模式。
 
-- **常见情形举例**（可直接类比）  
-  - 线性层：输入 $(B, L, D_\text{in})$，权重 $(D_\text{in}, D_\text{out})$  
-    → 可视为 $M = B \times L,\ K = D_\text{in},\ N = D_\text{out}$。  
-  - Attention 中 $QK^T$：$Q=(B, H, L_q, D_h),\ K=(B, H, L_k, D_h)$  
-    → 可视为 $B' = B \times H,\ M = L_q,\ N = L_k,\ K = D_h$。
+**详细步骤请阅读：[references/mode-a-profiling.md](references/mode-a-profiling.md)**
 
-## FlashAttention FLOPs 计算
+**流程概要**：前置检查（确认脚本已集成 Profiler） → 第一步：修改脚本补齐 `with_flops`/`mstx`/`export_type`/`profiler_level` → 第二步：运行程序采集 Profiling 数据 → 第三步：`msprof-analyze --agent -m operator_mfu -d <profiling目录>` → 第四步：读取 `OperatorMFU`/`ModuleMFU` 输出 → 第五步：分析 MFU 瓶颈。
 
-当用户提到 **FlashAttention** 算子时，需要根据输入布局（layout）和稀疏模式（sparse_mode）来计算 FLOPs。
+## 模式 A 完成标志
 
-### 输入布局说明
+- [ ] 确认用户已有 Ascend PyTorch Profiler 采集脚本
+- [ ] 已直接修改脚本补齐采集配置，并已向用户列出每一项改动
+- [ ] 运行前已检查输出目录，如有旧数据已先询问用户是否清空
+- [ ] 已运行程序，`on_trace_ready` 输出目录已生成 Profiling 数据
+- [ ] 已运行 `msprof-analyze --agent -m operator_mfu -d <on_trace_ready输出目录>` 命令
+- [ ] 已读取并解读输出结果（kernel 级 / module 级 MFU）
+- [ ] 已给出 MFU 瓶颈分析和优化建议
 
-FlashAttention 支持多种输入布局，需要统一转换为 $(B, N, S, D)$ 格式（batch, num_heads, seq_len, head_dim）：
+***
 
-- **BNSD**：$(B, N, S, D)$ → 直接使用
-- **BSND**：$(B, S, N, D)$ → 转换为 $(B, N, S, D)$
-- **BSH**：$(B, S, D)$ → 转换为 $(B, 1, S, D)$（单头）
-- **SBH**：$(S, B, D)$ → 转换为 $(B, 1, S, D)$（单头）
-- **TND**：$(T, N, D)$ → varlen场景，特殊处理，需要实际序列长度信息
+## 模式 B：单算子 FLOPs / MFU 计算
 
-### TND Layout 公式
+> 当用户只关心公式表中已有的某个算子时走此模式，无需 Profiling 数据。
 
-当 `input_layout == "TND"` 时，需要 `actual_seq_qlen` 和 `actual_seq_kvlen`（累积序列长度数组）。
+**详细步骤请阅读：[references/mode-b-cal.md](references/mode-b-cal.md)**
 
-1. **解析实际序列长度**  
-   从累积长度转换为每个样本的实际长度：
-   $$
-   \text{q_lens} = [\text{actual_seq_qlen}[0], \text{actual_seq_qlen}[1] - \text{actual_seq_qlen}[0], \text{actual_seq_qlen}[2] - \text{actual_seq_qlen}[1], \ldots]
-   $$
-   $$
-   \text{kv_lens} = [\text{actual_seq_kvlen}[0], \text{actual_seq_kvlen}[1] - \text{actual_seq_kvlen}[0], \text{actual_seq_kvlen}[2] - \text{actual_seq_kvlen}[1],\ldots]
-   $$
-   （去除末尾的 0，只保留有效长度）
+**流程概要**：前置判断（有无耗时） → 算子查找（查公式表 → GEMM/Attention 公式推导 → op-plugin 检索） → 计算 FLOPs → 计算 Achieved TFLOPs/s → 计算 MFU → 按标准格式回答。
 
-2. **计算序列工作量**  
-   $$
-   \text{acl_seq_workload} = \sum_{i} \text{q_lens}[i] \times \text{kv_lens}[i]
-   $$
+## 模式 B 完成标志
 
-3. **计算 FLOPs**  
-   设 $Q$ 形状为 $(T_q, N, D_q)$，$K$ 形状为 $(T_k, N, D_k)$：
-   $$
-   \text{FLOPs} = 2 \times N \times (D_q + D_k) \times \text{acl_seq_workload}
-   $$
+**无耗时场景（仅 FLOPs）**：
 
-### Common Layout 公式（BNSD/BSND/BSH/SBH）
+- [ ] 已确认算子类型和维度信息
+- [ ] 已在公式表中查找（找不到则去 op-plugin 检索）
+- [ ] 已给出 FLOPs 计算公式和最终数值
 
-当 `input_layout` 为 BNSD/BSND/BSH/SBH 时，需要 `sparse_mode` 参数。
+**有耗时场景（MFU）**：
 
-1. **统一维度表示**  
-   将输入转换为 $(B, N, S, D)$ 格式：
-   - $Q$: $(q_b, q_n, q_s, q_d)$
-   - $K$: $(k_b, k_n, k_s, k_d)$
+- [ ] 已确认算子类型、张量维度、执行耗时、硬件峰值算力
+- [ ] 已计算 FLOPs、Achieved TFLOPs/s、MFU
+- [ ] 已给出结果分析和优化建议
 
-2. **基础完整 Attention FLOPs**  
-   $$
-   \text{full_attention} = 2 \times q_b \times q_n \times q_s \times k_s \times (q_d + k_d)
-   $$
+***
 
-3. **根据 sparse_mode 调整**  
-   - **sparse_mode == 0**（完整 attention）：  
-     $$
-     \text{FLOPs} = \text{full_attention}
-     $$
+## 模式 C：扩展新的算子（注册 FLOPs 公式）
 
-   - **sparse_mode == 2 或 3，且 $q_s == k_s$**（causal 或类似，序列长度相等）：  
-     $$
-     \text{FLOPs} = \text{full_attention} \times 0.5
-     $$
+> 当用户明确要计算公式表中未覆盖的算子 MFU，或需要为新算子注册 FLOPs 公式时走此模式。
 
-   - **sparse_mode == 2，且 $q_s > k_s$**（causal，query 更长）：  
-     $$
-     \text{FLOPs} = \text{full_attention} \times \frac{q_s \times k_s - k_s \times k_s / 2}{k_s \times k_s}
-     $$
+**详细步骤请阅读：[references/mode-c-extend-operator.md](references/mode-c-extend-operator.md)**
 
-   - **sparse_mode == 3，且 $q_d > k_d$**（特殊稀疏）：  
-     $$
-     \text{FLOPs} = \text{full_attention} \times \frac{k_s \times k_s / 2}{q_s \times k_s}
-     $$
+**流程概要**：先走模式 B 的算子查找流程确定 FLOPs 公式 → 注册到 `_flops_formulas.py`（第一步：确认 target API，第二步：写公式函数） → 第三步：验证落盘（采集 Profiling 数据 → SQL 确认打点 → msprof-analyze 比对结果）。若该算子已注册，跳过注册步骤直接验证。
 
-   - **sparse_mode == 2，且 $q_d < k_d$**：  
-     $$
-     \text{FLOPs} = \text{full_attention} \times \frac{q_s \times q_s / 2}{q_s \times k_s}
-     $$
+## 模式 C 完成标志
 
-   - **sparse_mode == 3，且 $q_d < k_d$**：  
-     $$
-     \text{FLOPs} = \text{full_attention} \times \frac{q_s \times k_s - q_s \times q_s / 2}{q_s \times k_s}
-     $$
-
-### FlashAttention 计算注意事项
-
-- **必需信息**：
-  - 输入布局（input_layout）：TND 或 BNSD/BSND/BSH/SBH
-  - 对于 TND：需要 `actual_seq_qlen` 和 `actual_seq_kvlen`（累积长度数组）
-  - 对于 Common layout：需要 `sparse_mode`（0/2/3）
-  - 输入张量的形状（input_shapes）
-
-- **常见 sparse_mode 含义**：
-  - `0`：完整 attention（无稀疏）
-  - `2`：通常表示 causal attention（因果掩码）
-  - `3`：其他稀疏模式
-
-- **如果缺少关键参数**（如 sparse_mode 或 actual_seq_qlen），应向用户明确说明需要从 `operator_args` 中获取这些信息。
-
-## 计算 MFU 的标准步骤
-
-当用户希望你计算某个算子的 MFU 时，严格按照以下步骤：
-
-1. **确认信息是否充分**  
-   向用户要齐以下信息（如果缺失就明确提出）：  
-   - 算子类型（例如 matmul / GEMM / FlashAttention等）。  
-   - 参与运算的张量维度（包含 batch / head / sequence 等关键维度）。  
-   - 单次算子执行的耗时（例如毫秒 ms）。  
-   - 硬件单卡的理论峰值算力（例如 312 TFLOPs/s，注明是 FP16/BF16 还是 FP8 等）。  
-
-2. **计算算子 FLOPs**  
-   - 根据算子类型和维度，用上面的公式算出 **单次调用的 FLOPs**。  
-   - 如果用户给了「每迭代包含多少次该算子」或「多个相同算子」，先计算单次，然后乘以调用次数。  
-
-3. **计算 Achieved FLOPs/s**  
-   - 先换算执行时间到秒，例如：$t_\text{s} = \text{time\_ms} / 1000$。  
-   - Achieved FLOPs/s = FLOPs / $t_\text{s}$。  
-   - 再换算到 TFLOPs/s：Achieved TFLOPs/s = Achieved FLOPs/s ÷ 1e12。
-
-4. **计算 MFU**  
-   - MFU = Achieved TFLOPs/s ÷ Peak TFLOPs/s。  
-   - 最终给出百分比形式，例如 0.42 → 42%。  
-
-5. **解释结果**  
-   - 简要说明这个 MFU 代表的含义，例如：  
-     - 低于 20%：通常算子远未吃满算力，可能受内存带宽、launch overhead、shape 不规则等影响。  
-     - 30%–60%：中等偏上水平，许多通用工作负载大致在这个区间。  
-     - 高于 70%：算子形状、并行度和实现都比较接近设备上限。  
-
-## 回答格式要求
-
-当用户请求你计算 MFU 时，请按如下结构作答（用用户的语言，可以是中文也可以是英文）：
-  
-1. 当你按照本 Skill 提供的步骤计算 MFU 时，请在回答开头用一句话明确说明：“（本回答基于 op-mfu-calculator Skill 的 MFU 计算规范）”
-2. **先复述输入信息**（包括算子类型、张量维度、时间、峰值算力）。  
-3. **列出关键公式**（FLOPs, Achieved TFLOPs/s, MFU），并代入具体数字展示中间计算过程。  
-4. **给出最终 MFU 数值**（保留 2–3 位有效数字，百分比形式）。  
-5. **简单分析**产生这个 MFU 的可能原因或优化方向（例如 batch 太小、K 维过小、显存带宽瓶颈等）。  
-
-如果信息不全，**不要瞎猜**，而是明确列出还缺哪些数字，并给出如何从 profiler / 日志中拿到这些信息的建议。
-
-
+- [ ] 已确认该算子未在 `_flops_formulas.py` 中注册，需要扩展
+- [ ] 已确定 FLOPs 公式（通过 skill 内置公式计算或 op-plugin 检索）并注册到 `_flops_formulas.py`
+- [ ] 已展示修改的文件路径和修改内容
+- [ ] 已运行程序采集 Profiling 数据
+- [ ] 已通过 SQL 查询确认新算子的 FLOPs 打点落盘
+- [ ] 已运行 msprof-analyze 并比对 `flops` 字段与手动计算结果一致

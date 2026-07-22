@@ -18,11 +18,16 @@
 
 ![image-20260723024657512](attachments/image-20260723024657512.png)
 
+IMG-05：下发调度分析对话截图
+
+![image-20260723031500000](attachments/image-20260723031500000.png)
+
 ## 三、Issue信息
 
 | 序号 | Issue说明 | Issue链接 |
 |------|-----------|-----------|
 | 1 | [MeetUp众测][Profiler][慢卡] 建议在慢 Rank 结论中展示置信度与反证 | https://gitcode.com/Ascend/msagent/issues/107 |
+| 2 | [MeetUp众测][Profiler][下发调度] 建议在下发瓶颈报告中明确同步等待指标口径与因果依据 | https://gitcode.com/Ascend/msagent/issues/110 |
 
 ## 四、PR信息
 

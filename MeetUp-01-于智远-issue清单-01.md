@@ -22,11 +22,10 @@
 
 | 序号 | Issue说明 | Issue链接 |
 |------|-----------|-----------|
-| 1 | 参考Issue | https://gitcode.com/Ascend/msagent/issues/107 |
+| 1 | [MeetUp众测][Profiler][慢卡] 建议在慢 Rank 结论中展示置信度与反证 | https://gitcode.com/Ascend/msagent/issues/107 |
 
 ## 四、PR信息
 
 | 序号 | PR说明 | PR链接 |
 |------|--------|--------|
-| 1 | MeetUp众测msAgent性能体验报告 | PR创建后回填 |
-
+| 1 | MeetUp众测msAgent性能体验报告 | https://gitcode.com/Ascend/msagent/merge_requests/134 |

@@ -36,7 +36,7 @@
 |------|------|
 | 输入 Prompt | 从当前Profiling数据来看，有无下发瓶颈，有哪些类型的下发问题，给出证据和优化建议 |
 | Agent 输出（文字摘要） | Agent判断存在三类下发瓶颈：Rank 3 Host下发阻塞、全局下发同步延迟过高、AI Core调度延迟与Free Time过高。Agent给出了Free Time、Communication、NOTIFY_WAIT、EVENT_WAIT、CAPTURE_WAIT、AI_CORE调度延迟、同步API和GetWorkspaceSize长尾等证据，并提出CPU绑核、合并通信梯度、开启通信计算Overlap、排查GetWorkspaceSize长尾、Stream深度优化和NUMA亲和性等建议。 |
-| **输出截图** | 见《MeetUp-01-于智远-issue清单-01.md》IMG-05至IMG-06 |
+| **输出截图** | 见《MeetUp-01-于智远-issue清单-01.md》IMG-05至IMG-07 |
 | 是否符合预期 | 基本符合 |
 | 评价 | 能够识别多类下发调度问题，并给出数据证据、优化建议和验证方法。部分指标的统计口径和因果依据需要进一步说明。 |
 

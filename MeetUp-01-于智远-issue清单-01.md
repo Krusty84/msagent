@@ -22,10 +22,6 @@ IMG-05：下发调度分析对话截图
 
 ![image-20260723031500000](attachments/image-20260723031500000.png)
 
-IMG-06：下发瓶颈分析结论截图
-
-![image-20260723031600000](attachments/image-20260723031600000.png)
-
 ## 三、Issue信息
 
 | 序号 | Issue说明 | Issue链接 |

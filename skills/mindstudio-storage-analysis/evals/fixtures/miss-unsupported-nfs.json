@@ -1,0 +1,7 @@
+{
+  "schema_version": "1.3",
+  "collected_at": "2026-07-01T12:00:00+08:00",
+  "availability": {"missing": [], "errors": [], "partial": []},
+  "mounts": [{"fstype": "ext4", "device": "/dev/sda1", "mount_point": "/"}],
+  "nfs": {"source": "nfs", "status": "unsupported"}
+}

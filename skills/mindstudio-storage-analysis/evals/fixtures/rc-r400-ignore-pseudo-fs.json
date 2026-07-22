@@ -1,0 +1,38 @@
+{
+  "schema_version": "1.3",
+  "collected_at": "2026-07-16T10:40:00+00:00",
+  "target": {
+    "path": "/data"
+  },
+  "availability": {
+    "missing": [],
+    "errors": [],
+    "partial": []
+  },
+  "process_io_map": {
+    "source": "process_io_map",
+    "status": "ok",
+    "parsed": {
+      "mappings": [
+        {
+          "pid": 100,
+          "source": "tmpfs",
+          "fstype": "tmpfs",
+          "canonical_device": "tmpfs",
+          "device_resolution": "heuristic",
+          "path": "/data/shard-0.bin",
+          "path_relevant": true
+        },
+        {
+          "pid": 101,
+          "source": "tmpfs",
+          "fstype": "tmpfs",
+          "canonical_device": "tmpfs",
+          "device_resolution": "heuristic",
+          "path": "/data/shard-1.bin",
+          "path_relevant": true
+        }
+      ]
+    }
+  }
+}

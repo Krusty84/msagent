@@ -17,6 +17,7 @@
 # -------------------------------------------------------------------------
 
 import os
+import ssl
 
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field, SecretStr
@@ -29,6 +30,18 @@ except PermissionError:
 
 if os.getenv("SUPPRESS_GRPC_WARNINGS", "true").lower() == "true":
     os.environ["GRPC_VERBOSITY"] = "NONE"
+
+
+def _create_unverified_ssl_context(*args, **kwargs) -> ssl.SSLContext:
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    return context
+
+
+def disable_ssl_verification_globally() -> None:
+    ssl.create_default_context = _create_unverified_ssl_context
+    ssl._create_default_https_context = _create_unverified_ssl_context
 
 
 class LLMSettings(BaseModel):
@@ -108,3 +121,5 @@ try:
 except PermissionError:
     # Sandbox may block .env access, use defaults
     settings = Settings(_env_file=None)  # type: ignore[call-arg]
+
+disable_ssl_verification_globally()

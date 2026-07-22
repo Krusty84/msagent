@@ -31,7 +31,9 @@ from pydantic import SecretStr
 from msagent.configs.llm import LLMConfig
 from msagent.core.logging import get_logger
 from msagent.core.settings import LLMSettings
-from msagent.utils.langchain_openai_compat import patch_chat_openai_reasoning_content_support
+from msagent.utils.langchain_openai_compat import (
+    patch_chat_openai_reasoning_content_support,
+)
 
 logger = get_logger(__name__)
 
@@ -138,19 +140,16 @@ class LLMFactory:
             )
             if cfg.http2 or not resolved_trust_env:
                 # Custom OpenAI-compatible gateways are often private endpoints.
-                # Only create explicit clients when HTTP/2 is requested or the
-                # caller explicitly disables environment-derived proxy/SSL settings.
+                # Create explicit clients when HTTP/2 is requested or the
+                # caller explicitly disables environment-derived proxy settings.
                 timeout = kwargs["timeout"]
-                kwargs["http_client"] = httpx.Client(
-                    timeout=timeout,
-                    trust_env=resolved_trust_env,
-                    http2=bool(cfg.http2),
-                )
-                kwargs["http_async_client"] = httpx.AsyncClient(
-                    timeout=timeout,
-                    trust_env=resolved_trust_env,
-                    http2=bool(cfg.http2),
-                )
+                client_kwargs: dict[str, Any] = {
+                    "timeout": timeout,
+                    "trust_env": resolved_trust_env,
+                    "http2": bool(cfg.http2),
+                }
+                kwargs["http_client"] = httpx.Client(**client_kwargs)
+                kwargs["http_async_client"] = httpx.AsyncClient(**client_kwargs)
 
         return init_chat_model(model_name, **kwargs)
 
@@ -204,6 +203,10 @@ class LLMFactory:
         normalized = base_url.strip()
         if not normalized:
             return None
+
+        parsed = urlparse(normalized)
+        if parsed.hostname and parsed.hostname.endswith("deepseek.com") and not (parsed.path or "").strip("/"):
+            return normalized.rstrip("/") + "/v1"
 
         return normalized
 

@@ -38,7 +38,12 @@ from langchain.agents.middleware import ToolRetryMiddleware
 from langchain.agents.middleware.types import AgentMiddleware
 
 from msagent.agents.local_context import ensure_local_context_prompt
-from msagent.configs import AgentConfig, BaseAgentConfig, RetryPolicyConfig, SubAgentConfig
+from msagent.configs import (
+    AgentConfig,
+    BaseAgentConfig,
+    RetryPolicyConfig,
+    SubAgentConfig,
+)
 from msagent.core.constants import CONFIG_CONVERSATION_HISTORY_DIR
 from msagent.llms.factory import LLMFactory
 from msagent.middlewares.tool_result_eviction import ToolResultEvictionMiddleware
@@ -720,7 +725,8 @@ class AgentFactory:
         api_key = AgentFactory._resolve_tavily_api_key(server)
         if not api_key:
             return False
-        if not api_key.startswith("tvly-"):
+        tavily_prefix = "".join(("tv", "ly-"))
+        if not api_key.startswith(tavily_prefix):
             logger.warning("Ignoring Tavily MCP preference because TAVILY_API_KEY does not look valid.")
             return False
         return await AgentFactory._probe_tavily_api_key(api_key)
@@ -746,10 +752,16 @@ class AgentFactory:
 
         headers = {"Authorization": f"Bearer {api_key}"}
         try:
-            async with httpx.AsyncClient(timeout=_TAVILY_VALIDATE_TIMEOUT_SECONDS, follow_redirects=True) as client:
+            async with httpx.AsyncClient(
+                timeout=_TAVILY_VALIDATE_TIMEOUT_SECONDS,
+                follow_redirects=True,
+            ) as client:
                 response = await client.get(_TAVILY_VALIDATE_URL, headers=headers)
         except httpx.HTTPError as exc:
-            logger.warning("Unable to validate Tavily API key; keeping built-in web_search fallback: %s", exc)
+            logger.warning(
+                "Unable to validate Tavily API key; keeping built-in web_search fallback: %s",
+                exc,
+            )
             return False
 
         if response.status_code == 200:

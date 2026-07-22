@@ -26,10 +26,6 @@ IMG-06：下发瓶颈分析结论截图
 
 ![image-20260723031600000](attachments/image-20260723031600000.png)
 
-IMG-07：Overlap及下发同步延迟明细截图
-
-![image-20260723031700000](attachments/image-20260723031700000.png)
-
 ## 三、Issue信息
 
 | 序号 | Issue说明 | Issue链接 |

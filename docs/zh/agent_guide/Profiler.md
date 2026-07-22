@@ -22,6 +22,52 @@
 - 如果是集群或多卡问题，尽量同时说明异常现象、涉及 rank 或训练阶段
 - 如果目标是做数据提取或导出，可直接给出 DB / CSV 文件路径和目标格式
 
+## 常见问题的提问与证据核验
+
+### Host 下发与调度
+
+推荐提示词：
+
+```text
+请分析 /path/to/profiling/ 中是否存在 Host 下发或调度瓶颈，列出 Device Free、Dequeue、图编译和高频 PyTorch API 等关键证据，并按优先级给出优化建议。
+```
+
+建议重点核验：
+
+- Device Free、Computing、Communication 及 Overlapped 占比
+- Dequeue、图编译和高频小算子/张量整理耗时
+- 优化前后是否基于同一 Step 对比
+
+### 集群慢 Rank
+
+推荐提示词：
+
+```text
+请对比 /path/to/cluster_profiling/ 中各 Rank 的 Computing、Communication 和 Free 时间，定位异常 Rank，并同时给出支持证据、反证和结论置信度。
+```
+
+建议重点核验：
+
+- 异常 Rank 与其他 Rank 的分项耗时差异
+- Computing 是否一致，避免将 Host 等待直接判断为硬件慢卡
+- CPU affinity、NUMA、HCCL 以及同一 Step 复测结果
+
+### 通信问题
+
+推荐提示词：
+
+```text
+请分析 /path/to/profiling/ 的通信瓶颈，拆分实际传输时间与 Idle/Wait 时间，说明计算通信重叠状态、小通信算子数量和链路带宽是否正常。
+```
+
+建议重点核验：
+
+- Communication（Not Overlapped）与 Overlapped 状态
+- 实际传输时间和 Idle/Wait 时间
+- 小通信算子数量、聚合空间及链路带宽健康度
+
+以上分析建议保留原始指标、阈值和证据来源，避免仅输出根因结论。
+
 ## 典型效果展示
 
 | 场景 | 示例提示词 | 效果展示 |

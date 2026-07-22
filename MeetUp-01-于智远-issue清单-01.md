@@ -478,6 +478,5 @@ D_PROFILER_OUTPUT/',
 
 | 序号 | PR说明 | PR链接 | 状态 |
 |------|--------|--------|------|
-| 1 | MeetUp众测msAgent快慢卡体验报告 | 待提交 | 未提交 |
-
+| 1 | MeetUp众测msAgent快慢卡体验报告 | https://gitcode.com/Ascend/msagent/merge_requests/136 | 已提交 |
 

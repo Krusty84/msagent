@@ -1,0 +1,272 @@
+
+  ● [Subagent] Use tool read_file (0.2s)
+    file_path: /workspace/msagent/.msagent/skills/msmodelslim-tools-commo... (77 chars)
+    limit: 15
+
+    -      1    #!/usr/bin/env python3
+           2    # -*- coding: utf-8 -*-
+           3    """Type helpers and device parsing for quant-tuning scripts."""
+           4    
+           5    from __future__ import annotations
+           6    
+           7    fro
+      ... (truncated for display, original length: 475 chars)
+      ... press Ctrl+O /tool-output to browse full tool outputs
+
+  ● ascend-cluster-fast-slow-rank-detector: Diagnoses fast/slow ranks in Ascend multi-card clusters using msprof-analyze and expert rules to identify           
+    performance bottlenecks from computation, communication, or Host dispatch issues. It performs both macro-level qualitative analysis and micro-level root    
+    cause drill-down for slow cards.                                                                                                                            
+
+    ascend-communication-analysis: Analyzes Ascend NPU collective communication cost from profiling databases, separating wait-caused high duration from real   
+    communication bottlenecks. Uses a DB-first workflow prioritizing cluster_analysis.db, analysis.db, and ascend_pytorch_profiler.db to diagnose HCCL/hcom     
+    operations.                                                                                                                                                 
+
+    ascend-computation-analysis: Diagnoses Ascend NPU computation-side performance problems including AI Core/Vector/AICPU hotspots, dynamic shape overhead,    
+    fusion opportunities, and data movement issues. Designed for single-card or selected-rank analysis using profiling evidence to produce prioritized          
+    optimization directions.                                                                                                                                    
+
+    ascend-msprof-analyze-cli: Guides the use of msprof-analyze for comprehensive AI training/inference performance analysis, offering two modes: cluster       
+    analysis (for large-scale multi-card scenarios with DB inputs) and advisor (for text/DB inputs with operator optimization suggestions). Selects the         
+    appropriate mode based on data format, scale, and analysis requirements.                                                                                    
+
+    ascend-npu-snapshot-analyzer: Analyzes PyTorch memory snapshot pickle files from _dump_snapshot() to detect memory peaks, fragmentation, leaks, and OOM     
+    conditions with interactive HTML reports. Converts pickle data to SQLite DB and uses SQL macros for multi-dimensional memory analysis across 80% of common  
+    scenarios.                                                                                                                                                  
+
+    ascend-profiler-data-validation: Validates MindStudio profiler data integrity before in-depth analysis by checking data type identification, collection     
+    completion status, key deliverables existence, and profiler configuration. Ensures framework profiler (PyTorch/MindSpore) and msprof data are correctly     
+    parsed and ready for downstream analysis tools.                                                                                                             
+
+    ascend-profiler-db-explorer: Translates natural language questions about Ascend Profiling databases (ascend_pytorch_profiler*.db, msprof_*.db) into safe,   
+    executable SQL queries. Uses predefined CTE macros and dictionary rules for analyzing operator duration, communication time, dispatch, and scheduling from  
+    profiling databases.                                                                                                                                        
+
+    ascend-schedule-analysis: Analyzes NPU scheduling and Host Bound issues by examining device Free time, dispatch latency, launch gaps, and CPU runtime       
+    interference. Prioritizes evidence-based investigation over tuning suggestions and requires device starvation evidence (Free time > 10%) before concluding  
+    Host Bound.                                                                                                                                                 
+
+    ascendc-operator-performance-optim: Provides end-to-end Ascend NPU operator performance tuning using msprof op, covering the full cycle from compilation,   
+    performance collection, bottleneck analysis, code optimization, to before/after comparison reports. Works exclusively with operator source code directories 
+    in a complete tuning pipeline.                                                                                                                              
+
+    deterministic-calculation-analysis: Uses msProbe to compare dump data and identify the first API where inputs match but outputs differ in deterministic     
+    computation. Supports three input types (dump paths, db, csv/xlsx) and allows excluding specific APIs to filter false positives.                            
+
+    document-ux-review: Walks through a project's README, installation docs, and quick start as a first-time user to identify onboarding blockers and usability 
+    issues. Produces actionable improvement recommendations based on real execution rather than superficial reading.                                            
+
+    gen-evaluation-cfg: Generates single-file evaluation YAML configurations for msmodelslim's quant-tuning-evaluate/run_evaluation.py, containing demand,      
+    evaluation (AISBench), and inference_engine (vLLM-Ascend) modules. Designed specifically for evaluation config generation, not practice/policy YAML.        
+
+    gitcode-code-reviewer: Reviews GitCode PRs by combining PR metadata, diff, and full repository context to produce deep review conclusions or inline         
+    comments. Requires a GitCode access token and analyzes changes beyond just the diff, including call chains, adjacent modules, and test coverage.            
+
+    github-raw-fetch: Converts GitHub file page links to raw.githubusercontent.com URLs and fetches content via curl, with special handling for repository docs 
+    routing via agent_router.md. Supports reading READMEs, source code, configuration, and documentation from GitHub repositories.                              
+
+    mindstudio-cpu-binding: Diagnoses Host CPU affinity, NUMA locality, and cgroup/cpuset issues for NPU + PyTorch / LLM Serving workloads including vLLM-Ascend
+    and SGLang. Produces evidence-based reports with conservative and advanced optimization recommendations, rollback plans, and before/after validation.       
+
+    msmodeling-device-config: Guides users to convert natural language hardware descriptions into runnable DeviceProfile entries for unsupported accelerators,  
+    GPUs, or NPUs. Uses a two-stage approach building a minimal runnable profile from confirmed facts and marking uncertain fields for later calibration.       
+
+    msmodeling-env-installer: Installs and verifies the msmodeling development environment using uv, including requirements.txt installation, PYTHONPATH        
+    configuration, and HF_ENDPOINT setup. Only activates when the user explicitly mentions msmodeling environment setup.                                        
+
+    msmodeling-text-generate-executor: Interactively gathers parameters for the text_generate simulation command, explains assumptions, asks for confirmation,  
+    then runs and summarizes performance metrics. Supports validating specific models, hardware profiles, and parallel strategies with progressive dialog.      
+
+    msmodeling-throughput-optimizer-executor: Interactively gathers parameters for the throughput_optimizer deployment simulation, runs it, and summarizes the  
+    best parallel strategy with concurrency, throughput, TTFT, and TPOT results. Compares hardware targets, aggregation vs disaggregation, and TP/EP/MOE-DP     
+    search ranges.                                                                                                                                              
+
+    msmodelslim-adapter-verification: Performs four-step functional validation for msModelSlim adapters after development, covering test model generation, full 
+    fallback quantization, weight consistency checking, and actual quantization rule verification. Stops immediately on any failure with reasons and fix        
+    suggestions.                                                                                                                                                
+
+    msmodelslim-layer-wise-quantization: Implements layer-wise (lazy-loading) quantization for large models to reduce CPU memory peaks when full weight loading 
+    is infeasible. An advanced optional feature activated only when the user explicitly requests it or when memory constraints prevent standard loading.        
+
+    msmodelslim-model-adapt: Creates base Transformers model adapters for msModelSlim to enable W8A8/W4A16 quantization flows, supporting Decoder-only LLMs and 
+    understanding VLMs (text backbone only). Covers adapter creation, required interface implementation, and registration/installation.                         
+
+    msmodelslim-model-analysis: Analyzes candidate models before adapter implementation by determining implementation source, structural features, memory       
+    constraints, and MoE fused weight risks. Supports Decoder-only LLMs and VLM text backbones, requiring config.json and modeling_*.py files.                  
+
+    msmodelslim-model-dequant: Injects dequantization capability for FP8 quantized weights (per-block and per-channel) into the msModelSlim adapter workflow,   
+    converting them to bf16/fp16 for further processing. Only supports FP8 formats with known dequantization rules; blocks on custom or non-FP8 formats.        
+
+    msmodelslim-quick-quant: Provides quick quantization guidance for msModelSlim covering installation, minimal YAML configuration, and basic execution        
+    verification. Uses placeholder-based paths and only covers linear_quant basics, excluding complex multi-stage flows or MoE mixed strategies.                
+
+    msot-msopprof-operator-profiler: Analyzes Ascend AI operator performance using msOpProf (msprof op/simulator) for on-device or simulation tuning,           
+    interpreting aic-metrics, trace.json, and visualize_data.bin outputs. Generates fixed analysis reports with operator basics, top-5 bottlenecks, and         
+    optimization suggestions.                                                                                                                                   
+
+    nan-overflow-detection: Detects NaN/Inf overflow in multi-card distributed training using MSProbe dump data by first locating the source rank where NaN     
+    first appears, then tracing back to the root cause operator. Operates in two phases: cross-rank source detection followed by single-card root cause tracing.
+
+    op-mfu-calculator: Calculates operator MFU (Machine FLOP Utilization) for matmul/GEMM operations given operator dimensions, runtime, and hardware peak      
+    compute capability. Provides clear formulas, derivation steps, and reference peak FLOPs values for chips like Ascend 910B.                                  
+
+    quant-tuning-evaluate: Evaluates quantized models by running scripts/run_evaluation.py according to an Evaluation YAML configuration. Focuses solely on the 
+    evaluation step in the quantization tuning workflow.                                                                                                        
+
+    quant-tuning-quantize: Executes model quantization by running msmodelslim quant according to a Practice YAML configuration. Focuses solely on the           
+    quantization execution step in the tuning workflow.                                                                                                         
+
+    quantization-accuracy-tuning-orchestrator: Provides end-to-end automated model quantization and accuracy tuning workflow using msmodelslim. Handles the     
+    complete cycle including sensitive layer analysis, strategy decisions, quantization execution, and accuracy evaluation for precision recovery.              
+
+    rl-consistency-analysis: Performs end-to-end root cause analysis for training/inference data inconsistencies by module mapping, value comparison, and       
+    tracing the first divergence boundary. Filters fused or structural false positives along the producer-consumer chain and generates structured root cause    
+    reports.                                                                                                                                                    
+
+    tune-practice-cfg: Generates or modifies Practice YAML configurations for each round of quantization tuning, using sensitive layer analysis and previous    
+    evaluation results to inform strategy decisions. Ensures the YAML passes validation before being passed to the quantizer for execution.                     
+
+● Use tool task (36.4s)
+  description: Read the SKILL.md files from the following paths and ret... (3454 chars)
+  subagent_type: general-purpose
+
+  - **ascend-cluster-fast-slow-rank-detector**: Diagnoses fast/slow ranks in Ascend multi-card clusters using msprof-analyze and expert rules to identify 
+performance bottlenecks from computation, communic
+    ... (truncated for display, original length: 10100 chars)
+    ... press Ctrl+O /tool-output to browse full tool outputs
+
+● 以下是全部 35 个技能 的分组介绍：                                                                                                                             
+
+  --------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+  一、Ascend NPU 性能分析（核心 Profiling 技能）                                                                                                                
+
+  1. ascend-msprof-analyze-cli 使用 msprof-analyze CLI 做性能诊断，支持集群分析（多卡 DB 输入）和 advisor（算子优化建议）两种模式。                             
+
+  2. ascend-profiler-data-validation 在深入分析前校验 Profiling 数据的完整性——检查数据采集完成状态、关键交付件是否存在、采集配置是否正确。                      
+
+  3. ascend-profiler-db-explorer 将自然语言问题（算子耗时、通信、调度等）转为安全的 SQL 查询，对 ascend_pytorch_profiler*.db / msprof_*.db 进行分析。           
+
+  4. ascend-computation-analysis 诊断单卡或选定 Rank 的计算侧瓶颈：AI Core/Vector/AICPU 热点、动态 shape 开销、冗余 TransData/Transpose/Cast、融合机会等。      
+
+  5. ascend-communication-analysis DB 优先的通信分析技能。分析 HCCL/hcom 通信开销、带宽、慢卡、Notify Wait、重传、链路类型（SDMA/RDMA/HCCS）等。                
+
+  6. ascend-schedule-analysis 分析 NPU 调度和 Host Bound 问题。基于 device Free time > 10% 的证据判断是否为 Host 瓶颈，再区分是小算子下发压力、同步中断、CPU    
+  干扰还是 GC/锁竞争。                                                                                                                                          
+
+  7. ascend-cluster-fast-slow-rank-detector 集群快慢卡诊断专家。利用 msprof-analyze 做宏观定性 + 微观根因分析（计算劣化 / 通信瓶颈 / Host 下发延迟）。          
+
+  8. ascend-npu-snapshot-analyzer 分析 PyTorch _dump_snapshot() 导出的内存快照 pickle 文件，检测内存峰值、碎片、泄漏和 OOM，生成交互式 HTML 报告。              
+
+  --------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+  二、算子级性能调优                                                                                                                                            
+
+  9. ascendc-operator-performance-optim 端到端 Ascend 算子性能调优：编译 → msprof op 采集 → 瓶颈分析 → 代码优化 → 优化前后对比。覆盖上板和仿真两种模式。        
+
+  10. msot-msopprof-operator-profiler 使用 msprof op / msprof op simulator 对算子做上板或仿真性能分析。解读                                                     
+  aic-metrics、流水图、热点图，生成固定格式分析报告（基本信息→瓶颈 TOP5→优化建议 TOP5）。                                                                       
+
+  11. op-mfu-calculator 计算 MatMul/GEMM 算子的 MFU（Machine FLOP Utilization），给出公式推导、硬件峰值参考值。                                                 
+
+  --------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+  三、量化与模型压缩（msmodelslim 系列）                                                                                                                        
+
+  12. msmodelslim-model-analysis 适配前分析候选模型：确定实现来源（transformers vs 模型目录）、结构特征、内存约束下的逐层量化建议、MoE 融合权重风险。           
+
+  13. msmodelslim-model-adapt 为 Decoder-only LLM 和 VLM（text 部分）创建基础模型适配器，实现 W8A8/W4A16 量化必要的接口。                                       
+
+  14. msmodelslim-adapter-verification 适配器开发完后的四步验证：测试模型生成 → 全回退量化 → 权重一致性 → 实际量化规则校验。                                    
+
+  15. msmodelslim-layer-wise-quantization 逐层量化（懒加载），解决大模型全量加载时 CPU 内存不足的问题。                                                         
+
+  16. msmodelslim-model-dequant 为适配器注入 FP8 反量化能力（per-block / per-channel），将 FP8 权重转回 bf16/fp16。                                             
+
+  17. msmodelslim-quick-quant 快速量化指引：安装、最简 YAML 配置、基础执行校验。                                                                                
+
+  --------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+  四、精度调优闭环（量化 + 确定性 + NaN）                                                                                                                       
+
+  18. quantization-accuracy-tuning-orchestrator 端到端自动量化调优闭环：敏感层分析 → 策略决策 → 量化执行 → 精度评测 → 迭代恢复精度。                            
+
+  19. tune-practice-cfg 在量化调优闭环中生成或修改 Practice YAML，基于敏感层分析和评估结果决定下一轮策略。                                                      
+
+  20. quant-tuning-quantize 根据 Practice YAML 执行模型量化。配合 tune-practice-cfg 和 quant-tuning-evaluate 形成闭环。                                         
+
+  21. quant-tuning-evaluate 根据 Evaluation YAML 调用 AISBench + vLLM-Ascend 对量化后模型进行 Benchmark 评测。                                                  
+
+  22. gen-evaluation-cfg 生成 Evaluation YAML，包含 demand、evaluation（AISBench）和 inference_engine（vLLM-Ascend）三个模块。                                  
+
+  23. deterministic-calculation-analysis 使用 MSProbe 比对数据定位"输入一致、输出不一致"的首个 API——确定性计算问题的根因分析。                                  
+
+  24. nan-overflow-detection 多卡分布式训练中 NaN/Inf 溢出检测：跨 Rank 定位首个出现 NaN 的源卡 → 单卡追溯根因算子。                                            
+
+  25. rl-consistency-analysis 训练与推理数据不一致的端到端根因分析：模块映射、值比较、追踪首个分歧边界、过滤融合误报。                                          
+
+  --------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+  五、推理部署与 Serving 优化                                                                                                                                   
+
+  26. mindstudio-cpu-binding 诊断 NPU + PyTorch / LLM Serving（vLLM-Ascend、SGLang）的 CPU 亲和性、NUMA 局部性、cgroup/cpuset                                   
+  冲突问题。输出保守和激进优化方案、回滚计划。                                                                                                                  
+
+  27. msmodeling-throughput-optimizer-executor 交互式收集参数，运行 throughput_optimizer 仿真，输出最优并行策略（TP/EP/MoE-DP）、并发度、吞吐、TTFT、TPOT。     
+
+  28. msmodeling-text-generate-executor 交互式参数收集 → text_generate 仿真运行 → 汇总性能指标。用于验证特定模型在特定硬件上的推理效果。                        
+
+  29. msmodeling-device-config 将自然语言硬件规格转为可运行的 DeviceProfile 条目，用于为未支持的硬件新增设备画像。                                              
+
+  30. msmodeling-env-installer 安装和验证 msmodeling 开发环境：uv 安装依赖、PYTHONPATH 配置、HF_ENDPOINT 设置。                                                 
+
+  --------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+  六、开发与体验工具                                                                                                                                            
+
+  31. github-raw-fetch 将 GitHub 文件页面链接转为 raw 内容获取，支持根据 agent_router.md 路由规则读取文档。                                                     
+
+  32. gitcode-code-reviewer 审查 GitCode PR：结合 PR metadata、diff 和全仓上下文生成深度审查结论，或发布逐行评论。                                              
+
+  33. document-ux-review 像新手一样按 README / 安装文档 / quick start 实操走查，评估文档可用性，输出可操作改进报告。                                            
+
+  34. profiling 通用 profiling 技能（看描述似乎是基础/目录性质）。                                                                                              
+
+  35. msmodelslim-tools-common msmodelslim 工具常用功能/基础技能（辅助性质）。                                                                                  
+
+  --------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+  技能体系总览                                                                                                                                                  
+
+  ┌────────────────────────────────────────────────┐
+  │                 Ascend NPU 全栈                 │
+  ├──────────┬──────────┬──────────┬───────────────┤
+  │ 性能分析  │ 算子调优  │ 量化压缩  │ 推理部署      │
+  │ (1-8)    │ (9-11)   │ (12-25)  │ (26-30)       │
+  │          │          │          │               │
+  │ Profiling│ MFU计算  │ 模型适配  │ CPU绑定       │
+  │ 通信分析  │ 端到端   │ 量化闭环  │ 吞吐建模      │
+  │ 调度分析  │ msprof   │ NaN检测  │ 设备配置      │
+  │ 集群诊断  │ op       │ 一致性   │ 环境安装      │
+  │ 内存快照  │          │ 确定计算  │               │
+  ├──────────┴──────────┴──────────┴───────────────┤
+  │            开发体验工具 (31-35)                   │
+  │  GitHub读取 · PR审查 · 文档UX检查               │
+  └────────────────────────────────────────────────┘
+
+  核心场景配合关系：                                                                                                                                            
+
+   • 发现慢 → ascend-profiler-data-validation + ascend-msprof-analyze-cli 做全景扫描                                                                            
+   • 定位根因 → ascend-computation-analysis / ascend-communication-analysis / ascend-schedule-analysis 下钻                                                     
+   • 多卡问题 → ascend-cluster-fast-slow-rank-detector 先找慢卡                                                                                                 
+   • 精度/溢出 → deterministic-calculation-analysis / nan-overflow-detection                                                                                    
+   • 量化落地 → msmodelslim-model-analysis → msmodelslim-model-adapt → quantization-accuracy-tuning-orchestrator 闭环                                           
+
+Profiler > 尽管问Profiler，@ 引用文件，/ 使用命令 
+
+
+
+
+
+
+                                                                                                                                                                
+ v26.1.0a2 | /workspace/msagent                                             deepseek-v4-flash (openai) | [ctx 63K/128K tokens (50%) | in 61K | out 2K] | active 

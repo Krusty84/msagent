@@ -80,6 +80,13 @@ class LLMConfig(VersionedConfig):
             "HTTPS_PROXY, SSL_CERT_FILE). Null means provider-specific default."
         ),
     )
+    verify: bool | str = Field(
+        default=False,
+        description=(
+            "SSL certificate verification. Set to True to enable verification, "
+            "or provide a path to a custom CA bundle PEM file."
+        ),
+    )
     http2: bool = Field(
         default=False,
         description="Whether to enable HTTP/2 for model requests",

@@ -125,31 +125,37 @@ class LLMFactory:
             kwargs["stream_usage"] = bool(cfg.streaming)
 
             resolved_trust_env = self._resolve_openai_trust_env(cfg.trust_env, normalized_base_url)
+            resolved_verify = cfg.verify
             logger.debug(
                 "OpenAI-compatible client config: base_url=%s trust_env_config=%s resolved_trust_env=%s "
+                "verify=%s "
                 "http_proxy_present=%s https_proxy_present=%s all_proxy_present=%s no_proxy_present=%s",
                 normalized_base_url,
                 cfg.trust_env,
                 resolved_trust_env,
+                resolved_verify,
                 bool(os.getenv("HTTP_PROXY")),
                 bool(os.getenv("HTTPS_PROXY")),
                 bool(os.getenv("ALL_PROXY")),
                 bool(os.getenv("NO_PROXY")),
             )
-            if cfg.http2 or not resolved_trust_env:
+            if cfg.http2 or not resolved_trust_env or resolved_verify is not True:
                 # Custom OpenAI-compatible gateways are often private endpoints.
-                # Only create explicit clients when HTTP/2 is requested or the
-                # caller explicitly disables environment-derived proxy/SSL settings.
+                # Create explicit clients when HTTP/2 is requested, the caller
+                # explicitly disables environment-derived proxy/SSL settings, or
+                # a custom verify value (False or CA bundle path) is configured.
                 timeout = kwargs["timeout"]
                 kwargs["http_client"] = httpx.Client(
                     timeout=timeout,
                     trust_env=resolved_trust_env,
                     http2=bool(cfg.http2),
+                    verify=resolved_verify,
                 )
                 kwargs["http_async_client"] = httpx.AsyncClient(
                     timeout=timeout,
                     trust_env=resolved_trust_env,
                     http2=bool(cfg.http2),
+                    verify=resolved_verify,
                 )
 
         return init_chat_model(model_name, **kwargs)

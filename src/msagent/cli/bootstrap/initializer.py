@@ -127,6 +127,8 @@ class Initializer:
         agent: str | None,
         model: str | None,
         working_dir: Path,
+        *,
+        enable_loop_tasks: bool = False,
     ) -> tuple[CompiledStateGraph | FakeGraph, Callable[[], Awaitable[None]]]:
         if os.getenv("MSAGENT_FAKE_BACKEND", "").strip().lower() in {
             "1",
@@ -214,6 +216,7 @@ class Initializer:
                 allowed_skills=filtered_skills,
                 sandbox_bindings=None,
                 interrupt_on=interrupt_on,
+                enable_loop_tasks=enable_loop_tasks,
             )
 
         self.cached_llm_tools = list(getattr(graph, "_llm_tools", []))
@@ -330,8 +333,15 @@ class Initializer:
         agent: str | None,
         model: str | None,
         working_dir: Path,
+        *,
+        enable_loop_tasks: bool = False,
     ) -> AsyncIterator[CompiledStateGraph | FakeGraph]:
-        graph, cleanup = await self.create_graph(agent, model, working_dir)
+        graph, cleanup = await self.create_graph(
+            agent,
+            model,
+            working_dir,
+            enable_loop_tasks=enable_loop_tasks,
+        )
         try:
             yield graph
         finally:

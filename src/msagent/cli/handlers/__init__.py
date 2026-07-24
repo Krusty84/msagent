@@ -4,6 +4,7 @@ from msagent.cli.handlers.add_skill import AddSkillHandler
 from msagent.cli.handlers.agents import AgentHandler
 from msagent.cli.handlers.compress import CompressionHandler
 from msagent.cli.handlers.interrupts import InterruptHandler
+from msagent.cli.handlers.loop import LoopHandler
 from msagent.cli.handlers.memory import MemoryHandler
 from msagent.cli.handlers.mcp import MCPHandler
 from msagent.cli.handlers.models import ModelHandler
@@ -17,6 +18,7 @@ __all__ = [
     "AgentHandler",
     "CompressionHandler",
     "InterruptHandler",
+    "LoopHandler",
     "MemoryHandler",
     "MCPHandler",
     "ModelHandler",

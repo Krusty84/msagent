@@ -228,6 +228,14 @@ class InteractivePrompt:
         self._handle_ctrl_c(app, buffer)
         return True
 
+    def has_input_text(self) -> bool:
+        """Return True when the interactive input buffer has pending text."""
+        prompt_session = getattr(self, "prompt_session", None)
+        app = getattr(prompt_session, "app", None) if prompt_session is not None else None
+        buffer = getattr(app, "current_buffer", None) if app is not None else None
+        text = getattr(buffer, "text", "") if buffer is not None else ""
+        return bool(str(text).strip())
+
     def set_mode_change_callback(self, callback):
         """Set callback for mode change events."""
         self.mode_change_callback = callback

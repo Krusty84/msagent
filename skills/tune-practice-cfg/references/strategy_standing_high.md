@@ -58,4 +58,4 @@
 
 ## VLM 复用说明
 
-`vlm_standing_high` 复用 standing_high 的二分搜索和摸高思想，但每轮产出的 Practice YAML 使用 `apiversion: multimodal_vlm_modelslim_v1`。具体 YAML 字段、VLM 校准数据和 include/exclude 规则见 [量化配置格式](practice_yaml_format.md) 与 [敏感层分析](sensitive_layer_analysis.md)。
+LLM 与 VLM 完全复用本策略的二分搜索和摸高算法。每轮 Practice 继承基准 Practice 的 `apiversion`、静态字段和 `protected_exclude`；调优只改变 `tuning_exclude` 等策略字段。具体 YAML 字段、校准数据和 include/exclude 规则见 [量化配置格式](practice_yaml_format.md) 与 [敏感层分析](sensitive_layer_analysis.md)。

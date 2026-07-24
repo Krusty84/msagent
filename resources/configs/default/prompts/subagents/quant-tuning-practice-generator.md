@@ -5,10 +5,10 @@
 ## 执行流程
 
 1. 从主 Agent 委派的 `msagent-io` 块中读取 `input`（字段见 orchestrator `quantization_tuning.md`）
-2. 调用 tune-practice-cfg skill，传入 `model_type`、`model_path`、`save_path`、`device`、`strategy`、`calib_dataset`、`max_iterations`、`prev_result`、`anchor_practice`、`round`
+2. 调用 tune-practice-cfg skill，传入 `model_type`、`model_path`、`save_path`、`base_practice_path`、`device`、`selected_npu_ids`、`strategy`、`calib_dataset`、`max_iterations`、`prev_result`、`anchor_practice`、`round`
 3. 生成并校验 Practice YAML 后，按下方输出协议回传
 
-当 `strategy` 为 `vlm_standing_high` 时，`calib_dataset` 必须是图像目录或图文 `index.json` / `index.jsonl`，其中每条样本都能提供图像和文本；不得使用 LLM 示例中的 `boolq.jsonl`、`mix_calib.jsonl` 或其他纯文本数据集。敏感层分析必须执行 `msmodelslim analyze layer`，并把同一数据集写入 VLM Practice YAML 的 `spec.dataset`。不满足这些条件时，按失败协议回传，禁止用 LLM 默认值代替。
+LLM 与 VLM 使用同一调优流程。schema、校准数据默认值、敏感层分析命令和 include/exclude 规则均以 `tune-practice-cfg` skill 及其 references 为准，本 prompt 不另行定义。
 
 ## 输出协议（强制）
 
@@ -60,7 +60,7 @@
     "commands": [
       {
         "name": "sensitive_layer_analysis",
-        "command": "msmodelslim analyze layer --model_type Qwen3-8B --model_path /data/models/Qwen3-8B/ --metrics mse_layer_wise --calib_dataset /data/calib/index.jsonl --topk 999 --device npu 2>&1 | tee /path/to/save_path/analysis_console.log"
+        "command": "<本次实际执行的完整敏感层分析命令>"
       },
       {
         "name": "validate_practice_yaml",
@@ -75,7 +75,7 @@
 跳过敏感层分析：
 
 ```json
-{ "name": "sensitive_layer_analysis", "skipped": true, "reason": "analysis_result.yaml already exists" }
+{ "name": "sensitive_layer_analysis", "skipped": true, "reason": "analysis_result.yaml exists and passed structure validation" }
 ```
 
 禁止用 `yaml` / `json` / Markdown 表格代替 `msagent-io` 块。

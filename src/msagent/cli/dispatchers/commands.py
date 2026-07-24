@@ -12,6 +12,7 @@ from msagent.cli.handlers import (
     MCPHandler,
     MemoryHandler,
     ModelHandler,
+    LoopHandler,
     SkillsHandler,
     ToolOutputHandler,
     ThreadsHandler,
@@ -32,6 +33,7 @@ class CommandDispatcher:
         self.commands = self._register_commands()
         self.add_skill_handler = AddSkillHandler(session)
         self.agent_handler = AgentHandler(session)
+        self.loop_handler = LoopHandler(session)
         self.model_handler = ModelHandler(session)
         self.mcp_handler = MCPHandler(session)
         self.memory_handler = MemoryHandler(session)
@@ -52,6 +54,7 @@ class CommandDispatcher:
             "/tools": self.cmd_tools,
             "/skills": self.cmd_skills,
             "/add-skill": self.cmd_add_skill,
+            "/loop": self.cmd_loop,
             "/mcp": self.cmd_mcp,
             "/remember": self.cmd_remember,
             "/showmemory": self.cmd_showmemory,
@@ -128,6 +131,10 @@ class CommandDispatcher:
     async def cmd_add_skill(self, args: list[str]) -> None:
         """Install a custom skill from a local path via `/add-skill <path>`."""
         await self.add_skill_handler.handle(args)
+
+    async def cmd_loop(self, args: list[str]) -> None:
+        """Create, inspect, or cancel Claude-style loop tasks."""
+        await self.loop_handler.handle(args)
 
     async def cmd_mcp(self, args: list[str]) -> None:
         """Handle MCP management command."""

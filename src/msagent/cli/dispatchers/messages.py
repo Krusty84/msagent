@@ -267,6 +267,7 @@ class MessageDispatcher:
             user_memory=user_memory,
             tool_catalog=cast(list[BaseTool], initializer.cached_tools_in_catalog),
             skill_catalog=initializer.cached_agent_skills,
+            session=self.session,
             tool_output_max_tokens=ctx.tool_output_max_tokens,
         )
 

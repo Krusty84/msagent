@@ -45,10 +45,13 @@ from msagent.core.constants import CONFIG_CONVERSATION_HISTORY_DIR
 from msagent.llms.factory import LLMFactory
 from msagent.middlewares.tool_result_eviction import ToolResultEvictionMiddleware
 from msagent.tools.catalog import (
+    add_loop_task,
+    cancel_loop_task,
     fetch_skills,
     fetch_tools,
     get_skill,
     get_tool,
+    list_loop_tasks,
     run_tool,
 )
 from msagent.tools.factory import ToolFactory
@@ -370,6 +373,9 @@ class AgentFactory:
             fetch_tools,
             get_tool,
             run_tool,
+            add_loop_task,
+            list_loop_tasks,
+            cancel_loop_task,
             fetch_skills,
             get_skill,
             web_search,

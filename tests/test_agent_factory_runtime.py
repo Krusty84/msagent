@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+from functools import partial
 from types import SimpleNamespace
 
 import pytest
@@ -374,6 +375,36 @@ async def test_system_message_middleware_awrap_model_call_applies_rendering() ->
 
     assert result == "ok"
     assert str(captured["request"].system_message.content) == "local=NPU=910B; rank={Rank_ID}"
+
+
+def test_patch_third_party_prompt_defaults_overrides_filesystem_prompt() -> None:
+    import deepagents.graph as deepagents_graph
+    import deepagents.middleware.filesystem as deepagents_filesystem
+
+    original_flag = factory_module._THIRD_PARTY_PROMPTS_PATCHED
+    original_filesystem_middleware = deepagents_graph.FilesystemMiddleware
+
+    try:
+        factory_module._THIRD_PARTY_PROMPTS_PATCHED = False
+
+        factory_module.patch_third_party_prompt_defaults()
+
+        patched = deepagents_graph.FilesystemMiddleware
+        assert isinstance(patched, partial)
+        assert patched.func is deepagents_filesystem.FilesystemMiddleware
+
+        system_prompt = patched.keywords["system_prompt"]
+        assert system_prompt == "\n\n".join(
+            (
+                factory_module._COMPACT_FILESYSTEM_SYSTEM_PROMPT,
+                factory_module._COMPACT_EXECUTION_SYSTEM_PROMPT,
+            )
+        )
+        assert "Large Tool Results" not in system_prompt
+        assert "Shell paths vs. virtual paths" not in system_prompt
+    finally:
+        deepagents_graph.FilesystemMiddleware = original_filesystem_middleware
+        factory_module._THIRD_PARTY_PROMPTS_PATCHED = original_flag
 
 
 @pytest.mark.asyncio

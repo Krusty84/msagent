@@ -20,5 +20,15 @@
 
 from msagent.tools.catalog.skills import fetch_skills, get_skill
 from msagent.tools.catalog.tools import fetch_tools, get_tool, run_tool
+from msagent.tools.catalog.loop import add_loop_task, cancel_loop_task, list_loop_tasks
 
-__all__ = ["fetch_tools", "get_tool", "run_tool", "fetch_skills", "get_skill"]
+__all__ = [
+    "add_loop_task",
+    "cancel_loop_task",
+    "fetch_skills",
+    "fetch_tools",
+    "get_skill",
+    "get_tool",
+    "list_loop_tasks",
+    "run_tool",
+]

@@ -165,3 +165,20 @@ def test_handle_external_sigint_shows_quit_hint_when_prompt_is_running() -> None
     assert scheduled["delay"] == 0.30
     assert scheduled["invalidated"] is True
     assert "exit_exception" not in scheduled
+
+
+def test_refresh_invalidates_running_prompt() -> None:
+    prompt = InteractivePrompt.__new__(InteractivePrompt)
+    calls: list[str] = []
+
+    class FakeApp:
+        is_running = True
+
+        def invalidate(self) -> None:
+            calls.append("invalidate")
+
+    prompt.prompt_session = SimpleNamespace(app=FakeApp())
+
+    prompt.refresh()
+
+    assert calls == ["invalidate"]

@@ -116,7 +116,40 @@ async def test_agent_factory_create_populates_runtime_tools_without_name_error(
         "get_skill",
         "web_search",
     } <= tool_names
+    assert (
+        not {
+            "add_loop_task",
+            "cancel_loop_task",
+            "list_loop_tasks",
+        }
+        & tool_names
+    )
     assert "write_todos" not in tool_names
+
+
+@pytest.mark.asyncio
+async def test_agent_factory_registers_loop_tools_for_interactive_sessions(monkeypatch) -> None:
+    _patch_deepagent_entrypoints(monkeypatch)
+    config = SimpleNamespace(
+        name="msagent",
+        prompt="test prompt",
+        llm=SimpleNamespace(),
+        tools=None,
+    )
+
+    graph = await AgentFactory(llm_factory=_DummyLLMFactory()).create(
+        config=config,
+        mcp_client=_DummyMCPClient(),
+        llm_config=SimpleNamespace(),
+        enable_loop_tasks=True,
+    )
+
+    tool_names = {tool.name for tool in graph._llm_tools}
+    assert {
+        "add_loop_task",
+        "cancel_loop_task",
+        "list_loop_tasks",
+    } <= tool_names
 
 
 @pytest.mark.asyncio

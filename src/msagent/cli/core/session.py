@@ -20,6 +20,7 @@ from msagent.cli.theme import console, theme
 from msagent.cli.ui.prompt import InteractivePrompt
 from msagent.cli.ui.renderer import Renderer
 from msagent.core.logging import get_logger
+from msagent.scheduler import LOOP_POLL_INTERVAL_SECONDS, LoopTaskManager, format_loop_time
 from msagent.utils.version import check_for_updates
 
 if TYPE_CHECKING:
@@ -62,6 +63,10 @@ class Session:
         self._sigint_handler: SignalHandler = None
         self.tool_outputs: list[ToolOutputEntry] = []
         self.latest_tool_output: ToolOutputEntry | None = None
+        self._schedule_worker_task: asyncio.Task | None = None
+        self._loop_worker_task: asyncio.Task | None = None
+        self._loop_tasks_enabled = False
+        self.loop_tasks = LoopTaskManager()
         self.run_recorder = (
             CliRunRecorder(context.trace_jsonl) if getattr(context, "trace_jsonl", None) is not None else None
         )
@@ -73,6 +78,11 @@ class Session:
             enabled=context.audit_log_enabled,
         )
         self.subagent_audit = SubagentAuditTracker(self.audit_writer)
+
+    @property
+    def loop_tasks_enabled(self) -> bool:
+        """Whether loop task tools are available in this interactive session."""
+        return self._loop_tasks_enabled
 
     def _create_prompt_with_fallback(self) -> InteractivePrompt | SimpleNamespace:
         try:
@@ -99,6 +109,7 @@ class Session:
 
     async def start(self, show_welcome: bool = True) -> None:
         """Start the interactive session."""
+        self._loop_tasks_enabled = True
         if self.run_recorder is not None:
             self.run_recorder.start(context=self.context, stream_output=self.context.stream_output)
         try:
@@ -106,6 +117,7 @@ class Session:
                 agent=self.context.agent,
                 model=self.context.model,
                 working_dir=self.context.working_dir,
+                enable_loop_tasks=True,
             )
 
             self._register_sigint_handler()
@@ -123,13 +135,21 @@ class Session:
                         update_task = asyncio.create_task(self._check_updates_background())
                         await update_task
 
+                    self._loop_worker_task = asyncio.create_task(self._run_loop_worker())
                     await self._main_loop()
                     status.start()
                     status.update(f"[{theme.spinner_color}]Cleaning...[/{theme.spinner_color}]")
         finally:
+            self._loop_tasks_enabled = False
             if self.run_recorder is not None:
                 self.run_recorder.finish(context=self.context, exit_code=0)
             self._restore_sigint()
+            if self._schedule_worker_task:
+                self._schedule_worker_task.cancel()
+                self._schedule_worker_task = None
+            if self._loop_worker_task:
+                self._loop_worker_task.cancel()
+                self._loop_worker_task = None
 
     async def _main_loop(self) -> None:
         """Main interactive loop."""
@@ -162,6 +182,38 @@ class Session:
 
         logger.info("Session ended")
 
+    async def _run_loop_worker(self) -> None:
+        """Poll session loop tasks without cancelling prompt input."""
+        try:
+            while self.running:
+                await asyncio.sleep(LOOP_POLL_INTERVAL_SECONDS)
+                await self._run_due_loop_tasks()
+        except asyncio.CancelledError:
+            pass
+
+    async def _run_due_loop_tasks(self) -> None:
+        """Run due Claude-style loop tasks while the session is idle."""
+        if self.current_stream_task and not self.current_stream_task.done():
+            return
+        prompt_has_text = getattr(self.prompt, "has_input_text", lambda: False)
+        if prompt_has_text():
+            return
+
+        for task in await self.loop_tasks.due():
+            console.print(f"[info]Loop task {task.id} due at {format_loop_time(task.next_run_at)}[/info]")
+            console.print("")
+            try:
+                await self.message_dispatcher.dispatch(task.prompt)
+            except Exception as exc:
+                await self.loop_tasks.mark_finished(task.id, error=str(exc) or type(exc).__name__)
+                logger.exception("Loop task failed: %s", task.id, exc_info=exc)
+            else:
+                await self.loop_tasks.mark_finished(task.id)
+            finally:
+                refresh_prompt = getattr(self.prompt, "refresh", None)
+                if callable(refresh_prompt):
+                    refresh_prompt()
+
     async def send(self, message: str) -> int:
         """Send a single message in one-shot mode (non-interactive)."""
         if self.run_recorder is not None:
@@ -171,6 +223,7 @@ class Session:
                 agent=self.context.agent,
                 model=self.context.model,
                 working_dir=self.context.working_dir,
+                enable_loop_tasks=False,
             )
 
             self._register_sigint_handler()

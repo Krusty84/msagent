@@ -19,6 +19,8 @@
 from pathlib import Path
 import signal
 from typing import Any
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -110,6 +112,27 @@ async def test_send_finishes_recorder_once_on_success(monkeypatch: pytest.Monkey
     assert recorder.started is True
     assert recorder.finish_codes == [0]
     assert restore_calls == [None]
+    assert session.loop_tasks_enabled is False
+
+
+@pytest.mark.asyncio
+async def test_start_enables_loop_tools_for_the_interactive_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_prompt_setup(monkeypatch)
+    session = Session(_build_context())
+    enabled_during_main_loop: list[bool] = []
+
+    async def fake_main_loop() -> None:
+        enabled_during_main_loop.append(session.loop_tasks_enabled)
+
+    monkeypatch.setattr("msagent.cli.core.session.initializer.get_graph", lambda **_kwargs: _FakeGraphContext())
+    session._main_loop = fake_main_loop
+    session._register_sigint_handler = lambda: None
+    session._restore_sigint = lambda: None
+
+    await session.start(show_welcome=False)
+
+    assert enabled_during_main_loop == [True]
+    assert session.loop_tasks_enabled is False
 
 
 @pytest.mark.asyncio
@@ -137,6 +160,29 @@ async def test_send_finishes_recorder_once_on_exception(monkeypatch: pytest.Monk
     assert recorder.finish_codes == [1]
     assert recorder.errors == [error]
     assert restore_calls == [None]
+
+
+@pytest.mark.asyncio
+async def test_due_loop_task_refreshes_prompt_after_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_prompt_setup(monkeypatch)
+    session = Session(_build_context())
+    refreshed: list[None] = []
+    task = SimpleNamespace(id="task-1", prompt="check status", next_run_at=None)
+
+    async def due() -> list[SimpleNamespace]:
+        return [task]
+
+    session.prompt = SimpleNamespace(has_input_text=lambda: False, refresh=lambda: refreshed.append(None))
+    session.loop_tasks = SimpleNamespace(due=due, mark_finished=AsyncMock())
+    session.message_dispatcher.dispatch = AsyncMock()
+    monkeypatch.setattr("msagent.cli.core.session.console.print", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("msagent.cli.core.session.format_loop_time", lambda _value: "now")
+
+    await session._run_due_loop_tasks()
+
+    session.message_dispatcher.dispatch.assert_awaited_once_with("check status")
+    session.loop_tasks.mark_finished.assert_awaited_once_with("task-1")
+    assert refreshed == [None]
 
 
 def test_sigint_handler_delegates_to_prompt_when_idle(

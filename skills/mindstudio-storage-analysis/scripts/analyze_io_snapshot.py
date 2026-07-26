@@ -23,14 +23,14 @@ IO Snapshot 确定性分析器（mindstudio-storage-analysis）。
     rule_id / severity / confidence / evidence_fields / missing_evidence
     / summary / recommended_next_checks
 
-设计要点（对应审核报告 P1 修复）：
+设计要点：
   - mte2_ratio 完全移出 NPU 传导链的"必需证据"。MTE2 是 AI Core 内部/邻近
     存储层的数据搬运（GM→UB/L1），高占比只代表算子内数据搬运压力，不能证明
     Host 存储/DataLoader 供给不足。高 mte2 + Host IO 正常时应转交计算分析。
   - NPU 传导链用 step throughput / device Free / DataLoader wait / batch ready
     与 Host IO 异常的"同窗相关性"，三档置信度。
-  - R200 拆成两层：仅"识别为网络挂载"不构成瓶颈，必须有 RTT/execute/retrans/
-    吞吞吐等性能证据才能确认。
+  - R200 拆成两层：仅"识别为网络挂载"不构成瓶颈，必须有同窗
+    RTT/execute/retrans/major-timeout 性能证据才能确认。
   - 阈值不写成跨设备绝对真理：优先支持设备基线/用户规格/对照实验，通用阈值仅弱提示。
   - 未知 schema major 版本拒绝确定性分析（返回明确错误）。
 
@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+from collections import defaultdict
 import json
 import math
 import os
@@ -118,6 +119,18 @@ def _parsed(pr: dict) -> Any:
     return pr.get("parsed")
 
 
+_PROVIDER_NAMES = (
+    "mounts_provider",
+    "iostat",
+    "pidstat",
+    "nfs",
+    "df",
+    "process_io_map",
+    "memory",
+    "block_devices",
+)
+
+
 _SCHEMA_VERSION_RE = re.compile(r"^\d+\.\d+$")
 
 
@@ -132,7 +145,13 @@ def _validate_schema_version(sv: Any) -> tuple[int, str | None]:
     """严格校验 `<major>.<minor>` 格式与受支持的 major 版本。"""
     if not isinstance(sv, str) or not sv or not _SCHEMA_VERSION_RE.match(sv):
         return -1, f"malformed schema_version {sv!r} (expect digits.digits)"
-    major = int(sv.split(".")[0])
+    major_text = sv.split(".", 1)[0]
+    if len(major_text) > 9:
+        return -1, "malformed schema_version: major component is too long"
+    try:
+        major = int(major_text)
+    except ValueError:
+        return -1, "malformed schema_version: major component is not an integer"
     if major != SUPPORTED_MAJOR:
         return (
             major,
@@ -154,6 +173,8 @@ def _delta(d1: dict, d0: dict, key: str) -> float:
 
 def _f(v: Any, default: float = 0.0) -> float:
     """安全转 float；非法（字符串/None/NaN/Inf）→ default。"""
+    if isinstance(v, bool):
+        return default
     try:
         out = float(v)
     except (TypeError, ValueError, OverflowError):
@@ -168,15 +189,9 @@ def _snapshot_duration(snapshot: dict) -> float | None:
     duration = _f(snapshot.get("duration_seconds"), default=0.0)
     if duration > 0:
         return duration
-    window = snapshot.get("window")
-    if isinstance(window, dict):
-        try:
-            start = float(window.get("start"))
-            end = float(window.get("end"))
-        except (TypeError, ValueError, OverflowError):
-            return None
-        if math.isfinite(start) and math.isfinite(end) and end > start:
-            return end - start
+    interval = _snapshot_interval(snapshot)
+    if interval is not None:
+        return interval[1] - interval[0]
     return None
 
 
@@ -202,6 +217,10 @@ def _canonical_dev(name: str) -> str:
     n = name.removeprefix("/dev/")
     # nvme0n1p2 → nvme0n1
     m = re.match(r"^(nvme\d+n\d+)p\d+$", n)
+    if m:
+        return m.group(1)
+    # mmcblk0p1 / rbd0p1 / nbd0p1 → corresponding whole device.
+    m = re.match(r"^((?:mmcblk|rbd|nbd)\d+)p\d+$", n)
     if m:
         return m.group(1)
     # md0p1 / dm-1p2 → md0 / dm-1（md/dm 分区折叠）
@@ -232,7 +251,7 @@ def _disks_from_iostat(snapshot: dict) -> tuple[list[dict], str]:
     if isinstance(raw, dict):
         disks = []
         for name, m in raw.items():
-            # DEFECT-3 自审（subagent）：先 spread metrics 再覆盖 name，避免 metrics 内的
+            # 先展开 metrics 再覆盖 name，避免 metrics 内的
             # 非字符串/不可哈希 name 覆盖 canonical key，导致 device_baselines.get 崩溃。
             entry = dict(m) if isinstance(m, dict) else {}
             entry["name"] = name
@@ -341,7 +360,7 @@ def _compute_disk_rates(samples: list[dict]) -> list[dict]:
 
 # --- 各根因桶分析 --------------------------------------------------------
 
-# 设备类型 → r_await 参考线（毫秒）。Review P1-3：HDD/SSD 区分，未知用保守值避免误报。
+# 设备类型 → r_await 参考线（毫秒）；未知类型使用保守值避免误报。
 _AWAIT_BY_TYPE = {"hdd": 20.0, "ssd": 5.0, "unknown": 15.0}
 _UTIL_HIGH = 90.0  # 单次采样"忙"的参考线
 _UTIL_SUSTAINED_MEAN = 85.0  # 窗口平均"持续忙"的参考线
@@ -360,7 +379,7 @@ def _await_threshold(device_type: str | None) -> float:
 
 
 def _classify_r100_disk(d: dict) -> dict:
-    """评估单个设备的饱和度，返回结构化判定（Review P1-1/P1-3）。
+    """评估单个设备的饱和度，返回结构化判定。
 
     high（sustained）需"持续窗口 + 真实队列积压 或 设备基线接近上限"——
     避免 util 高但吞吐极低（NVMe util 失真/采样伪影）或仅偶发抖动被误判 high。
@@ -371,33 +390,101 @@ def _classify_r100_disk(d: dict) -> dict:
     util_p95 = _f(d.get("util_p95"), util)
     r_await = _f(d.get("r_await_ms"))
     w_await = _f(d.get("w_await_ms"))
+    generic_await = _f(d.get("await"))
     avgqu = _f(d.get("avgqu_sz"))
     r_per_s = _f(d.get("r_per_s"))
     w_per_s = _f(d.get("w_per_s"))
     rkB = _f(d.get("rkB_per_s"))
     wkB = _f(d.get("wkB_per_s"))
     device_type = d.get("device_type") or "unknown"
-    try:
-        sample_count = int(
-            d.get("sample_count") or (2 if d.get("_from_diskstats") else 1)
-        )
-    except (TypeError, ValueError, OverflowError):
-        sample_count = 1
+    from_diskstats = bool(d.get("_from_diskstats"))
+
+    def _count(value: Any, default: int = 0) -> int:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError, OverflowError):
+            return default
+        return max(0, parsed)
+
+    sample_count = _count(d.get("sample_count"), 2 if from_diskstats else 1)
     await_thr = _await_threshold(device_type)
-    # DEFECT-2 自审（subagent）：baseline 必须是 dict（非 dict 真值会让 .get 崩溃）。
+    # baseline 必须是 dict；其他真值类型没有可用的 .get 语义。
     raw_baseline = d.get("baseline")
     baseline = raw_baseline if isinstance(raw_baseline, dict) else {}
 
-    busy = util >= _UTIL_HIGH or util_max >= _UTIL_HIGH
-    sustained = (util >= _UTIL_SUSTAINED_MEAN) and (
-        sample_count >= _MIN_SAMPLES_HIGH or d.get("_from_diskstats")
+    has_util = any(
+        key in d and d.get(key) is not None
+        for key in ("util_percent", "util_max", "util_p95")
     )
+    has_queue = "avgqu_sz" in d and d.get("avgqu_sz") is not None
+    has_await = any(
+        key in d and d.get(key) is not None
+        for key in ("await", "r_await_ms", "w_await_ms")
+    )
+    has_rate = any(
+        key in d and d.get(key) is not None
+        for key in ("r_per_s", "w_per_s", "rkB_per_s", "wkB_per_s")
+    )
+
+    def _field_count(field: str) -> int:
+        if field not in d or d.get(field) is None:
+            return 0
+        return _count(d.get(f"{field}_sample_count"), sample_count)
+
+    util_sample_count = _count(
+        d.get("util_sample_count"), sample_count if has_util else 0
+    )
+
+    def _paired_with_util_count(field: str) -> int:
+        if field not in d or d.get(field) is None or not has_util:
+            return 0
+        paired_key = f"{field}_with_util_sample_count"
+        # Missing co-occurrence evidence is unknown, not an invitation to infer it
+        # from two independent counts that may describe disjoint reports.
+        return _count(d.get(paired_key), 0) if paired_key in d else 0
+
+    queue_sample_count = _field_count("avgqu_sz")
+    generic_await_sample_count = _field_count("await")
+    read_await_sample_count = _field_count("r_await_ms")
+    write_await_sample_count = _field_count("w_await_ms")
+    await_sample_count = max(
+        generic_await_sample_count,
+        read_await_sample_count,
+        write_await_sample_count,
+    )
+    queue_with_util_sample_count = _paired_with_util_count("avgqu_sz")
+    generic_await_with_util_sample_count = _paired_with_util_count("await")
+    read_await_with_util_sample_count = _paired_with_util_count("r_await_ms")
+    write_await_with_util_sample_count = _paired_with_util_count("w_await_ms")
+    await_with_util_sample_count = max(
+        generic_await_with_util_sample_count,
+        read_await_with_util_sample_count,
+        write_await_with_util_sample_count,
+    )
+
+    busy = util >= _UTIL_HIGH or util_max >= _UTIL_HIGH
+    sustained = util >= _UTIL_SUSTAINED_MEAN and util_sample_count >= _MIN_SAMPLES_HIGH
     read_await_bad = r_per_s > 0 and r_await >= await_thr
     write_await_bad = w_per_s > 0 and w_await >= await_thr
-    await_bad = read_await_bad or write_await_bad
+    generic_await_bad = (r_per_s + w_per_s) > 0 and generic_await >= await_thr
+    await_bad = read_await_bad or write_await_bad or generic_await_bad
     queue_bad = avgqu >= _AVGQU_HIGH
     # 压力信号：await 超设备类型阈值 或 队列积压。NVMe 高 util 但 await/队列正常 = util 失真，不算压力。
     pressure = await_bad or queue_bad
+    triggered_sample_counts: list[int] = []
+    if queue_bad:
+        triggered_sample_counts.append(queue_with_util_sample_count)
+    if read_await_bad:
+        triggered_sample_counts.append(read_await_with_util_sample_count)
+    if write_await_bad:
+        triggered_sample_counts.append(write_await_with_util_sample_count)
+    if generic_await_bad:
+        triggered_sample_counts.append(generic_await_with_util_sample_count)
+    pressure_sample_count = max(triggered_sample_counts, default=0)
+    pressure_samples_dense = pressure_sample_count >= _MIN_SAMPLES_HIGH
+    queue_support_dense = (
+        queue_bad and queue_with_util_sample_count >= _MIN_SAMPLES_HIGH
+    )
     # "有量吞吐"：排除 r/s=1/rkB=4 这类几乎无 IO 的 util 失真场景
     total_kbps = rkB + wkB
     total_iops = r_per_s + w_per_s
@@ -412,10 +499,21 @@ def _classify_r100_disk(d: dict) -> dict:
     near_iops_ceiling = base_max_iops > 0 and total_iops >= 0.85 * base_max_iops
     baseline_backed = near_bandwidth_ceiling or near_iops_ceiling
 
-    # high：持续 + 压力 + (真实队列 OR 基线接近上限)
-    confirmed = sustained and pressure and (queue_bad or baseline_backed)
+    # high：持续 + 压力 + (持续真实队列 OR 基线接近上限)。
+    # 队列背书必须使用队列自身的共现样本，不能借用 await 的样本密度。
+    confirmed = (
+        sustained
+        and pressure
+        and (queue_support_dense or (baseline_backed and pressure_samples_dense))
+    )
     # medium(likely)：持续 + 压力(await) + 有量吞吐，但无队列/基线背书
-    likely = sustained and pressure and throughput_meaningful and not confirmed
+    likely = (
+        sustained
+        and pressure
+        and pressure_samples_dense
+        and throughput_meaningful
+        and not confirmed
+    )
     # medium(transient)：忙 + 有压力 + 有量吞吐，但非持续（偶发抖动 / 采样不足）。
     # 必须有量吞吐——util 高但吞吐极低（r/s=1/rkB=4）是 util 失真，不算饱和。
     transient = (
@@ -457,20 +555,39 @@ def _classify_r100_disk(d: dict) -> dict:
         "wkB_per_s": round(wkB, 1),
         "avgqu_sz": round(avgqu, 2),
         "sample_count": sample_count,
+        "metric_sample_counts": {
+            "util": util_sample_count,
+            "queue": queue_sample_count,
+            "await": await_sample_count,
+            "queue_with_util": queue_with_util_sample_count,
+            "await_with_util": await_with_util_sample_count,
+            "pressure": pressure_sample_count,
+        },
         "await_threshold_ms": await_thr,
         "subtype": subtype,
         "level": level,
         "pressure_confirmed": pressure,
         "baseline_backed": baseline_backed,
+        "metric_coverage": {
+            "util": has_util,
+            "queue": has_queue,
+            "await": has_await,
+            "rate": has_rate,
+        },
+        "health_evidence_complete": has_util and (has_queue or has_await),
+        "health_evidence_dense": max(
+            queue_with_util_sample_count, await_with_util_sample_count
+        )
+        >= _MIN_SAMPLES_HIGH,
     }
 
 
 def analyze_r100(snapshot: dict) -> dict:
-    """R100 吞吐 / IOPS 饱和（设备忙）。Review P1-1/P1-3：窗口聚合 + 设备类型 + 分级置信。
+    """R100 吞吐 / IOPS 饱和（设备忙）：窗口聚合 + 设备类型 + 分级置信。
 
     - high：持续饱和（util_mean≥85 且采样≥3）+ await/队列超设备类型阈值。
     - medium：偶发饱和（util 偶高但非持续），或采样不足，或 util 高但 await/队列正常。
-    - info（high confidence 无饱和）：窗口内无任何饱和迹象。
+    - info（high confidence 无饱和）：足量窗口样本内无任何饱和迹象。
     subtype：仅在有量吞吐且确认压力时标 bandwidth/iops，否则 io_pressure（不臆造带宽饱和）。
     数据来源优先 iostat.parsed，缺失时退化到 diskstats 差值（视为窗口聚合，sample_count=2）。
     """
@@ -521,6 +638,13 @@ def analyze_r100(snapshot: dict) -> dict:
     finding["evidence_window_valid"] = evidence_interval is not None
     if evidence_interval is not None:
         finding["evidence_interval"] = list(evidence_interval)
+    evidence_duration = (
+        evidence_interval[1] - evidence_interval[0]
+        if evidence_interval is not None
+        else None
+    )
+    duration = evidence_duration or _snapshot_duration(snapshot)
+    short_window = duration is not None and duration < 10
     # 可选设备基线（用户提供规格：{name: {max_read_mbps, max_iops}}）—— 有基线才能确认带宽/IOPS 接近上限
     baselines = snapshot.get("device_baselines") or {}
     if not isinstance(baselines, dict):
@@ -534,6 +658,12 @@ def analyze_r100(snapshot: dict) -> dict:
     sustained = [a for a in assessed if a["level"] == "sustained"]
     likely = [a for a in assessed if a["level"] == "likely"]
     transient = [a for a in assessed if a["level"] == "transient"]
+    incomplete = [a for a in assessed if not a["health_evidence_complete"]]
+    sparse = [
+        a
+        for a in assessed
+        if a["health_evidence_complete"] and not a["health_evidence_dense"]
+    ]
 
     if sustained:
         finding["confidence"] = "high"
@@ -579,9 +709,25 @@ def analyze_r100(snapshot: dict) -> dict:
         finding["note"] = "需更长采样窗口或设备规格确认是否为持续瓶颈。"
     else:
         finding["severity"] = "info"
-        duration = _snapshot_duration(snapshot)
-        short_window = duration is not None and duration < 10
-        if short_window:
+        if incomplete:
+            finding["confidence"] = "low"
+            finding["summary"] = (
+                f"{len(incomplete)} 个设备的指标字段覆盖不足，不能高置信排除 IO 压力；"
+                "至少需要 util 与 queue/await 组合证据。"
+            )
+            finding.setdefault("missing_evidence", []).append(
+                "每设备完整的 util + queue/await 指标（以及对应读写速率）"
+            )
+        elif sparse:
+            finding["confidence"] = "medium"
+            finding["summary"] = (
+                f"{len(sparse)} 个设备虽有 util 与 queue/await 字段，但共同有效样本不足 "
+                f"{_MIN_SAMPLES_HIGH} 个，不能高置信排除 IO 压力。"
+            )
+            finding.setdefault("missing_evidence", []).append(
+                "每设备至少 3 个同时覆盖 util 与 queue/await 的有效样本"
+            )
+        elif short_window:
             finding["confidence"] = "medium"
             finding["summary"] = (
                 f"短窗口（{duration:.1f}s）内未检测到设备 IO 饱和；采样窗偏短，"
@@ -599,6 +745,22 @@ def analyze_r100(snapshot: dict) -> dict:
                 "未检测到设备 IO 饱和（窗口内 util/await/队列均在参考线内）。"
             )
         finding["note"] = "阈值按设备类型区分；NVMe 的 util 在多队列下含义弱化。"
+    if short_window:
+        if finding.get("confidence") == "high":
+            finding["confidence"] = "medium"
+            if finding.get("severity") == "high":
+                finding["severity"] = "medium"
+            finding["summary"] += (
+                f" 但实际证据窗口仅 {duration:.1f}s，短于 10s，置信度封顶 medium。"
+            )
+        else:
+            finding["summary"] += (
+                f" 实际证据窗口仅 {duration:.1f}s，短于 10s；"
+                "短窗口不能认证持续压力或健康。"
+            )
+        missing = "更长的同窗采样（建议 30s，短窗口不得认证持续压力或健康）"
+        if missing not in finding.setdefault("missing_evidence", []):
+            finding["missing_evidence"].append(missing)
     if evidence_interval is None:
         finding.setdefault("missing_evidence", []).append(
             f"{source} 有效采集时间窗（用于与 PID/NPU 证据做因果对齐）"
@@ -620,12 +782,13 @@ def _norm_nfs_source(s: Any) -> str:
         return ""
     if ":" in s:
         host, _, path = s.partition(":")
-        return f"{host.strip().lower()}:{path.rstrip('/')}"
+        normalized_path = path.rstrip("/") or ("/" if path.startswith("/") else "")
+        return f"{host.strip().lower()}:{normalized_path}"
     return s.strip().lower()
 
 
 def _norm_fstype_group(ft: Any) -> str:
-    """nfs/nfs4 视为同一兼容组（第八轮 P1-3）。"""
+    """将 nfs/nfs4 视为同一兼容组。"""
     ft = str(ft or "").strip().lower()
     return "nfs" if ft in ("nfs", "nfs4") else ft
 
@@ -634,7 +797,7 @@ def _nfs_identity(item: dict, source_key: str = "device") -> tuple[str, str, str
     """Return normalized (source, mount_point, fstype) identity for an NFS mount/metric."""
     return (
         _norm_nfs_source(item.get(source_key)),
-        str(item.get("mount_point", "")).rstrip("/"),
+        _canonicalize_path(str(item.get("mount_point") or "")),
         _norm_fstype_group(item.get("fstype")),
     )
 
@@ -670,17 +833,27 @@ def _required_nfs_identities(
         target_path
     ) not in ("", "/", ".")
     if specific_target:
-        matching = [
-            m
-            for m in nfs_mounts
-            if isinstance(m, dict)
-            and _path_under_mount(target_path, str(m.get("mount_point", "")))
+        all_mounts = [
+            mount
+            for mount in (snapshot.get("mounts") or [])
+            if isinstance(mount, dict)
+            and _path_under_mount(target_path, str(mount.get("mount_point") or ""))
         ]
-        if matching:
-            chosen = max(matching, key=lambda m: len(str(m.get("mount_point", ""))))
-            ident = _nfs_identity(chosen)
-            if ident in current:
-                return {ident}, "target_path"
+        if all_mounts:
+            # Resolve the effective mount from all filesystems first. A deeper local
+            # bind/overmount must shadow an NFS parent. For equal mount points, the
+            # later /proc/mounts entry represents the newer stacked mount.
+            _, chosen = max(
+                enumerate(all_mounts),
+                key=lambda item: (
+                    len(_canonicalize_path(str(item[1].get("mount_point") or ""))),
+                    item[0],
+                ),
+            )
+            if _norm_fstype_group(chosen.get("fstype")) == "nfs":
+                ident = _nfs_identity(chosen)
+                if ident in current:
+                    return {ident}, "target_path"
         return set(), "target_path_non_nfs"
 
     if not current:
@@ -690,9 +863,15 @@ def _required_nfs_identities(
     parsed = _parsed(provider)
     mapped: set[tuple[str, str, str]] = set()
     relevant_mappings = 0
+    target_pid_scope = _target_pid_scope(snapshot)
     if _status(provider) == "ok" and isinstance(parsed, dict):
         for mapping in parsed.get("mappings", []) or []:
             if not isinstance(mapping, dict):
+                continue
+            if (
+                target_pid_scope is not None
+                and mapping.get("pid") not in target_pid_scope
+            ):
                 continue
             if not _is_data_relevant_path(mapping.get("path"), None):
                 continue
@@ -706,6 +885,10 @@ def _required_nfs_identities(
         return mapped, "target_process_io_map"
     if relevant_mappings:
         return set(), "target_process_io_map_non_nfs"
+    if target_pid_scope is not None:
+        # An explicit PID is a hard workload boundary. Missing, empty, or unrelated
+        # process mappings cannot be replaced by every NFS mount visible on the host.
+        return set(), "target_process_io_map_unresolved"
 
     return current, "all_current_nfs_mounts"
 
@@ -713,7 +896,7 @@ def _required_nfs_identities(
 def _bind_nfs_metrics(
     metrics: list[dict], nfs_mounts: list[dict]
 ) -> tuple[list[dict], list[dict], list[dict]]:
-    """第八轮 P1-3：按 (source, mount_point, fstype) 身份绑定 NFS metric 到当前挂载。
+    """按 (source, mount_point, fstype) 身份绑定 NFS metric 到当前挂载。
 
     返回 (strong, weak, unmatched)：
       - strong：source+mount_point+fstype 完全匹配某当前 NFS 挂载（nfs/nfs4 兼容）→ 可 high。
@@ -727,7 +910,7 @@ def _bind_nfs_metrics(
     for mm in metrics:
         if not isinstance(mm, dict):
             continue
-        mp = str(mm.get("mount_point", "")).rstrip("/")
+        mp = _canonicalize_path(str(mm.get("mount_point") or ""))
         ft = _norm_fstype_group(mm.get("fstype"))
         src = _norm_nfs_source(mm.get("source"))
         if mp not in mp_set:
@@ -751,10 +934,10 @@ def analyze_r200(snapshot: dict) -> dict:
     """R200 网络存储 / 挂载延迟。
 
     拆两层：(a) 识别为网络挂载（仅类型，非瓶颈）；
-            (b) 确认瓶颈（必须有 RTT/execute/retrans/吞吐等性能证据）。
+            (b) 确认瓶颈（必须有 RTT/execute/retrans/major-timeout 性能证据）。
     仅 (a) 成立而 (b) 缺证据时，confidence=low 并列入 missing_evidence。
 
-    覆盖范围（Review P1-6 诚实收窄）：自动性能确认**仅 NFS**（依赖
+    覆盖范围：自动性能确认**仅 NFS**（依赖
     /proc/self/mountstats per-op 指标）。CIFS/Lustre/GPFS/BeeGFS/Ceph/FUSE 仅
     "识别 + 人工指导"，不自动判瓶颈——这些文件系统需各自专用 provider
     （cifsiostat、lctl get_param、mmrepquota 等），当前未实现，标注 handoff。
@@ -784,6 +967,17 @@ def analyze_r200(snapshot: dict) -> dict:
             evidence_window_valid=False,
         )
         return finding
+    if mounts_status == "empty":
+        finding.update(
+            confidence="none",
+            severity="info",
+            summary=("挂载列表采集为空，无法确认当前 workload 未使用网络存储。"),
+            evidence_fields=["mounts_provider.status"],
+            missing_evidence=["非空且与 Snapshot 同窗的 mounts_provider/mounts 列表"],
+            performance_window_evaluated=False,
+            evidence_window_valid=False,
+        )
+        return finding
     mounts_interval_valid = _provider_interval(snapshot, "mounts_provider") is not None
 
     mounts = snapshot.get("mounts", []) or []
@@ -794,7 +988,7 @@ def analyze_r200(snapshot: dict) -> dict:
         and (
             str(m.get("fstype", "")).lower()
             in {"nfs", "nfs4", "cifs", "lustre", "gpfs", "beegfs", "ceph"}
-            or str(m.get("fstype", "")).lower().startswith(("nfs", "fuse."))
+            or str(m.get("fstype", "")).lower().startswith("fuse.")
         )
     ]
 
@@ -817,12 +1011,7 @@ def analyze_r200(snapshot: dict) -> dict:
         return finding
 
     # 区分 NFS（可自动确认）与非 NFS 网络存储（仅识别 + 人工指导）
-    nfs_mounts = [
-        m
-        for m in net_mounts
-        if str(m.get("fstype", "")).lower() in {"nfs", "nfs4"}
-        or str(m.get("fstype", "")).lower().startswith("nfs")
-    ]
+    nfs_mounts = [m for m in net_mounts if _norm_fstype_group(m.get("fstype")) == "nfs"]
     non_nfs_mounts = [m for m in net_mounts if m not in nfs_mounts]
 
     finding["evidence_fields"] = ["mounts.fstype"]
@@ -850,7 +1039,7 @@ def analyze_r200(snapshot: dict) -> dict:
     ):
         metrics = (_parsed(nfs_pr) or {}).get("mount_metrics", []) or []
 
-    # 第八轮 P1-3：NFS 性能证据按 (source, mount_point, fstype) 身份绑定到当前挂载。
+    # NFS 性能证据按 (source, mount_point, fstype) 身份绑定到当前挂载。
     #   strong（身份完全匹配）→ 可 high；weak（无 source 仅路径匹配）→ 不得单独 high；
     #   unmatched（路径不在当前挂载）→ 忽略，避免旧/混入 metric 拼接为因果链。
     strong, weak, unmatched_metrics = _bind_nfs_metrics(metrics, nfs_mounts)
@@ -860,13 +1049,14 @@ def analyze_r200(snapshot: dict) -> dict:
     non_windowed = [mm for mm in strong if mm.get("windowing") != "delta"]
     required_identities, required_scope = _required_nfs_identities(snapshot, nfs_mounts)
     target_nfs_irrelevant = required_scope.endswith("_non_nfs")
+    target_nfs_unresolved = required_scope.endswith("_unresolved")
     if required_identities:
         windowed = [
             mm
             for mm in all_windowed
             if _nfs_identity(mm, source_key="source") in required_identities
         ]
-    elif target_nfs_irrelevant:
+    elif target_nfs_irrelevant or target_nfs_unresolved:
         windowed = []
     else:
         windowed = all_windowed
@@ -888,6 +1078,19 @@ def analyze_r200(snapshot: dict) -> dict:
     finding["nfs_metric_missing_mounts"] = [
         _nfs_identity_dict(ident) for ident in sorted(missing_identities)
     ]
+    if target_nfs_unresolved:
+        finding.update(
+            confidence="none",
+            severity="info",
+            summary=(
+                "显式 target.pid 未解析到当前设备或 NFS 挂载，"
+                "不能把全机 NFS 指标归因给目标 workload。"
+            ),
+            missing_evidence=["目标 PID/进程树到当前 NFS 挂载或块设备的可靠同窗映射"],
+            performance_window_evaluated=False,
+            evidence_window_valid=False,
+        )
+        return finding
     finding["performance_window_evaluated"] = mounts_interval_valid and (
         target_nfs_irrelevant
         or (bool(required_identities) and not missing_identities and not non_nfs_mounts)
@@ -898,9 +1101,12 @@ def analyze_r200(snapshot: dict) -> dict:
             "Target workload is not on an NFS mount; current NFS mounts are not used to rule target Host IO in or out."
         )
     elif windowed:
-        finding["evidence_window_valid"] = (
-            mounts_interval_valid and _provider_interval(snapshot, "nfs") is not None
+        nfs_interval = _provider_interval(snapshot, "nfs")
+        finding["evidence_window_valid"] = intervals_overlap_or_are_adjacent(
+            _provider_interval(snapshot, "mounts_provider"), nfs_interval
         )
+        if finding["evidence_window_valid"] and nfs_interval is not None:
+            finding["evidence_interval"] = list(nfs_interval)
     has_weak_only = bool(weak) and not strong
     if missing_identities:
         finding.setdefault("handoff_notes", []).append(
@@ -921,7 +1127,7 @@ def analyze_r200(snapshot: dict) -> dict:
         )
 
     confirmed = []
-    # 性能判据（Review P1-4：不再"一次重传即 high"，改用比率 + 最小样本 + 延迟阈值）。
+    # 性能判据使用重传比率 + 最小样本 + 延迟阈值，不以单次重传判 high。
     # 这些阈值是参考线而非通用真理，应配合对照实验与设备基线。
     _MIN_OPS = 200.0  # 最小窗内操作样本量（低于此统计意义不足）
     _RTT_HIGH_MS = 50.0  # 平均 RTT 高（健康 LAN NFS 通常 <10ms）
@@ -937,26 +1143,39 @@ def analyze_r200(snapshot: dict) -> dict:
         ops = mm.get("ops") or 0
         # transmissions 缺失/为 0 时无法算比率（不伪造分母，避免假 100% 重传）
         tx_raw = mm.get("transmissions")
-        tx = float(tx_raw) if tx_raw is not None else 0.0
-        major = mm.get("major_timeouts") or 0
+        major_raw = mm.get("major_timeouts")
+        major = major_raw or 0
         try:
             rtt = float(rtt)
             execute = float(execute)
             retrans = float(retrans)
             ops = float(ops)
-            tx = float(tx)
+            tx = float(tx_raw) if tx_raw is not None else 0.0
             major = float(major)
         except (TypeError, ValueError, OverflowError):
             rtt = execute = retrans = ops = tx = major = 0.0
         # 与 nfs-utils/nfsiostat 一致：重传次数 / 原始操作请求数。
+        integral_request_counters = all(
+            math.isfinite(value) and value.is_integer() for value in (ops, tx, retrans)
+        )
         counter_consistent = (
             tx_raw is not None
+            and integral_request_counters
             and ops >= 0
             and retrans >= 0
             and tx >= ops
             and math.isclose(retrans, tx - ops, rel_tol=1e-6, abs_tol=1e-6)
         )
-        if not counter_consistent:
+        major_timeout_consistent = (
+            major_raw is not None
+            and counter_consistent
+            and math.isfinite(major)
+            and major.is_integer()
+            and 0 <= major <= ops
+        )
+        if not counter_consistent or (
+            major_raw is not None and not major_timeout_consistent
+        ):
             invalid_counter_metrics += 1
         retrans_ratio = (retrans / ops) if ops > 0 and counter_consistent else 0.0
         sufficient_ops = ops >= _MIN_OPS
@@ -966,11 +1185,11 @@ def analyze_r200(snapshot: dict) -> dict:
             and counter_consistent
             and retrans_ratio >= _RETRANS_RATIO_HIGH
         )
-        # 确认判据：延迟高（需充足样本）或 重传率达标（需充足样本）或 任意 major timeout
+        # 确认判据：延迟高（需充足样本）或重传率达标（需充足样本）或
+        # 与有效请求 delta 一致的 major timeout。不能由 ops=0 的孤立计数伪造。
+        major_timeout_bad = major_timeout_consistent and major >= _MAJOR_TIMEOUT_ANY
         confirmed_flag = (
-            (latency_bad and sufficient_ops)
-            or retrans_bad
-            or major >= _MAJOR_TIMEOUT_ANY
+            (latency_bad and sufficient_ops) or retrans_bad or major_timeout_bad
         )
         if confirmed_flag:
             confirmed.append(
@@ -987,14 +1206,19 @@ def analyze_r200(snapshot: dict) -> dict:
 
     if invalid_counter_metrics:
         finding.setdefault("handoff_notes", []).append(
-            f"{invalid_counter_metrics} 个 NFS metric 的 ops/transmissions/retrans 缺失或不一致，重传证据已忽略。"
+            f"{invalid_counter_metrics} 个 NFS metric 的请求/重传/major-timeout "
+            "计数缺失、不一致或非整数，相关性能证据已忽略。"
         )
 
     if confirmed:
-        nfs_interval_valid = (
-            mounts_interval_valid and _provider_interval(snapshot, "nfs") is not None
+        nfs_interval = _provider_interval(snapshot, "nfs")
+        nfs_interval_valid = intervals_overlap_or_are_adjacent(
+            _provider_interval(snapshot, "mounts_provider"),
+            nfs_interval,
         )
         finding["evidence_window_valid"] = nfs_interval_valid
+        if nfs_interval_valid and nfs_interval is not None:
+            finding["evidence_interval"] = list(nfs_interval)
         finding["confidence"] = "high" if nfs_interval_valid else "medium"
         finding["severity"] = "high" if nfs_interval_valid else "medium"
         finding["summary"] = (
@@ -1005,7 +1229,7 @@ def analyze_r200(snapshot: dict) -> dict:
         finding["confirmed_mounts"] = confirmed
         if not nfs_interval_valid:
             finding.setdefault("missing_evidence", []).append(
-                "mounts_provider and nfs started_at/ended_at overlapping snapshot.window"
+                "mounts_provider and nfs windows overlapping or adjacent within snapshot.window"
             )
             finding.setdefault("handoff_notes", []).append(
                 "NFS metric claims delta window but provider time interval is missing or stale; capped at medium."
@@ -1030,14 +1254,14 @@ def analyze_r200(snapshot: dict) -> dict:
                 "mounts_provider started_at/ended_at overlapping snapshot.window"
             )
         if has_weak_only:
-            # 第八轮 P1-3：存在 source 缺失的弱匹配 metric → 提示补 source（mountstats 设备字段），
+            # source 缺失的 metric 只能弱匹配，需补 mountstats 设备字段，
             # 便于强身份绑定后再次确认；置信度仍不 high。
             finding["confidence"] = "medium"
             finding.setdefault("handoff_notes", []).append(
                 "存在缺 source 的 NFS metric（仅路径弱匹配），无法做 (source,mount_point,fstype) "
                 "身份强绑定；建议确认 mountstats 设备字段后重新分析。"
             )
-    # 非 NFS 网络存储：明确标注"识别 + 人工指导"（Review P1-6 诚实收窄）
+    # 非 NFS 网络存储仅支持识别与人工指导。
     if non_nfs_mounts:
         nn = ", ".join(sorted({str(m.get("fstype")) for m in non_nfs_mounts}))
         finding.setdefault("handoff_notes", []).append(
@@ -1049,17 +1273,17 @@ def analyze_r200(snapshot: dict) -> dict:
 
 
 def analyze_r300(snapshot: dict) -> dict:
-    """R300 远程文件访问 / 元数据 / 小文件开销（Review P1-7：补直接证据）。
+    """R300 远程文件访问 / 元数据 / 小文件开销。
 
     证据强度：
       - **强（可确认）**：NFS mountstats 中元数据 op（GETATTR/LOOKUP/READDIR/...）
         窗内平均 RTT/execute 偏高——直接反映 open/stat/lookup 的远程访问耗时。
-      - 中（候选）：iostat 小 IO 特征（高 IOPS + 低平均 IO 大小）。
+      - 中（候选）：iostat 或 diskstats delta 小 IO 特征（高 IOPS + 低平均 IO 大小）。
       - 背景（不单独产生根因）：df inode 使用率（容量信号，非延迟证据）。
     """
     finding = _finding(
         "R300",
-        "medium",
+        "info",
         "none",
         "",
         next_checks=[
@@ -1078,12 +1302,11 @@ def analyze_r300(snapshot: dict) -> dict:
         and _status(nfs_pr) == "ok"
         and isinstance(_parsed(nfs_pr), dict)
     ):
-        # 第八轮 P1-3：元数据证据按 (source, mount_point, fstype) 身份绑定（与 R200 共用 helper）。
+        # 元数据证据与 R200 共用身份绑定逻辑。
         nfs_mounts_for_bind = [
             m
             for m in (snapshot.get("mounts") or [])
-            if isinstance(m, dict)
-            and str(m.get("fstype", "")).lower().startswith("nfs")
+            if isinstance(m, dict) and _norm_fstype_group(m.get("fstype")) == "nfs"
         ]
         all_mm = (_parsed(nfs_pr) or {}).get("mount_metrics", []) or []
         strong_mm, _weak_mm, _unmatched = _bind_nfs_metrics(all_mm, nfs_mounts_for_bind)
@@ -1140,8 +1363,8 @@ def analyze_r300(snapshot: dict) -> dict:
                     }
                 )
 
-    # 中证据：iostat 小 IO 特征
-    disks, _ = _collect_disks(snapshot)
+    # 中证据：设备级小 IO 特征
+    disks, disk_source = _collect_disks(snapshot)
     small_io_disks = []
     for d in disks:
         r_per_s = _f(d.get("r_per_s"))
@@ -1175,17 +1398,20 @@ def analyze_r300(snapshot: dict) -> dict:
     if meta_slow:
         finding["evidence_fields"].append("nfs.mount_metrics（元数据 op 延迟）")
     if small_io_disks:
-        finding["evidence_fields"].append("iostat.disks（小 IO 特征）")
+        finding["evidence_fields"].append(f"{disk_source}.disks（小 IO 特征）")
     if high_inode:
         finding["evidence_fields"].append("df.filesystems（inode 使用·背景）")
 
     parts: list[str] = []
     if meta_slow:
-        nfs_interval_valid = (
-            _provider_interval(snapshot, "mounts_provider") is not None
-            and _provider_interval(snapshot, "nfs") is not None
+        nfs_interval = _provider_interval(snapshot, "nfs")
+        nfs_interval_valid = intervals_overlap_or_are_adjacent(
+            _provider_interval(snapshot, "mounts_provider"),
+            nfs_interval,
         )
         finding["evidence_window_valid"] = nfs_interval_valid
+        if nfs_interval_valid and nfs_interval is not None:
+            finding["evidence_interval"] = list(nfs_interval)
         finding["confidence"] = "high" if nfs_interval_valid else "medium"
         finding["severity"] = "high" if nfs_interval_valid else "medium"
         parts.append(
@@ -1194,7 +1420,7 @@ def analyze_r300(snapshot: dict) -> dict:
         finding["metadata_slow_mounts"] = meta_slow
         if not nfs_interval_valid:
             finding.setdefault("missing_evidence", []).append(
-                "mounts_provider and nfs started_at/ended_at overlapping snapshot.window"
+                "mounts_provider and nfs windows overlapping or adjacent within snapshot.window"
             )
             finding.setdefault("handoff_notes", []).append(
                 "NFS metadata metric claims delta window but provider time interval is missing or stale; capped at medium."
@@ -1212,6 +1438,15 @@ def analyze_r300(snapshot: dict) -> dict:
         finding["high_inode_fs"] = high_inode
         parts.append(f"{len(high_inode)} 个文件系统 inode 使用率 >= 80%（背景信息）")
 
+    if not meta_slow:
+        # 小 IO 与 inode 都只是候选/背景信号，不能替代元数据延迟或 syscall
+        # 观测。始终指出将候选升级为已确认根因还缺什么。
+        finding["missing_evidence"] = [
+            "nfs.mount_metrics 的 GETATTR/LOOKUP/READDIR 窗内延迟",
+            "openat/stat/getdents syscall 频率或延迟",
+            "page cache 命中率或第二次访问延迟对照",
+        ]
+
     if parts:
         finding["summary"] = "；".join(parts) + "。"
     else:
@@ -1219,16 +1454,11 @@ def analyze_r300(snapshot: dict) -> dict:
         finding["summary"] = (
             "缺少远程文件访问/元数据开销的直接证据（元数据 op 延迟、syscall 频率、cache 命中）。"
         )
-        finding["missing_evidence"] = [
-            "nfs.mount_metrics 的 GETATTR/LOOKUP/READDIR 窗内延迟",
-            "数据集文件数量与平均大小（find | wc -l）",
-            "page cache 命中率（第二次访问延迟对比）",
-        ]
     return finding
 
 
 # 共享库/日志/解释器/系统文件路径——这些路径上的多 PID 共享设备**不构成**数据 IO 争抢
-# （Review P1-5：避免把"共同打开根盘文件"误报为 IO 争抢）。
+# 避免把“共同打开根盘文件”误报为 IO 争抢。
 _NON_DATA_PATH_PREFIXES = (
     "/usr",
     "/lib",
@@ -1297,7 +1527,7 @@ _NON_CONTENTION_DEVICES = {
 
 
 def _canonicalize_path(p: str) -> str:
-    """第八轮 P1-4：规范化绝对路径——折叠重复 `/`、解析 `.`/`..`、去 trailing slash。
+    """规范化绝对路径：折叠重复 `/`、解析 `.`/`..`、去 trailing slash。
 
     相对路径或含越界 `..` 的路径原样返回（不臆测），由调用方按需处理。
     """
@@ -1327,9 +1557,9 @@ def _canonicalize_path(p: str) -> str:
 def _is_data_relevant_path(path: str | None, target_path: str | None = None) -> bool:
     """判断一条映射路径是否"数据相关"（排除共享库/日志/解释器/系统文件）。
 
-    第七轮 P2-2：路径组件边界匹配（`path == prefix` 或 `path` 位于 `prefix/` 下），
+    使用路径组件边界匹配（`path == prefix` 或 `path` 位于 `prefix/` 下），
     避免 `/usrdata` 被 `/usr` 前缀误伤。
-    第八轮 P1-4：target 先规范化（折叠 `//`、解析 `.`/`..`）。规则优先级：
+    target 先规范化（折叠 `//`、解析 `.`/`..`）。规则优先级：
       1. 系统后缀（.so/.pyc...）与 site-packages 永远排除（即便在 target 下）。
       2. **具体** target（非 `/`/空/`.`）→ 其子树覆盖系统目录前缀排除
          （用户明确指定 /opt/dataset 为数据根，即便 /opt 是系统前缀）。
@@ -1378,33 +1608,92 @@ def _is_contention_storage_mapping(mapping: dict, devices: set[str]) -> bool:
     return bool(devices)
 
 
-def _active_io_pids(procs: list[dict], threshold: float = 100.0) -> set[int]:
-    """pidstat 中有活跃 IO 的 PID 集合（kB_rd/s 或 kB_wr/s 超阈值，默认 100KB/s）。"""
+def _active_io_pids(procs: list[dict], total_reports: int) -> set[int]:
+    """Return PIDs with sustained IO in a majority of pidstat reports."""
+    if (
+        not isinstance(total_reports, int)
+        or isinstance(total_reports, bool)
+        or total_reports < _MIN_SAMPLES_HIGH
+    ):
+        return set()
     out: set[int] = set()
     for p in procs:
-        try:
-            kbr = float(p.get("kbr_per_s", 0) or 0)
-            kbw = float(p.get("kbw_per_s", 0) or 0)
-        except (TypeError, ValueError, OverflowError):
+        if not isinstance(p, dict):
             continue
-        if kbr >= threshold or kbw >= threshold:
-            try:
-                out.add(int(p.get("pid")))
-            except (TypeError, ValueError, OverflowError):
-                # G0-6 自审：int(float('inf')) 或 int(超大 float) 抛 OverflowError，
-                # 旧守卫只捕获 TypeError/ValueError 会漏。pid 非法即跳过该进程。
-                continue
+        try:
+            sample_count = _strict_json_int(p.get("sample_count"))
+            active_sample_count = _strict_json_int(p.get("active_sample_count"))
+            pid = _strict_json_int(p.get("pid"), positive=True)
+        except ValueError:
+            continue
+        counts_valid = (
+            0 <= active_sample_count <= sample_count <= total_reports
+            and active_sample_count >= _MIN_SAMPLES_HIGH
+            and active_sample_count * 2 > total_reports
+        )
+        if counts_valid:
+            out.add(pid)
     return out
+
+
+def _mapping_observation_interval(
+    mapping: dict, provider_interval: tuple[float, float] | None
+) -> tuple[float, float] | None:
+    """Return a mapping's validated first/last observation interval."""
+    if provider_interval is None:
+        return None
+    start = _parse_iso(mapping.get("first_seen"))
+    end = _parse_iso(mapping.get("last_seen"))
+    if start is None or end is None or end <= start:
+        return None
+    if start < provider_interval[0] - 2.0 or end > provider_interval[1] + 2.0:
+        return None
+    clipped = max(start, provider_interval[0]), min(end, provider_interval[1])
+    return clipped if clipped[1] > clipped[0] else None
+
+
+def _common_mapping_interval(
+    entries: list[dict], pids: set[int]
+) -> tuple[float, float] | None:
+    """Find a time segment where every candidate PID had a mapping observation."""
+    if not pids:
+        return None
+    groups: list[list[tuple[float, float]]] = []
+    for pid in sorted(pids):
+        intervals = [
+            entry["mapping_interval"]
+            for entry in entries
+            if entry.get("pid") == pid
+            and entry.get("mapping_observation_count", 0) >= 2
+            and entry.get("mapping_interval") is not None
+        ]
+        if not intervals:
+            return None
+        groups.append(intervals)
+
+    common = groups[0]
+    for group in groups[1:]:
+        intersections: list[tuple[float, float]] = []
+        for left in common:
+            for right in group:
+                overlap = max(left[0], right[0]), min(left[1], right[1])
+                if overlap[1] > overlap[0]:
+                    intersections.append(overlap)
+        if not intersections:
+            return None
+        common = intersections
+    return max(common, key=lambda interval: interval[1] - interval[0])
 
 
 def analyze_r400(snapshot: dict, r100_finding: dict | None = None) -> dict:
     """R400 多 rank / 多 worker / 多实例 IO 干扰。
 
-    高置信度需**同时**满足（Review P1-5：避免共享根盘/打开 FD 误报）：
+    高置信度需**同时**满足以下条件，避免共享根盘/打开 FD 误报：
       1. ≥2 个不同 PID 映射到同一设备；
       2. 至少一条映射路径"数据相关"（排除共享库/日志/解释器/系统文件）；
       3. 这些 PID 在 pidstat 中有活跃 IO；
-      4. 该设备在 R100 中饱和。
+      4. 该设备在 R100 中饱和；
+      5. 每个 PID 的同一条强身份映射实际观测至少两次，且映射区间同窗。
     任一缺失则降级为 medium/low/none，并在 missing_evidence 说明缺哪项。
     """
     if r100_finding is None:
@@ -1412,7 +1701,7 @@ def analyze_r400(snapshot: dict, r100_finding: dict | None = None) -> dict:
 
     finding = _finding(
         "R400",
-        "high",
+        "info",
         "none",
         "",
         next_checks=[
@@ -1423,15 +1712,39 @@ def analyze_r400(snapshot: dict, r100_finding: dict | None = None) -> dict:
     )
 
     pmap_pr = _provider(snapshot, "process_io_map")
+    pmap_parsed: dict = {}
     mappings: list[dict] = []
     if _status(pmap_pr) == "ok" and isinstance(_parsed(pmap_pr), dict):
-        mappings = (_parsed(pmap_pr) or {}).get("mappings", []) or []
+        pmap_parsed = _parsed(pmap_pr) or {}
+        mappings = pmap_parsed.get("mappings", []) or []
+    raw_pmap_partial = pmap_parsed.get("partial")
+    pmap_partial = (
+        raw_pmap_partial
+        if isinstance(raw_pmap_partial, list)
+        else ["process_io_map partial coverage is malformed"]
+        if raw_pmap_partial
+        else []
+    )
+    try:
+        pmap_observation_samples = _strict_json_int(
+            pmap_parsed.get("observation_samples"), positive=True
+        )
+    except ValueError:
+        pmap_observation_samples = 0
+    pmap_interval = _provider_interval(snapshot, "process_io_map")
 
     pidstat_pr = _provider(snapshot, "pidstat")
     procs: list[dict] = []
     if _status(pidstat_pr) == "ok" and isinstance(_parsed(pidstat_pr), dict):
-        procs = (_parsed(pidstat_pr) or {}).get("processes", []) or []
-    active_pids = _active_io_pids(procs)
+        pidstat_parsed = _parsed(pidstat_pr) or {}
+        procs = pidstat_parsed.get("processes", []) or []
+    else:
+        pidstat_parsed = {}
+    try:
+        pidstat_reports = _strict_json_int(pidstat_parsed.get("reports"), positive=True)
+    except ValueError:
+        pidstat_reports = 0
+    active_pids = _active_io_pids(procs, pidstat_reports)
 
     # 饱和设备集合（用 canonical 设备名，与 mapping 的 canonical_device 对齐）
     saturated_devs: set[str] = set()
@@ -1463,7 +1776,7 @@ def analyze_r400(snapshot: dict, r100_finding: dict | None = None) -> dict:
             ]
         return finding
 
-    # 按 canonical_device 聚合（Review P1-2：/dev/sda1→sda，/dev/mapper/*→dm-* 等）
+    # 按 canonical_device 聚合（/dev/sda1→sda，/dev/mapper/*→dm-* 等）。
     from collections import defaultdict
 
     dev_to_entries: dict[str, list[dict]] = defaultdict(list)
@@ -1490,10 +1803,9 @@ def analyze_r400(snapshot: dict, r100_finding: dict | None = None) -> dict:
             else []
         )
         topology = {device for device in [canonical, *backing] if device}
-        # dm/md/LVM 映射优先按共享底层设备聚合；无 backing 时按 canonical。
-        contention_devices = (
-            set(backing) if backing else ({canonical} if canonical else set())
-        )
+        # iostat 可能报告 dm/LVM 逻辑设备，也可能报告底层盘。两层都保留为候选，
+        # 后续饱和判定仍严格绑定当前候选名，不能把一个 topology 成员的压力传播给另一个。
+        contention_devices = topology
         if not contention_devices:
             # 无法归一到真实设备（如 source 为空/nfs 等非块设备），不计入争抢候选
             continue
@@ -1505,11 +1817,27 @@ def analyze_r400(snapshot: dict, r100_finding: dict | None = None) -> dict:
             weak_identity_warning = True
         pid = m.get("pid")
         try:
-            pid_i = int(pid) if pid is not None else None
-        except (TypeError, ValueError, OverflowError):
-            # G0-6 自审：补 OverflowError（int(float('inf')) / int(超大 float)）。
+            pid_i = _strict_json_int(pid, positive=True)
+        except ValueError:
             pid_i = None
         path_relevant = _is_data_relevant_path(m.get("path"), target_path=target_path)
+        try:
+            mapping_observation_count = _strict_json_int(m.get("observation_count"))
+        except ValueError:
+            mapping_observation_count = 0
+        boot_id = m.get("boot_id")
+        raw_starttime = m.get("pid_starttime_ticks")
+        process_identity_strong = bool(
+            isinstance(boot_id, str)
+            and re.fullmatch(
+                r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+                r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
+                boot_id,
+            )
+            and isinstance(raw_starttime, int)
+            and not isinstance(raw_starttime, bool)
+            and raw_starttime >= 0
+        )
         # 显式 target.path 是 R400 的作用域边界。collector 的 path_relevant 仅作原始
         # 观测，analyzer 必须重算并在候选聚合前过滤，避免无关 cwd/FD 形成噪声冲突。
         if isinstance(target_path, str) and target_path and not path_relevant:
@@ -1520,13 +1848,19 @@ def analyze_r400(snapshot: dict, r100_finding: dict | None = None) -> dict:
             "source": m.get("source"),
             "path_relevant": path_relevant,
             "active_io": (pid_i in active_pids) if pid_i is not None else None,
-            "device_saturated": bool(topology & saturated_devs),
             "identity_strong": resolution == "sysfs",
+            "process_identity_strong": process_identity_strong,
             "topology": sorted(topology),
             "mapping_identity": canonical,
+            "mapping_interval": _mapping_observation_interval(m, pmap_interval),
+            "mapping_observation_count": max(0, mapping_observation_count),
         }
         for device in contention_devices:
-            dev_to_entries[device].append(dict(entry))
+            device_entry = dict(entry)
+            # 饱和证据必须绑定当前候选设备。某个私有 backing 或逻辑设备
+            # 饱和，不能传播到同一 topology 中另一个健康的共享 backing。
+            device_entry["device_saturated"] = device in saturated_devs
+            dev_to_entries[device].append(device_entry)
 
     # 候选冲突：同 canonical 设备 ≥2 个不同 PID
     candidate_conflicts = {
@@ -1540,8 +1874,13 @@ def analyze_r400(snapshot: dict, r100_finding: dict | None = None) -> dict:
         finding["severity"] = "info"
         finding["evidence_fields"] = ["process_io_map.mappings"]
         finding["summary"] = (
-            "已建立 PID→设备映射，但未发现多个进程访问同一设备（无争抢）。"
+            "已建立 PID→设备映射，但未观察到至少两个 PID 同时访问同一设备的证据。"
         )
+        finding["missing_evidence"] = ["至少两个目标 workload PID 的同设备映射"]
+        if len(active_pids) < 2:
+            finding["missing_evidence"].append(
+                "至少两个目标 workload PID 的同窗 pidstat 活跃 IO 样本"
+            )
         if skipped_virtual_mounts:
             finding["note"] = (
                 f"已忽略 {skipped_virtual_mounts} 条 tmpfs/overlay/proc/sysfs 等"
@@ -1549,10 +1888,11 @@ def analyze_r400(snapshot: dict, r100_finding: dict | None = None) -> dict:
             )
         return finding
 
-    # 逐设备评估证据完整性（Review P1-3：data_relevant 与 active_io 必须绑定到同一 PID）
+    # 逐设备评估证据完整性；data_relevant 与 active_io 必须绑定到同一 PID。
     confirmed: dict[str, list] = {}
     causal_candidates: dict[str, list] = {}
     weak: dict[str, list] = {}
+    mapping_overlap_by_device: dict[str, tuple[float, float]] = {}
     missing_reasons: list[str] = []
     pid_devices: dict[int, set[str]] = defaultdict(set)
     for dev, entries in dev_to_entries.items():
@@ -1569,27 +1909,66 @@ def analyze_r400(snapshot: dict, r100_finding: dict | None = None) -> dict:
             for e in entries
             if e["pid"] is not None and e["path_relevant"] and e["active_io"]
         }
+        identity_pids = {
+            e["pid"]
+            for e in entries
+            if e["pid"] in strong_pids and e["identity_strong"]
+        }
+        process_identity_pids = {
+            e["pid"]
+            for e in entries
+            if e["pid"] in strong_pids and e["process_identity_strong"]
+        }
+        temporally_bound_entries = [
+            e
+            for e in entries
+            if e["pid"] in strong_pids
+            and e["path_relevant"]
+            and e["active_io"]
+            and e["identity_strong"]
+            and e["process_identity_strong"]
+            and 2 <= e["mapping_observation_count"] <= pmap_observation_samples
+            and e["mapping_interval"] is not None
+        ]
+        temporally_bound_pids = {
+            e["pid"] for e in temporally_bound_entries if e["pid"] is not None
+        }
+        mapping_overlap = _common_mapping_interval(
+            temporally_bound_entries, temporally_bound_pids
+        )
+        temporal_mapping_ok = bool(
+            pmap_observation_samples >= 2
+            and len(temporally_bound_pids) >= 2
+            and mapping_overlap is not None
+            and mapping_overlap[1] - mapping_overlap[0] >= 1.0
+        )
         if len(strong_pids) >= 2 and saturated:
             causal_candidates[dev] = sorted(strong_pids)
-            identity_pids = {
-                e["pid"]
-                for e in entries
-                if e["pid"] in strong_pids and e["identity_strong"]
-            }
             unambiguous_pids = {
-                pid for pid in strong_pids if len(pid_devices.get(pid, set())) == 1
+                pid
+                for pid in temporally_bound_pids
+                if len(pid_devices.get(pid, set())) == 1
             }
-            if identity_pids == strong_pids and unambiguous_pids == strong_pids:
-                confirmed[dev] = sorted(strong_pids)
+            if unambiguous_pids == temporally_bound_pids and temporal_mapping_ok:
+                confirmed[dev] = sorted(temporally_bound_pids)
+                mapping_overlap_by_device[dev] = mapping_overlap
             else:
                 weak[dev] = pids
                 if identity_pids != strong_pids:
                     missing_reasons.append(
                         f"{dev}: PID→设备身份缺少 sysfs 精确解析，不能用 heuristic/unknown 身份确认争抢"
                     )
-                if unambiguous_pids != strong_pids:
+                if process_identity_pids != strong_pids:
+                    missing_reasons.append(
+                        f"{dev}: PID 身份缺少 boot_id + starttime 绑定，不能排除 PID 复用"
+                    )
+                if unambiguous_pids != temporally_bound_pids:
                     missing_reasons.append(
                         f"{dev}: pidstat 是每 PID 聚合 IO，PID 同时映射多个数据设备，无法归因到该设备"
+                    )
+                if not temporal_mapping_ok:
+                    missing_reasons.append(
+                        f"{dev}: 每 PID 映射需实际观测至少两次，且观测区间须有至少 1s 公共交集"
                     )
         else:
             weak[dev] = pids
@@ -1621,6 +2000,24 @@ def analyze_r400(snapshot: dict, r100_finding: dict | None = None) -> dict:
                 )
 
     if confirmed:
+        if pmap_partial:
+            finding["candidate_device_pid_conflicts"] = causal_candidates
+            finding["confidence"] = "medium"
+            finding["severity"] = "medium"
+            finding["evidence_fields"] = [
+                "process_io_map.mappings",
+                "process_io_map.partial",
+                "pidstat.processes",
+                "R100.saturated_devices",
+            ]
+            finding["summary"] = (
+                f"检测到 {len(confirmed)} 个多进程数据 IO 争抢候选，但 "
+                "process_io_map 覆盖不完整，不能确认高置信争抢。"
+            )
+            finding["missing_evidence"] = [
+                "完整 PID/FD 覆盖的 process_io_map（无 partial 截断或权限缺口）"
+            ]
+            return finding
         # high 结论要求 iostat/pidstat/process_io_map 三者都有合法时间窗，且
         # 存在正长度公共交集。缺失/非法时间不是“无法证伪即同窗”，而是证据不足。
         r100_win_raw = r100_finding.get("evidence_interval") if r100_finding else None
@@ -1630,22 +2027,45 @@ def analyze_r400(snapshot: dict, r100_finding: dict | None = None) -> dict:
             else None
         )
         pidstat_win = _provider_interval(snapshot, "pidstat")
-        pmap_win = _provider_interval(snapshot, "process_io_map")
-        overlap_ok = intervals_have_common_overlap(r100_win, pidstat_win, pmap_win)
+        pmap_win = pmap_interval
+        device_evidence_intervals: dict[str, tuple[float, float]] = {}
+        for dev in confirmed:
+            mapping_win = mapping_overlap_by_device.get(dev)
+            windows = (r100_win, pidstat_win, pmap_win, mapping_win)
+            if not intervals_have_common_overlap(*windows):
+                continue
+            device_evidence_intervals[dev] = (
+                max(float(window[0]) for window in windows if window is not None),
+                min(float(window[1]) for window in windows if window is not None),
+            )
+        window_confirmed = {
+            dev: pids
+            for dev, pids in confirmed.items()
+            if dev in device_evidence_intervals
+        }
         finding["candidate_device_pid_conflicts"] = causal_candidates
         finding["evidence_fields"] = [
             "process_io_map.mappings",
             "pidstat.processes",
             "R100.saturated_devices",
         ]
-        if overlap_ok:
-            finding["device_pid_conflicts"] = confirmed
+        if window_confirmed:
+            representative = max(
+                device_evidence_intervals.values(),
+                key=lambda interval: interval[1] - interval[0],
+            )
+            finding["evidence_interval"] = list(representative)
+            finding["device_evidence_intervals"] = {
+                dev: list(device_evidence_intervals[dev]) for dev in window_confirmed
+            }
+            finding["device_pid_conflicts"] = window_confirmed
             finding["evidence_window_valid"] = True
             finding["confidence"] = "high"
             finding["severity"] = "high"
             finding["summary"] = (
-                f"检测到 {len(confirmed)} 个设备被多个进程同时、活跃地争抢数据 IO（每 PID 均含"
-                f"数据路径+活跃 IO 且设备饱和）：" + _format_device_pid_map(confirmed)
+                f"检测到 {len(window_confirmed)} 个设备被多个进程同时、活跃地争抢数据 IO"
+                f"（每 PID 均含同窗映射+数据路径+活跃 IO 且设备饱和）："
+                + _format_device_pid_map(window_confirmed)
             )
         else:
             finding["evidence_window_valid"] = False
@@ -1705,7 +2125,7 @@ def analyze_r000(snapshot: dict) -> dict:
     if missing:
         parts.append(f"缺失数据源 {len(missing)} 个：{', '.join(missing)}")
     if partial:
-        # 第八轮 P1-1C：empty/unsupported 也必须报告，不得描述为"关键数据源均可用"。
+        # empty/unsupported 也必须报告，不得描述为“关键数据源均可用”。
         parts.append(f"部分/空数据源 {len(partial)} 个：{', '.join(partial)}")
     if errors:
         parts.append(f"采集错误 {len(errors)} 个：{'; '.join(errors)}")
@@ -1723,11 +2143,11 @@ def analyze_r000(snapshot: dict) -> dict:
 def _strict_float(v: Any) -> float | None:
     """严格转 float：None/空串视为缺失（返回 None）；非数值字符串/NaN/Inf 抛 ValueError。
 
-    Review P1-4：用于校验外部 Snapshot/profile，"oops" 这类非法值必须被拒绝而非静默置 0。
+    用于校验外部 Snapshot/profile；"oops" 这类非法值必须被拒绝而非静默置 0。
     """
     if v is None or v == "":
         return None
-    # 第七轮 P2-3：bool 不是合法数值（float(True)=1.0 会静默改变语义）。
+    # bool 不是合法数值；float(True)=1.0 会静默改变语义。
     if isinstance(v, bool):
         raise ValueError("bool is not a valid float")
     try:
@@ -1738,6 +2158,64 @@ def _strict_float(v: Any) -> float | None:
         raise ValueError("non-finite float")
     return f
 
+
+def _strict_json_int(value: Any, *, positive: bool = False) -> int:
+    """Accept only an actual JSON integer, never bool, float, or numeric text."""
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise ValueError("must be a JSON integer")
+    if value < (1 if positive else 0):
+        qualifier = "positive" if positive else "non-negative"
+        raise ValueError(f"must be a {qualifier} JSON integer")
+    return value
+
+
+_MAX_JSON_FILE_BYTES = 64 * 1024 * 1024
+_MAX_JSON_DEPTH = 64
+_MAX_JSON_NODES = 1_000_000
+
+
+def _validate_json_resources(value: Any) -> None:
+    """Bound nesting and node count before deepcopy or rule traversal."""
+    stack: list[tuple[Any, int]] = [(value, 0)]
+    nodes = 0
+    while stack:
+        current, depth = stack.pop()
+        nodes += 1
+        if nodes > _MAX_JSON_NODES:
+            raise ValueError(f"JSON exceeds {_MAX_JSON_NODES} nodes")
+        if depth > _MAX_JSON_DEPTH:
+            raise ValueError(f"JSON nesting exceeds {_MAX_JSON_DEPTH} levels")
+        if isinstance(current, dict):
+            stack.extend((item, depth + 1) for item in current.values())
+        elif isinstance(current, list):
+            stack.extend((item, depth + 1) for item in current)
+
+
+# iostat 聚合器按字段记录实际参与聚合的报告数；这些计数不能大于总报告数。
+_IOSTAT_FIELD_SAMPLE_COUNTS = (
+    "util_sample_count",
+    "avgqu_sz_sample_count",
+    "await_sample_count",
+    "r_await_ms_sample_count",
+    "w_await_ms_sample_count",
+    "r_per_s_sample_count",
+    "w_per_s_sample_count",
+    "rkB_per_s_sample_count",
+    "wkB_per_s_sample_count",
+    "rrqm_per_s_sample_count",
+    "wrqm_per_s_sample_count",
+    "avgrq_sz_sample_count",
+    "avgqu_sz_with_util_sample_count",
+    "await_with_util_sample_count",
+    "r_await_ms_with_util_sample_count",
+    "w_await_ms_with_util_sample_count",
+)
+_IOSTAT_PAIRED_SAMPLE_BASES = {
+    "avgqu_sz_with_util_sample_count": "avgqu_sz_sample_count",
+    "await_with_util_sample_count": "await_sample_count",
+    "r_await_ms_with_util_sample_count": "r_await_ms_sample_count",
+    "w_await_ms_with_util_sample_count": "w_await_ms_sample_count",
+}
 
 # 各 provider parsed 中"必须为数值"的字段（缺失可，但出现值就必须可解析为有限 float）
 _NUMERIC_FIELDS = {
@@ -1757,6 +2235,7 @@ _NUMERIC_FIELDS = {
         "wrqm_per_s",
         "avgrq_sz",
         "sample_count",
+        *_IOSTAT_FIELD_SAMPLE_COUNTS,
     ),
     "nfs_metric": (
         "ops",
@@ -1785,7 +2264,13 @@ _NUMERIC_FIELDS = {
         "bytes_write_delta",
     ),
     "df_fs": ("iuse_percent",),
-    "pidstat_proc": ("kbr_per_s", "kbw_per_s", "kbccwd_per_s", "sample_count"),
+    "pidstat_proc": (
+        "kbr_per_s",
+        "kbw_per_s",
+        "kbccwd_per_s",
+        "sample_count",
+        "active_sample_count",
+    ),
     "diskstats": (
         "reads_completed",
         "reads_merged",
@@ -1802,7 +2287,24 @@ _NUMERIC_FIELDS = {
 }
 
 _PERCENT_FIELDS = {"util_percent", "util_max", "util_p95", "iuse_percent"}
-_INTEGER_FIELDS = {"sample_count"}
+_INTEGER_FIELDS = {
+    "sample_count",
+    "active_sample_count",
+    *_IOSTAT_FIELD_SAMPLE_COUNTS,
+}
+_IOSTAT_EVIDENCE_FIELDS = {
+    "util_percent",
+    "util_max",
+    "util_p95",
+    "avgqu_sz",
+    "await",
+    "r_await_ms",
+    "w_await_ms",
+    "r_per_s",
+    "w_per_s",
+    "rkB_per_s",
+    "wkB_per_s",
+}
 
 
 def _validate_numeric_dict(d: Any, fields: tuple[str, ...]) -> bool:
@@ -1816,6 +2318,8 @@ def _validate_numeric_dict(d: Any, fields: tuple[str, ...]) -> bool:
             except (ValueError, TypeError):
                 return False
             if value is None:
+                # 将空串统一为 null，避免下游把“缺失”再次直接 float() 而崩溃。
+                d[key] = None
                 continue
             if value < 0:
                 return False
@@ -1826,8 +2330,114 @@ def _validate_numeric_dict(d: Any, fields: tuple[str, ...]) -> bool:
     return True
 
 
+_DEVICE_BASELINE_FIELDS = {"max_read_mbps", "max_write_mbps", "max_iops"}
+
+
+def _normalize_device_baselines(snapshot: dict, errors: list[str]) -> None:
+    """Normalize optional user-supplied device ceilings; invalid values never certify."""
+    raw = snapshot.get("device_baselines")
+    if raw is None:
+        return
+    if not isinstance(raw, dict):
+        errors.append(
+            f"device_baselines: not an object ({type(raw).__name__}), ignored"
+        )
+        snapshot["device_baselines"] = {}
+        return
+    cleaned: dict[str, dict[str, float]] = {}
+    for device, baseline in raw.items():
+        if not isinstance(device, str) or not device or not isinstance(baseline, dict):
+            errors.append(f"device_baselines: invalid device entry {device!r}, ignored")
+            continue
+        unsupported = sorted(set(baseline) - _DEVICE_BASELINE_FIELDS, key=str)
+        if unsupported:
+            errors.append(
+                f"device_baselines.{device}: unsupported field(s) {unsupported}, ignored"
+            )
+        normalized: dict[str, float] = {}
+        for field in _DEVICE_BASELINE_FIELDS:
+            if field not in baseline:
+                continue
+            try:
+                value = _strict_float(baseline[field])
+            except (TypeError, ValueError):
+                value = None
+            if value is None or value <= 0:
+                errors.append(
+                    f"device_baselines.{device}.{field}: must be a finite positive number, ignored"
+                )
+                continue
+            normalized[field] = value
+        if normalized:
+            cleaned[device] = normalized
+    snapshot["device_baselines"] = cleaned
+
+
+_BOOT_ID_PATTERN = re.compile(
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+)
+
+
+def _process_map_identity_error(parsed: dict, mappings: list[dict]) -> str | None:
+    """Reject process identities that cannot coexist in one host observation window."""
+    boot_ids: set[str] = set()
+    mapping_identities: dict[int, set[tuple[str, int]]] = {}
+
+    def identity(entry: dict, label: str) -> tuple[int, str, int] | None:
+        boot_id = entry.get("boot_id")
+        starttime = entry.get("pid_starttime_ticks")
+        if boot_id is None and starttime is None:
+            return None
+        try:
+            pid = _strict_json_int(entry.get("pid"), positive=True)
+        except ValueError as exc:
+            raise ValueError(f"{label} has invalid PID identity") from exc
+        if (
+            not isinstance(boot_id, str)
+            or _BOOT_ID_PATTERN.fullmatch(boot_id) is None
+            or not isinstance(starttime, int)
+            or isinstance(starttime, bool)
+            or starttime < 0
+        ):
+            raise ValueError(f"{label} has malformed boot_id/pid_starttime_ticks")
+        boot_ids.add(boot_id.lower())
+        return pid, boot_id.lower(), starttime
+
+    try:
+        for index, mapping in enumerate(mappings):
+            item = identity(mapping, f"mappings[{index}]")
+            if item is None:
+                continue
+            pid, boot_id, starttime = item
+            mapping_identities.setdefault(pid, set()).add((boot_id, starttime))
+        if any(len(values) > 1 for values in mapping_identities.values()):
+            return "one PID has inconsistent boot/starttime identities"
+
+        pid_tree = parsed.get("pid_tree")
+        if pid_tree is not None and not isinstance(pid_tree, list):
+            return "pid_tree not list"
+        for index, entry in enumerate(pid_tree or []):
+            if not isinstance(entry, dict):
+                return f"pid_tree[{index}] not object"
+            item = identity(entry, f"pid_tree[{index}]")
+            if item is None:
+                continue
+            pid, boot_id, starttime = item
+            mapped = mapping_identities.get(pid)
+            if mapped and (boot_id, starttime) not in mapped:
+                return (
+                    f"pid_tree[{index}] identity conflicts with mappings for PID {pid}"
+                )
+    except ValueError as exc:
+        return str(exc)
+    if len(boot_ids) > 1:
+        return "multiple boot_id values in one process-map window"
+    return None
+
+
 def normalize_and_validate(snapshot: dict) -> tuple[dict, list[str]]:
-    """统一输入契约入口（第六轮 P1-3）：全量与所有单规则 --mode 入口共用。
+    """统一输入契约入口，供全量与所有单规则 --mode 共用。
 
     校验并规范化外部 Snapshot：顶层 dict、各 provider parsed 的容器与数值字段、
     diskstats 深层（设备值/timestamp）、iostat sample_count、availability 元素。
@@ -1836,12 +2446,25 @@ def normalize_and_validate(snapshot: dict) -> tuple[dict, list[str]]:
     """
     if not isinstance(snapshot, dict):
         return {}, ["snapshot: not a dict"]
-    # 自审：深拷贝，避免就地修改调用方的 dict（最小惊讶原则）。
+    # 深拷贝，避免就地修改调用方的 dict。
     snapshot = copy.deepcopy(snapshot)
     errors: list[str] = []
     legacy_availability = copy.deepcopy(snapshot.get("availability"))
+    _normalize_device_baselines(snapshot, errors)
 
-    # 第八轮 P2-4：legacy iostat list → dict 必须在数值契约校验之前完成，
+    # Canonicalize supported legacy provider state before any deep validation.
+    # An explicit status, including an invalid one, always wins and is handled below.
+    for provider_name in _PROVIDER_NAMES:
+        provider = snapshot.get(provider_name)
+        if not isinstance(provider, dict) or "status" in provider:
+            continue
+        legacy_available = provider.get("available")
+        if legacy_available is True:
+            provider["status"] = "ok"
+        elif legacy_available is False:
+            provider["status"] = "missing"
+
+    # legacy iostat list → dict 必须在数值契约校验之前完成，
     # 否则 list 元素的 util/await/rate 非法值会绕过 _validate_numeric_dict。
     iostat_pr = snapshot.get("iostat")
     if isinstance(iostat_pr, dict) and iostat_pr.get("status") == "ok":
@@ -1878,7 +2501,24 @@ def normalize_and_validate(snapshot: dict) -> tuple[dict, list[str]]:
             return
         # 校验数值字段
         try:
+            pidstat_report_count: int | None = None
+            if name == "pidstat":
+                processes = parsed.get("processes")
+                reports_required = isinstance(processes, list) and bool(processes)
+                if "reports" in parsed or reports_required:
+                    pidstat_report_count = _strict_json_int(
+                        parsed.get("reports"), positive=True
+                    )
             if disk_fields:
+                report_count: float | None = None
+                if name == "iostat" and "reports" in parsed:
+                    report_count = _strict_float(parsed.get("reports"))
+                    if (
+                        report_count is None
+                        or not report_count.is_integer()
+                        or report_count <= 0
+                    ):
+                        raise ValueError("reports must be a positive integer")
                 disks = parsed.get("disks")
                 if disks is None:
                     parsed["disks"] = {}
@@ -1886,22 +2526,103 @@ def normalize_and_validate(snapshot: dict) -> tuple[dict, list[str]]:
                 if not isinstance(disks, dict):
                     raise ValueError(f"disks not object ({type(disks).__name__})")
                 for dname, metrics in disks.items():
+                    if not isinstance(dname, str) or not dname:
+                        raise ValueError(f"disk name is invalid: {dname!r}")
                     if not _validate_numeric_dict(metrics, disk_fields):
                         raise ValueError(f"disk {dname} has invalid metric")
-            # 第六轮自审 P2：list_key 存在但非 list → 直接 parse_failed
+                    if name == "iostat" and not any(
+                        key in metrics and _strict_float(metrics[key]) is not None
+                        for key in _IOSTAT_EVIDENCE_FIELDS
+                    ):
+                        raise ValueError(f"disk {dname} has no usable IO metric")
+                    if name == "iostat":
+                        field_counts = [
+                            key for key in _IOSTAT_FIELD_SAMPLE_COUNTS if key in metrics
+                        ]
+                        if field_counts and "sample_count" not in metrics:
+                            raise ValueError(
+                                f"disk {dname} has per-field sample counts without sample_count"
+                            )
+                        total_count = _strict_float(metrics.get("sample_count"))
+                        if field_counts and total_count is None:
+                            raise ValueError(f"disk {dname} has invalid sample_count")
+                        if total_count is not None:
+                            if report_count is None:
+                                raise ValueError(
+                                    f"disk {dname} has sample_count without parsed.reports"
+                                )
+                            if total_count > report_count:
+                                raise ValueError(
+                                    f"disk {dname} has sample_count greater than parsed.reports"
+                                )
+                        for key in field_counts:
+                            field_count = _strict_float(metrics[key])
+                            if field_count is not None and field_count > total_count:
+                                raise ValueError(
+                                    f"disk {dname} has field sample count greater than sample_count"
+                                )
+                        for (
+                            paired_key,
+                            field_key,
+                        ) in _IOSTAT_PAIRED_SAMPLE_BASES.items():
+                            if paired_key not in metrics:
+                                continue
+                            if (
+                                "util_sample_count" not in metrics
+                                or field_key not in metrics
+                            ):
+                                raise ValueError(
+                                    f"disk {dname} has {paired_key} without component counts"
+                                )
+                            paired_count = _strict_float(metrics[paired_key])
+                            util_count = _strict_float(metrics["util_sample_count"])
+                            metric_count = _strict_float(metrics[field_key])
+                            if (
+                                paired_count is None
+                                or util_count is None
+                                or metric_count is None
+                            ):
+                                raise ValueError(
+                                    f"disk {dname} has invalid co-occurrence sample count"
+                                )
+                            if paired_count > min(util_count, metric_count):
+                                raise ValueError(
+                                    f"disk {dname} has co-occurrence count greater than component count"
+                                )
+            # list_key 存在但不是 list 时直接标记 parse_failed。
             # （覆盖 pidstat.processes / df.filesystems / nfs.mount_metrics，
             #  与 process_io_map.mappings 的保护对称，避免下游 .get 崩溃）。
             if elem_fields and list_key:
                 seq = parsed.get(list_key)
                 if seq is not None and not isinstance(seq, list):
                     raise ValueError(f"{list_key} not list ({type(seq).__name__})")
-                # G0-4 自审：显式 null → 强制为空列表，避免下游 .get(key, []) 返回 None 遍历崩溃。
+                # 显式 null 强制为空列表，避免下游遍历 None。
                 if seq is None:
                     parsed[list_key] = []
                 if isinstance(parsed.get(list_key), list):
                     for i, el in enumerate(parsed[list_key]):
                         if not _validate_numeric_dict(el, elem_fields):
                             raise ValueError(f"{list_key}[{i}] has invalid metric")
+                        if name == "pidstat":
+                            pid = _strict_json_int(el.get("pid"), positive=True)
+                            sample_count = _strict_json_int(el.get("sample_count"))
+                            active_sample_count = _strict_json_int(
+                                el.get("active_sample_count")
+                            )
+                            if pidstat_report_count is None:
+                                raise ValueError(
+                                    f"{list_key}[{i}] requires positive parsed.reports"
+                                )
+                            if not (
+                                active_sample_count
+                                <= sample_count
+                                <= pidstat_report_count
+                            ):
+                                raise ValueError(
+                                    f"{list_key}[{i}] requires active_sample_count "
+                                    "<= sample_count <= parsed.reports"
+                                )
+                            el["pid"] = pid
             # nfs mount_metrics 必须是 dict 列表（nfs 不走 elem_fields，单独校验容器）
             if name == "nfs":
                 mm = parsed.get("mount_metrics")
@@ -1918,7 +2639,7 @@ def normalize_and_validate(snapshot: dict) -> tuple[dict, list[str]]:
 
     _check_provider("iostat", _NUMERIC_FIELDS["iostat_disks"], None, None)
     _check_provider("nfs", None, _NUMERIC_FIELDS["nfs_metric"], "mount_metrics")
-    # DEFECT-1 自审（subagent）：collector 从 `df -iP` 解析的 iuse_percent 形如 "92%"（带 %），
+    # collector 从 `df -iP` 解析的 iuse_percent 形如 "92%"（带 %），
     # 会在下方 _strict_float 校验中被拒 → df 误判 parse_failed、inode 证据静默丢失。
     # 在校验前规范化：剥离 trailing "%" 并转 float。
     df_pr = snapshot.get("df")
@@ -1938,19 +2659,68 @@ def normalize_and_validate(snapshot: dict) -> tuple[dict, list[str]]:
     _check_provider("pidstat", None, _NUMERIC_FIELDS["pidstat_proc"], "processes")
     _check_provider("process_io_map", None, None, None)
 
-    # Review P1-3：process_io_map.mappings 必须是 dict 列表（元素类型校验）
+    # process_io_map.mappings 必须是 dict 列表，关键观测计数必须是精确 JSON 整数。
     pmap = snapshot.get("process_io_map")
     if isinstance(pmap, dict) and pmap.get("status") == "ok":
         parsed = pmap.get("parsed")
         if isinstance(parsed, dict):
             mappings = parsed.get("mappings")
             if isinstance(mappings, list):
-                cleaned = [m for m in mappings if isinstance(m, dict)]
-                if len(cleaned) != len(mappings):
+                observation_samples: int | None = None
+                if "observation_samples" in parsed or mappings:
+                    try:
+                        observation_samples = _strict_json_int(
+                            parsed.get("observation_samples"), positive=True
+                        )
+                    except ValueError as exc:
+                        snapshot["process_io_map"] = {
+                            **pmap,
+                            "status": "parse_failed",
+                            "parsed": None,
+                            "error": f"invalid observation_samples: {exc}",
+                        }
+                        errors.append(
+                            f"process_io_map: invalid observation_samples: {exc}"
+                        )
+                        observation_samples = None
+                        mappings = []
+                cleaned: list[dict] = []
+                for i, mapping in enumerate(mappings):
+                    if not isinstance(mapping, dict):
+                        errors.append(
+                            f"process_io_map: mappings[{i}] not object, dropped"
+                        )
+                        continue
+                    try:
+                        pid = _strict_json_int(mapping.get("pid"), positive=True)
+                        observation_count = _strict_json_int(
+                            mapping.get("observation_count")
+                        )
+                        if (
+                            observation_samples is None
+                            or observation_count > observation_samples
+                        ):
+                            raise ValueError(
+                                "observation_count exceeds observation_samples"
+                            )
+                    except ValueError as exc:
+                        errors.append(
+                            f"process_io_map: mappings[{i}] invalid count/PID ({exc}), dropped"
+                        )
+                        continue
+                    mapping["pid"] = pid
+                    cleaned.append(mapping)
+                if snapshot.get("process_io_map") is pmap:
                     parsed["mappings"] = cleaned
-                    errors.append(
-                        f"process_io_map: dropped {len(mappings) - len(cleaned)} non-dict mapping(s)"
-                    )
+                    identity_error = _process_map_identity_error(parsed, cleaned)
+                    if identity_error is not None:
+                        snapshot["process_io_map"] = {
+                            **pmap,
+                            "status": "parse_failed",
+                            "parsed": None,
+                            "error": identity_error,
+                        }
+                        errors.append(f"process_io_map: {identity_error}")
             elif mappings is not None:
                 snapshot["process_io_map"] = {
                     **pmap,
@@ -1960,7 +2730,7 @@ def normalize_and_validate(snapshot: dict) -> tuple[dict, list[str]]:
                 }
                 errors.append("process_io_map: mappings not list")
 
-    # G0-6 自审（final gate）：target 顶层字段必须是 dict（{path: str}），
+    # target 顶层字段必须是 dict（{path: str}），
     # 否则 R400 第 945 行 (snapshot.get("target") or {}).get("path") 会在
     # 非空字符串/数字/list/bool 上崩溃（'str'/'bool' object has no attribute 'get'）。
     tgt = snapshot.get("target")
@@ -1969,7 +2739,7 @@ def normalize_and_validate(snapshot: dict) -> tuple[dict, list[str]]:
             errors.append(f"target: not a dict ({type(tgt).__name__}), ignored")
         snapshot["target"] = {}
 
-    # Review 第六轮自检：mounts 顶层字段必须是 dict 列表，否则 R200/R300 迭代会崩溃。
+    # mounts 顶层字段必须是 dict 列表，否则 R200/R300 无法安全迭代。
     mnts = snapshot.get("mounts")
     if not isinstance(mnts, list):
         if mnts is not None:
@@ -1979,7 +2749,7 @@ def normalize_and_validate(snapshot: dict) -> tuple[dict, list[str]]:
         cleaned_m = [m for m in mnts if isinstance(m, dict)]
         if len(cleaned_m) != len(mnts):
             errors.append(
-                f"mounts: dropped {len(mnts) - len(cleaned_m)} non-object entr(y/ies)"
+                f"mounts: dropped {len(mnts) - len(cleaned_m)} non-object entry/entries"
             )
             snapshot["mounts"] = cleaned_m
 
@@ -1987,9 +2757,12 @@ def normalize_and_validate(snapshot: dict) -> tuple[dict, list[str]]:
     if not isinstance(mounts_provider, dict):
         inferred_status = "ok" if snapshot["mounts"] else "missing"
         if isinstance(legacy_availability, dict):
-            legacy_missing = legacy_availability.get("missing") or []
-            legacy_partial = legacy_availability.get("partial") or []
-            legacy_errors = legacy_availability.get("errors") or []
+            legacy_missing = legacy_availability.get("missing")
+            legacy_partial = legacy_availability.get("partial")
+            legacy_errors = legacy_availability.get("errors")
+            legacy_missing = legacy_missing if isinstance(legacy_missing, list) else []
+            legacy_partial = legacy_partial if isinstance(legacy_partial, list) else []
+            legacy_errors = legacy_errors if isinstance(legacy_errors, list) else []
             if "mounts" in legacy_missing:
                 inferred_status = "missing"
             for item in legacy_partial:
@@ -2021,7 +2794,7 @@ def normalize_and_validate(snapshot: dict) -> tuple[dict, list[str]]:
         }
     else:
         status = mounts_provider.get("status")
-        if status in {"ok", "empty"}:
+        if isinstance(status, str) and status in {"ok", "empty"}:
             parsed_mounts = mounts_provider.get("parsed")
             if status == "empty" and snapshot["mounts"]:
                 mounts_provider["status"] = "parse_failed"
@@ -2052,7 +2825,7 @@ def normalize_and_validate(snapshot: dict) -> tuple[dict, list[str]]:
                 mounts_provider["error"] = "parsed differs from top-level mounts"
                 errors.append("mounts_provider: parsed differs from top-level mounts")
 
-    # Review 第六轮 P1-3：diskstats_sample 深层校验——每个 sample 的 disks 必须是 dict，
+    # 深层校验 diskstats_sample；每个 sample 的 disks 必须是 dict，
     ds = snapshot.get("diskstats_sample")
     if isinstance(ds, list):
         cleaned_ds = []
@@ -2084,7 +2857,7 @@ def normalize_and_validate(snapshot: dict) -> tuple[dict, list[str]]:
                 bad += 1
                 continue
             cleaned_ds.append(s)
-        # 第八轮自审：始终写回 cleaned_ds——timestamp 强制转换（'5'→5.0）即使 bad==0
+        # 始终写回 cleaned_ds，保留 timestamp 等字段的规范化结果。
         # 也必须落盘，否则 _compute_disk_rates 拿到原始 str timestamp 会 int>str 崩溃。
         snapshot["diskstats_sample"] = cleaned_ds
         if bad:
@@ -2132,9 +2905,9 @@ def normalize_and_validate(snapshot: dict) -> tuple[dict, list[str]]:
         snapshot["diskstats_sample"] = []
         errors.append("diskstats_sample: not a list")
 
-    # 第七轮 P1-2 legacy list→dict 转换已提前到数值契约校验之前（第八轮 P2-4）。
+    # legacy list→dict 转换已提前到数值契约校验之前。
 
-    # Review 第六轮 P1-3：iostat sample_count 必须是非负整数（禁止裸 int() 信任外部字符串）
+    # iostat 各 sample_count 必须是非负整数，不能直接信任外部字符串。
     iostat_pr = snapshot.get("iostat")
     if isinstance(iostat_pr, dict) and iostat_pr.get("status") == "ok":
         ip = iostat_pr.get("parsed")
@@ -2142,28 +2915,23 @@ def normalize_and_validate(snapshot: dict) -> tuple[dict, list[str]]:
             for dname, metrics in ip["disks"].items():
                 if not isinstance(metrics, dict):
                     continue
-                sc = metrics.get("sample_count")
-                if sc is not None:
+                for count_field in ("sample_count", *_IOSTAT_FIELD_SAMPLE_COUNTS):
+                    sc = metrics.get(count_field)
+                    if sc is None:
+                        continue
                     try:
-                        n = int(sc)
-                        if n < 0 or str(sc) not in (str(n), str(float(sc))):
+                        value = _strict_float(sc)
+                        if value is None or value < 0 or not value.is_integer():
                             raise ValueError
-                        metrics["sample_count"] = n
+                        metrics[count_field] = int(value)
                     except (TypeError, ValueError, OverflowError):
-                        metrics.pop("sample_count", None)
-                        errors.append(f"iostat disk {dname}: bad sample_count dropped")
+                        metrics.pop(count_field, None)
+                        errors.append(f"iostat disk {dname}: bad {count_field} dropped")
 
-    # 第七轮 P1-1：从 provider 实际状态重建 availability（不信任调用方传入的）。
-    _PROVIDER_NAMES = (
-        "mounts_provider",
-        "iostat",
-        "pidstat",
-        "nfs",
-        "df",
-        "process_io_map",
-        "memory",
-        "block_devices",
-    )
+    # 从 provider 实际状态重建 availability，不信任调用方传入的值。
+    # df/memory are post-window static context. They must retain their own
+    # timestamps and status, but cannot be required to fit the dynamic window.
+    _STATIC_CONTEXT_PROVIDERS = {"df", "memory"}
     _VALID_STATUS = {
         "ok",
         "missing",
@@ -2192,17 +2960,18 @@ def normalize_and_validate(snapshot: dict) -> tuple[dict, list[str]]:
         if st is None:
             missing.add(pname)
         elif not isinstance(st, str) or st not in _VALID_STATUS:
-            # G0-1 自审：unhashable status（list/dict）或非法枚举 → parse_failed，不崩溃。
+            # unhashable status（list/dict）或非法枚举应标记 parse_failed。
             verr.add(f"{pname}: invalid status {st!r}")
             pr["status"] = "parse_failed"
             pr.setdefault("error", f"invalid status: {st!r}")
+            errors.append(f"{pname}: parse_failed")
         elif st == "missing":
             missing.add(pname)
         elif st in ("permission_denied", "command_failed", "parse_failed"):
             errors.append(f"{pname}: {st}")
         elif st in ("empty", "unsupported"):
             partial.add(f"{pname}: {st}")
-    # G0-2 自审：从 provider 实际状态**完全重建** availability（不用调用方残留值合并），
+    # 从 provider 实际状态完全重建 availability，不与调用方残留值合并，
     # 避免 R000 报告 stale missing 同时 R100 用该 provider 输出 high 的自相矛盾。
     avail["missing"] = sorted(missing)
     avail["partial"] = sorted(partial)
@@ -2221,6 +2990,8 @@ def normalize_and_validate(snapshot: dict) -> tuple[dict, list[str]]:
         )
     else:
         for pname in _PROVIDER_NAMES:
+            if pname in _STATIC_CONTEXT_PROVIDERS:
+                continue
             provider = snapshot.get(pname)
             if not isinstance(provider, dict):
                 continue
@@ -2234,16 +3005,201 @@ def normalize_and_validate(snapshot: dict) -> tuple[dict, list[str]]:
             if _provider_interval(snapshot, pname) is None:
                 verr.add(f"{pname}: invalid or outside snapshot.window")
     snapshot["availability"] = avail
-    # 第八轮 P1-1D：validation_errors 与 provider errors 分离，单次构造，禁止二次 append 重复。
+    # validation_errors 与 provider errors 分离并单次构造，避免重复追加。
     validation_errors = sorted(set(errors) | verr)
     return snapshot, validation_errors
 
 
 _VALID_EXPERIMENT_RESULTS = {"improved", "no_change", "worse", "inconclusive"}
+_CERTIFIED_PROFILE_SCOPE = "matched_workload_device_timeline"
+_CERTIFIED_PROFILE_PROVENANCE = {
+    "device_free_percent": {
+        ("profiler_timeline", "device_idle_interval_ratio"),
+        ("profiler_database", "database_device_free_metric"),
+    },
+    "mte2_ratio": {
+        ("profiler_database", "workload_total_cycle_ratio"),
+    },
+}
+
+
+def _profile_provenance_error(metric: str, value: Any) -> str | None:
+    """Return why one dynamic profile metric lacks certifying provenance."""
+    if not isinstance(value, dict):
+        return "must be an object"
+    source_type = value.get("source_type")
+    extraction_method = value.get("extraction_method")
+    if not isinstance(source_type, str) or not isinstance(extraction_method, str):
+        return "source_type and extraction_method must be strings"
+    if (source_type, extraction_method) not in _CERTIFIED_PROFILE_PROVENANCE.get(
+        metric, set()
+    ):
+        return "has an unsupported source_type/extraction_method pair"
+    if value.get("metric") != metric:
+        return f"metric must equal {metric!r}"
+    artifact_id = value.get("artifact_id")
+    if (
+        not isinstance(artifact_id, str)
+        or not artifact_id.strip()
+        or len(artifact_id) > 4096
+    ):
+        return "artifact_id must be a non-empty string of at most 4096 characters"
+    device_id = value.get("device_id")
+    if not isinstance(device_id, int) or isinstance(device_id, bool) or device_id < 0:
+        return "device_id must be a non-negative JSON integer"
+    return None
+
+
+def _audit_string(value: Any, field: str) -> str:
+    if not isinstance(value, str) or not value.strip() or len(value) > 4096:
+        raise ValueError(
+            f"{field} must be a non-empty string of at most 4096 characters"
+        )
+    return value
+
+
+def _audit_window(value: Any, field: str) -> dict[str, str]:
+    if not isinstance(value, dict):
+        raise ValueError(f"{field} must be an object")
+    start = value.get("start")
+    end = value.get("end")
+    start_epoch = _parse_iso(start)
+    end_epoch = _parse_iso(end)
+    if start_epoch is None or end_epoch is None or end_epoch <= start_epoch:
+        raise ValueError(f"{field}.start/end must be increasing timezone-aware ISO8601")
+    return {"start": start, "end": end}
+
+
+def _audit_target(value: Any, field: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError(f"{field} must be an object")
+    pid = value.get("pid")
+    if pid is not None:
+        pid = _strict_json_int(pid, positive=True)
+    path = value.get("path")
+    if path is not None and (not isinstance(path, str) or not path.strip()):
+        raise ValueError(f"{field}.path must be null or a non-empty string")
+    return {"pid": pid, "path": path}
+
+
+def _normalize_overlap_provenance(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError("overlap_provenance must be an object")
+    artifact_id = _audit_string(
+        value.get("artifact_id"), "overlap_provenance.artifact_id"
+    )
+    device_id = _strict_json_int(value.get("device_id"))
+    if value.get("metric") != "device_free_percent":
+        raise ValueError("overlap_provenance.metric must equal 'device_free_percent'")
+    if value.get("extraction_method") != "timeline_interval_overlap":
+        raise ValueError(
+            "overlap_provenance.extraction_method must equal "
+            "'timeline_interval_overlap'"
+        )
+    host_rule_ids = value.get("host_rule_ids")
+    if (
+        not isinstance(host_rule_ids, list)
+        or not host_rule_ids
+        or any(
+            not isinstance(rule, str) or rule not in {"R100", "R200", "R300", "R400"}
+            for rule in host_rule_ids
+        )
+    ):
+        raise ValueError(
+            "overlap_provenance.host_rule_ids must be a non-empty R100-R400 string list"
+        )
+    return {
+        "artifact_id": artifact_id,
+        "device_id": device_id,
+        "metric": "device_free_percent",
+        "extraction_method": "timeline_interval_overlap",
+        "host_rule_ids": sorted(set(host_rule_ids)),
+        "host_evidence_interval": _audit_window(
+            value.get("host_evidence_interval"),
+            "overlap_provenance.host_evidence_interval",
+        ),
+        "device_evidence_interval": _audit_window(
+            value.get("device_evidence_interval"),
+            "overlap_provenance.device_evidence_interval",
+        ),
+        "target": _audit_target(value.get("target"), "overlap_provenance.target"),
+    }
+
+
+def _normalize_experiment_observation(value: Any, field: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError(f"{field} must be an object")
+    raw_metric = value.get("device_free_percent")
+    metric = _strict_float(raw_metric)
+    if metric is None or not 0 <= metric <= 100:
+        raise ValueError(f"{field}.device_free_percent must be in [0,100]")
+    return {
+        "artifact_id": _audit_string(value.get("artifact_id"), f"{field}.artifact_id"),
+        "window": _audit_window(value.get("window"), f"{field}.window"),
+        "device_free_percent": metric,
+    }
+
+
+def _normalize_controlled_experiment(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError("controlled_experiment must be an object")
+    result = value.get("result")
+    if not isinstance(result, str) or result not in _VALID_EXPERIMENT_RESULTS:
+        raise ValueError("controlled_experiment.result is not a valid enum")
+    if value.get("metric") != "device_free_percent":
+        raise ValueError(
+            "controlled_experiment.metric must equal 'device_free_percent'"
+        )
+    baseline = _normalize_experiment_observation(
+        value.get("baseline"), "controlled_experiment.baseline"
+    )
+    treatment = _normalize_experiment_observation(
+        value.get("treatment"), "controlled_experiment.treatment"
+    )
+    if result == "improved" and not (
+        treatment["device_free_percent"] < baseline["device_free_percent"]
+    ):
+        raise ValueError(
+            "controlled_experiment improved result requires treatment device_free_percent "
+            "below baseline"
+        )
+    return {
+        "result": result,
+        "experiment_id": _audit_string(
+            value.get("experiment_id"), "controlled_experiment.experiment_id"
+        ),
+        "device_id": _strict_json_int(value.get("device_id")),
+        "metric": "device_free_percent",
+        "action": _audit_string(value.get("action"), "controlled_experiment.action"),
+        "target": _audit_target(value.get("target"), "controlled_experiment.target"),
+        "baseline": baseline,
+        "treatment": treatment,
+    }
+
+
+def _profile_metric_is_certified(profile: dict, metric: str) -> bool:
+    """Require an audited timeline scope and metric-specific profiler provenance."""
+    if metric not in profile:
+        return False
+    window = profile.get("profile_window")
+    if not isinstance(window, dict) or window.get("scope") != _CERTIFIED_PROFILE_SCOPE:
+        return False
+    provenance = profile.get("provenance")
+    if not isinstance(provenance, dict):
+        return False
+    return _profile_provenance_error(metric, provenance.get(metric)) is None
+
+
+def _certified_profile_metrics(profile: dict) -> list[str]:
+    return sorted(
+        metric
+        for metric in _CERTIFIED_PROFILE_PROVENANCE
+        if _profile_metric_is_certified(profile, metric)
+    )
 
 
 def _normalize_profile(profile: dict | None) -> dict:
-    """校验 profile 数值字段与嵌套 conduction_evidence（Review P1-2/P1-4）。
+    """校验 profile 数值字段与嵌套 conduction_evidence。
 
     保留单返回值（clean dict）以兼容既有调用；完整错误见 _normalize_profile_with_errors。
     """
@@ -2251,7 +3207,7 @@ def _normalize_profile(profile: dict | None) -> dict:
 
 
 def _normalize_profile_with_errors(profile: dict | None) -> tuple[dict, list[str]]:
-    """校验 profile 并返回 (clean, errors)。第八轮 P2-1：errors 顶层可见。
+    """校验 profile 并返回 (clean, errors)，由调用方公开 errors。
 
     conduction_evidence 严格契约：
       - io_npu_overlap_observed 只接受真正的 JSON bool True（'false'/'0'/0/1/字符串均不算）。
@@ -2266,7 +3222,7 @@ def _normalize_profile_with_errors(profile: dict | None) -> tuple[dict, list[str
         ]
     clean = dict(profile)
     errors: list[str] = []
-    # 第七轮 P2-3：数值范围校验（bool 已被 _strict_float 拒绝）。
+    # 数值范围校验；bool 已被 _strict_float 拒绝。
     _RANGES = {"device_free_percent": (0.0, 100.0), "mte2_ratio": (0.0, 1.0)}
     for key, (lo, hi) in _RANGES.items():
         if key in clean:
@@ -2300,6 +3256,37 @@ def _normalize_profile_with_errors(profile: dict | None) -> tuple[dict, list[str
                 if isinstance(scope, str) and scope:
                     normalized_window["scope"] = scope
                 clean["profile_window"] = normalized_window
+    dynamic_metrics = sorted(
+        metric for metric in _CERTIFIED_PROFILE_PROVENANCE if metric in clean
+    )
+    if dynamic_metrics:
+        normalized_window = clean.get("profile_window")
+        scope = (
+            normalized_window.get("scope")
+            if isinstance(normalized_window, dict)
+            else None
+        )
+        if scope != _CERTIFIED_PROFILE_SCOPE:
+            errors.append(
+                f"profile_window.scope={scope!r} 不是认证 scope "
+                f"{_CERTIFIED_PROFILE_SCOPE!r}；动态指标仅可作非认证候选"
+            )
+
+        raw_provenance = clean.get("provenance")
+        clean_provenance: dict[str, Any] = {}
+        if not isinstance(raw_provenance, dict):
+            errors.append("provenance 非对象或缺失；动态指标仅可作非认证候选")
+        else:
+            for metric in dynamic_metrics:
+                entry = raw_provenance.get(metric)
+                reason = _profile_provenance_error(metric, entry)
+                if reason is None:
+                    clean_provenance[metric] = dict(entry)
+                else:
+                    errors.append(
+                        f"provenance.{metric} {reason}；该指标仅可作非认证候选"
+                    )
+        clean["provenance"] = clean_provenance
     ce = clean.get("conduction_evidence")
     if ce is None:
         return clean, errors
@@ -2310,23 +3297,27 @@ def _normalize_profile_with_errors(profile: dict | None) -> tuple[dict, list[str
     clean_ce: dict[str, Any] = {}
     ov = ce.get("io_npu_overlap_observed")
     if ov is True:
-        clean_ce["io_npu_overlap_observed"] = True
+        try:
+            overlap_provenance = _normalize_overlap_provenance(
+                ce.get("overlap_provenance")
+            )
+        except (ValueError, TypeError) as exc:
+            errors.append(
+                f"io_npu_overlap_observed 缺少合法 overlap_provenance（{exc}），忽略"
+            )
+        else:
+            clean_ce["io_npu_overlap_observed"] = True
+            clean_ce["overlap_provenance"] = overlap_provenance
     elif ov is False or ov is None:
         pass  # False/缺失：不置位
     else:
         errors.append(f"io_npu_overlap_observed={ov!r} 非 boolean，忽略")
     exp = ce.get("controlled_experiment")
     if exp is not None:
-        if isinstance(exp, dict):
-            result = exp.get("result")
-            if isinstance(result, str) and result in _VALID_EXPERIMENT_RESULTS:
-                clean_ce["controlled_experiment"] = {"result": result}
-            elif result is None:
-                pass
-            else:
-                errors.append(f"controlled_experiment.result={result!r} 非法枚举，忽略")
-        else:
-            errors.append(f"controlled_experiment={exp!r} 非对象，忽略")
+        try:
+            clean_ce["controlled_experiment"] = _normalize_controlled_experiment(exp)
+        except (ValueError, TypeError) as exc:
+            errors.append(f"controlled_experiment 非法（{exc}），忽略")
     clean["conduction_evidence"] = clean_ce
     return clean, errors
 
@@ -2334,7 +3325,7 @@ def _normalize_profile_with_errors(profile: dict | None) -> tuple[dict, list[str
 def validate_analysis_request(
     snapshot: dict, profile: dict | None = None
 ) -> tuple[dict, dict, list[str], list[str], str | None]:
-    """第八轮 P1-1：唯一输入契约入口，所有 mode（all/R000-R500）与 eval 共用。
+    """所有 mode（all/R000-R500）与 eval 共用的唯一输入契约入口。
 
     返回 (normalized_snapshot, normalized_profile, validation_errors,
           profile_validation_errors, fatal_error)。
@@ -2349,9 +3340,20 @@ def validate_analysis_request(
             [],
             f"snapshot must be a JSON object, got {type(snapshot).__name__}",
         )
+    try:
+        _validate_json_resources(snapshot)
+    except ValueError as exc:
+        return {}, {}, [], [], f"snapshot resource limit exceeded: {exc}"
+    profile_resource_error: str | None = None
+    if profile is not None:
+        try:
+            _validate_json_resources(profile)
+        except ValueError as exc:
+            profile_resource_error = f"profile resource limit exceeded: {exc}"
+            profile = None
     sv = snapshot.get("schema_version")
     if sv is None:
-        # 第八轮 P1-1 item 8：缺 schema_version → legacy 兼容（按 1.x 处理）+ 显式 warning，不静默默认。
+        # 缺 schema_version 时按 legacy 1.x 兼容，并显式给出 warning。
         sv = "1.0"
         legacy_warn = "schema_version 缺失，按 legacy 1.x 处理（建议显式标注）"
     else:
@@ -2368,9 +3370,11 @@ def validate_analysis_request(
     snapshot, verr = normalize_and_validate(snapshot)
     if legacy_warn:
         verr = [legacy_warn] + list(verr)
-    # 第八轮 P1-1B：collected_at 缺失 → validation_error（所有 mode 可见），但不阻断分析
+    # collected_at 缺失时记录所有 mode 可见的 validation_error，但不阻断分析。
     # （schema 仍可用；窗口分析在无 timestamp 时退化为"无法证伪"，见 interval_overlap_ratio）。
     profile, pverr = _normalize_profile_with_errors(profile)
+    if profile_resource_error is not None:
+        pverr.append(profile_resource_error)
     dynamic_profile_fields = {
         key for key in ("device_free_percent", "mte2_ratio") if key in profile
     }
@@ -2400,7 +3404,7 @@ def validate_analysis_request(
 def interval_overlap_ratio(
     a: tuple[Any, Any] | None, b: tuple[Any, Any] | None
 ) -> float:
-    """第八轮 P1-2：两个时间区间的重叠占比（相对较短区间）。
+    """计算两个时间区间相对较短区间的重叠占比。
 
     任一区间缺失/非法 → 0.0（证据不足，不能确认同窗）。
     两者均存在：完全重叠 1.0，不重叠 0.0，部分重叠 ∈ (0,1)。
@@ -2452,6 +3456,35 @@ def intervals_have_common_overlap(
     if overlap < min_overlap_seconds or shortest <= 0:
         return False
     return (overlap / shortest) >= min_overlap_ratio
+
+
+def intervals_overlap_or_are_adjacent(
+    first: tuple[Any, Any] | None,
+    second: tuple[Any, Any] | None,
+    max_gap_seconds: float = 2.0,
+) -> bool:
+    """Accept overlapping provider windows or back-to-back reads within tolerance."""
+    if first is None or second is None:
+        return False
+    try:
+        first_start, first_end = float(first[0]), float(first[1])
+        second_start, second_end = float(second[0]), float(second[1])
+        max_gap = float(max_gap_seconds)
+    except (TypeError, ValueError, IndexError, OverflowError):
+        return False
+    values = (first_start, first_end, second_start, second_end, max_gap)
+    if not all(math.isfinite(value) for value in values):
+        return False
+    if first_end <= first_start or second_end <= second_start or max_gap < 0:
+        return False
+    if first_end >= second_start and second_end >= first_start:
+        return True
+    gap = (
+        second_start - first_end
+        if first_end < second_start
+        else first_start - second_end
+    )
+    return gap <= max_gap
 
 
 def _provider_interval(snapshot: dict, name: str) -> tuple[Any, Any] | None:
@@ -2515,6 +3548,33 @@ def _profile_window_matches_snapshot(snapshot: dict, profile: dict) -> bool:
     return overlap > 0 and overlap / profile_duration >= 0.5
 
 
+def _finding_evidence_interval(finding: dict) -> tuple[float, float] | None:
+    """Return a validated actual evidence interval carried by a Host finding."""
+    raw = finding.get("evidence_interval")
+    if not isinstance(raw, (list, tuple)) or len(raw) != 2:
+        return None
+    try:
+        start, end = float(raw[0]), float(raw[1])
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not math.isfinite(start) or not math.isfinite(end) or end <= start:
+        return None
+    return start, end
+
+
+def _profile_host_overlap_rules(profile: dict, host_findings: list[dict]) -> list[str]:
+    """Return confirmed Host rules whose actual evidence overlaps the profile."""
+    profile_interval = _profile_interval(profile)
+    if profile_interval is None:
+        return []
+    matched: list[str] = []
+    for finding in host_findings:
+        evidence_interval = _finding_evidence_interval(finding)
+        if intervals_have_common_overlap(profile_interval, evidence_interval):
+            matched.append(str(finding.get("rule_id") or ""))
+    return sorted(rule for rule in matched if rule)
+
+
 def _parse_iso(ts: str) -> float | None:
     """带时区 ISO8601 → epoch 秒；不可解析或 naive timestamp 返回 None。"""
     try:
@@ -2529,7 +3589,7 @@ def _parse_iso(ts: str) -> float | None:
 
 
 def _temp_name(path: str) -> str:
-    """第八轮 P2-3：生成同目录下唯一的临时文件名（含 PID + 随机串），避免并发碰撞。"""
+    """生成同目录下含 PID 和随机串的唯一临时文件名。"""
     import uuid
 
     d, base = os.path.split(path)
@@ -2539,7 +3599,7 @@ def _temp_name(path: str) -> str:
 def analyze_all(snapshot: dict, profile: dict | None = None) -> dict:
     """运行全部规则，返回 {schema_version, findings: [...], summary}。
 
-    第八轮 P1-1：经 validate_analysis_request 统一入口；schema/顶层 fatal → 结构化 error。
+    经 validate_analysis_request 统一入口；schema/顶层 fatal 转为结构化 error。
     validation_errors / profile_validation_errors 提升到顶层，让 agent/用户可见。
     """
     snapshot, profile, verr, pverr, fatal = validate_analysis_request(snapshot, profile)
@@ -2567,7 +3627,7 @@ def _analyze_validated(
 
     findings = [analyze_r000(snapshot), r100, r200, r300, r400]
 
-    # Review P1-5：NPU 传导链的 Host IO 入口应是 R100~R400 的并集，而非仅 R100。
+    # NPU 传导链的 Host IO 入口是 R100~R400 的并集。
     findings.append(
         analyze_r500_with_host(snapshot, profile or {}, [r100, r200, r300, r400])
     )
@@ -2591,7 +3651,7 @@ def _analyze_validated(
         "summary": summary,
         "high_priority_count": len(high),
     }
-    # 第八轮 P1-1/P2-1：validation_errors 与 profile_validation_errors 提升到顶层。
+    # 将 validation_errors 与 profile_validation_errors 提升到顶层。
     if verr:
         result["validation_errors"] = verr
     if pverr:
@@ -2602,7 +3662,7 @@ def _analyze_validated(
 def _is_confirmed_host_issue(finding: dict) -> bool:
     """该根因桶是否构成已确认的 Host IO 压力（用于 R500 传导入口）。
 
-    Review P1-2：只接受每条规则的**明确确认字段**，不接受通用 medium/medium 兜底——
+    只接受每条规则的明确确认字段，不接受通用 medium/medium 兜底；
     否则 R300 的 small_io 候选（medium）会被 R500 升级成"已传导"高置信误判。
       R100 → saturated_devices（且 level 含 sustained/likely/transient 才算观测到压力）
       R200 → confirmed_mounts
@@ -2640,25 +3700,132 @@ def _is_confirmed_host_issue(finding: dict) -> bool:
     return False
 
 
+def _target_pid_scope(snapshot: dict) -> set[int] | None:
+    """Return the explicit target PID plus identity-bound, chained descendants."""
+    target = snapshot.get("target")
+    raw_pid = target.get("pid") if isinstance(target, dict) else None
+    if not isinstance(raw_pid, int) or isinstance(raw_pid, bool) or raw_pid <= 0:
+        return None
+    allowed = {raw_pid}
+    parsed = _parsed(_provider(snapshot, "process_io_map"))
+    if not isinstance(parsed, dict):
+        return allowed
+    candidate_parents: dict[int, set[int]] = defaultdict(set)
+    for entry in parsed.get("pid_tree", []) or []:
+        if not isinstance(entry, dict):
+            continue
+        pid = entry.get("pid")
+        boot_id = entry.get("boot_id")
+        starttime = entry.get("pid_starttime_ticks")
+        parent_pid = entry.get("parent_pid")
+        if (
+            isinstance(pid, int)
+            and not isinstance(pid, bool)
+            and pid > 0
+            and pid != raw_pid
+            and entry.get("role") == "descendant"
+            and isinstance(parent_pid, int)
+            and not isinstance(parent_pid, bool)
+            and parent_pid > 0
+            and parent_pid != pid
+            and isinstance(boot_id, str)
+            and _BOOT_ID_PATTERN.fullmatch(boot_id)
+            and isinstance(starttime, int)
+            and not isinstance(starttime, bool)
+            and starttime >= 0
+        ):
+            candidate_parents[pid].add(parent_pid)
+
+    # Resolve only a unique parent chain rooted at the explicit target. Cycles,
+    # disconnected entries, duplicate conflicting parents, and legacy entries without
+    # parent_pid remain outside the trusted workload scope.
+    pending = {
+        pid: next(iter(parents))
+        for pid, parents in candidate_parents.items()
+        if len(parents) == 1
+    }
+    while pending:
+        resolved = {pid for pid, parent_pid in pending.items() if parent_pid in allowed}
+        if not resolved:
+            break
+        allowed.update(resolved)
+        for pid in resolved:
+            pending.pop(pid, None)
+    return allowed
+
+
 def _target_device_context(snapshot: dict) -> tuple[set[str], bool]:
-    """从 PID→设备映射取得目标 workload 的设备集合及身份是否均为 sysfs 精确解析。"""
+    """Return target devices only from repeated, identity-bound mapping evidence."""
     provider = _provider(snapshot, "process_io_map")
     parsed = _parsed(provider)
+    provider_interval = _provider_interval(snapshot, "process_io_map")
     if (
         _status(provider) != "ok"
         or not isinstance(parsed, dict)
-        or _provider_interval(snapshot, "process_io_map") is None
+        or provider_interval is None
+        or bool(parsed.get("partial"))
     ):
         return set(), False
     target = snapshot.get("target")
-    target_path = target.get("path") if isinstance(target, dict) else None
+    if not isinstance(target, dict):
+        return set(), False
+    target_path = target.get("path")
+    raw_target_pid = target.get("pid")
+    target_pid = (
+        raw_target_pid
+        if isinstance(raw_target_pid, int)
+        and not isinstance(raw_target_pid, bool)
+        and raw_target_pid > 0
+        else None
+    )
+    if target_pid is None and not (isinstance(target_path, str) and target_path):
+        return set(), False
+    try:
+        observation_samples = _strict_json_int(
+            parsed.get("observation_samples"), positive=True
+        )
+    except ValueError:
+        return set(), False
+    if observation_samples < 2:
+        return set(), False
+    allowed_pids = _target_pid_scope(snapshot) if target_pid is not None else None
     devices: set[str] = set()
     strong = True
     for mapping in parsed.get("mappings", []) or []:
         if not isinstance(mapping, dict):
             continue
+        pid = mapping.get("pid")
+        if (
+            not isinstance(pid, int)
+            or isinstance(pid, bool)
+            or pid <= 0
+            or (allowed_pids is not None and pid not in allowed_pids)
+        ):
+            continue
         if not _is_data_relevant_path(mapping.get("path"), target_path):
             continue
+        try:
+            observation_count = _strict_json_int(mapping.get("observation_count"))
+        except ValueError:
+            observation_count = 0
+        mapping_interval = _mapping_observation_interval(mapping, provider_interval)
+        boot_id = mapping.get("boot_id")
+        starttime = mapping.get("pid_starttime_ticks")
+        mapping_strong = bool(
+            mapping.get("device_resolution") == "sysfs"
+            and 2 <= observation_count <= observation_samples
+            and mapping_interval is not None
+            and mapping_interval[1] - mapping_interval[0] >= 1.0
+            and isinstance(boot_id, str)
+            and re.fullmatch(
+                r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+                r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
+                boot_id,
+            )
+            and isinstance(starttime, int)
+            and not isinstance(starttime, bool)
+            and starttime >= 0
+        )
         canonical = _canonical_dev(str(mapping.get("canonical_device") or ""))
         topology = [canonical] + [
             _canonical_dev(str(device))
@@ -2666,9 +3833,87 @@ def _target_device_context(snapshot: dict) -> tuple[set[str], bool]:
             if isinstance(device, str)
         ]
         devices.update(device for device in topology if device)
-        if mapping.get("device_resolution") != "sysfs":
+        if not mapping_strong:
             strong = False
     return devices, bool(devices) and strong
+
+
+def _target_device_mapping_intervals(
+    snapshot: dict,
+) -> dict[str, list[tuple[float, float]]]:
+    """Return actual repeated target-mapping intervals, keyed by device topology."""
+    provider = _provider(snapshot, "process_io_map")
+    parsed = _parsed(provider)
+    provider_interval = _provider_interval(snapshot, "process_io_map")
+    target = snapshot.get("target")
+    if (
+        _status(provider) != "ok"
+        or not isinstance(parsed, dict)
+        or provider_interval is None
+        or not isinstance(target, dict)
+    ):
+        return {}
+    target_path = target.get("path")
+    target_pid_scope = _target_pid_scope(snapshot)
+    try:
+        observations = _strict_json_int(
+            parsed.get("observation_samples"), positive=True
+        )
+    except ValueError:
+        return {}
+    intervals: dict[str, list[tuple[float, float]]] = defaultdict(list)
+    for mapping in parsed.get("mappings", []) or []:
+        if not isinstance(mapping, dict) or not _is_data_relevant_path(
+            mapping.get("path"), target_path
+        ):
+            continue
+        pid = mapping.get("pid")
+        if target_pid_scope is not None and pid not in target_pid_scope:
+            continue
+        try:
+            count = _strict_json_int(mapping.get("observation_count"))
+        except ValueError:
+            continue
+        interval = _mapping_observation_interval(mapping, provider_interval)
+        if (
+            mapping.get("device_resolution") != "sysfs"
+            or count < 2
+            or count > observations
+            or interval is None
+            or interval[1] - interval[0] < 1.0
+        ):
+            continue
+        devices = [_canonical_dev(str(mapping.get("canonical_device") or ""))]
+        devices.extend(
+            _canonical_dev(str(device))
+            for device in (mapping.get("backing_devices") or [])
+            if isinstance(device, str)
+        )
+        for device in devices:
+            if device:
+                intervals[device].append(interval)
+    return dict(intervals)
+
+
+def _target_binding_is_certified(snapshot: dict) -> bool:
+    """Require an explicit target with strong block or current NFS identity evidence."""
+    target = snapshot.get("target")
+    if not isinstance(target, dict) or not (
+        target.get("pid") is not None or bool(target.get("path"))
+    ):
+        return False
+    _devices, block_identity_strong = _target_device_context(snapshot)
+    nfs_mounts = [
+        mount
+        for mount in (snapshot.get("mounts") or [])
+        if isinstance(mount, dict) and _norm_fstype_group(mount.get("fstype")) == "nfs"
+    ]
+    nfs_identities, _scope = _required_nfs_identities(snapshot, nfs_mounts)
+    nfs_identity_strong = (
+        bool(nfs_identities)
+        and _provider_interval(snapshot, "mounts_provider") is not None
+    )
+    return block_identity_strong or nfs_identity_strong
 
 
 def _project_host_assessments_to_target(
@@ -2676,10 +3921,11 @@ def _project_host_assessments_to_target(
 ) -> list[dict]:
     """有目标设备映射时，只允许目标 workload 的设备证据进入 R500。"""
     target_devices, target_identity_strong = _target_device_context(snapshot)
+    target_mapping_intervals = _target_device_mapping_intervals(snapshot)
     nfs_mounts_for_target = [
         m
         for m in (snapshot.get("mounts") or [])
-        if isinstance(m, dict) and str(m.get("fstype", "")).lower().startswith("nfs")
+        if isinstance(m, dict) and _norm_fstype_group(m.get("fstype")) == "nfs"
     ]
     target_nfs_identities, target_nfs_scope = _required_nfs_identities(
         snapshot, nfs_mounts_for_target
@@ -2715,6 +3961,7 @@ def _project_host_assessments_to_target(
         return projected
     if not target_devices and not target_nfs_known:
         return assessments
+    target_pid_scope = _target_pid_scope(snapshot)
     projected: list[dict] = []
     for finding in assessments:
         if finding.get("rule_id") == "R200" and target_nfs_known:
@@ -2755,25 +4002,109 @@ def _project_host_assessments_to_target(
                 )
             projected.append(item)
             continue
+        if finding.get("rule_id") == "R400":
+            item = copy.deepcopy(finding)
+            raw_conflicts = item.get("device_pid_conflicts")
+            raw_intervals = item.get("device_evidence_intervals")
+            if not isinstance(raw_conflicts, dict):
+                raw_conflicts = {}
+            if not isinstance(raw_intervals, dict):
+                raw_intervals = {}
+            conflicts = {
+                _canonical_dev(str(device)): pids
+                for device, pids in raw_conflicts.items()
+                if _canonical_dev(str(device)) in target_devices
+                and isinstance(pids, list)
+                and (
+                    target_pid_scope is None
+                    or any(pid in target_pid_scope for pid in pids)
+                )
+            }
+            intervals: dict[str, list[float]] = {}
+            for device, interval in raw_intervals.items():
+                canonical = _canonical_dev(str(device))
+                parsed_interval = _finding_evidence_interval(
+                    {"evidence_interval": interval}
+                )
+                if canonical in conflicts and parsed_interval is not None:
+                    intervals[canonical] = list(parsed_interval)
+            item["device_pid_conflicts"] = conflicts
+            item["device_evidence_intervals"] = intervals
+            if conflicts and target_identity_strong and intervals:
+                representative = max(
+                    intervals.values(),
+                    key=lambda interval: float(interval[1]) - float(interval[0]),
+                )
+                item["evidence_interval"] = list(representative)
+            else:
+                item.pop("evidence_interval", None)
+                item["confidence"] = "none"
+                item["severity"] = "info"
+                item["evidence_window_valid"] = False
+                item["summary"] = (
+                    "R400 争抢证据未绑定到目标 workload 的设备和 PID 树，"
+                    "不能进入 R500 传导链。"
+                )
+                item.setdefault("missing_evidence", []).append(
+                    "目标 PID/进程树参与目标设备争抢的强身份同窗证据"
+                )
+            projected.append(item)
+            continue
         if finding.get("rule_id") != "R100":
             projected.append(finding)
             continue
         item = copy.deepcopy(finding)
+        host_interval = _finding_evidence_interval(item)
+
+        def _target_overlap(device: dict) -> tuple[float, float] | None:
+            if host_interval is None:
+                return None
+            for mapping_interval in target_mapping_intervals.get(
+                _canonical_dev(str(device.get("device") or "")), []
+            ):
+                if intervals_have_common_overlap(host_interval, mapping_interval):
+                    return (
+                        max(host_interval[0], mapping_interval[0]),
+                        min(host_interval[1], mapping_interval[1]),
+                    )
+            return None
+
         assessed = [
             device
             for device in (item.get("assessed_devices") or [])
-            if isinstance(device, dict) and device.get("device") in target_devices
+            if isinstance(device, dict)
+            and device.get("device") in target_devices
+            and _target_overlap(device) is not None
         ]
         saturated = [
             device
             for device in (item.get("saturated_devices") or [])
-            if isinstance(device, dict) and device.get("device") in target_devices
+            if isinstance(device, dict)
+            and device.get("device") in target_devices
+            and _target_overlap(device) is not None
         ]
+        overlap_intervals = [
+            overlap
+            for device in assessed
+            if (overlap := _target_overlap(device)) is not None
+        ]
+        target_health_complete = bool(assessed) and all(
+            device.get("health_evidence_complete") is True for device in assessed
+        )
         item["assessed_devices"] = assessed
         item["saturated_devices"] = saturated
         item["evidence_window_valid"] = bool(
-            item.get("evidence_window_valid") and target_identity_strong and assessed
+            item.get("evidence_window_valid")
+            and target_identity_strong
+            and target_health_complete
+            and bool(overlap_intervals)
         )
+        if overlap_intervals:
+            item["evidence_interval"] = list(
+                max(overlap_intervals, key=lambda interval: interval[1] - interval[0])
+            )
+        else:
+            item.pop("evidence_interval", None)
         if saturated:
             item["confidence"] = (
                 "high"
@@ -2782,16 +4113,25 @@ def _project_host_assessments_to_target(
             )
             item["severity"] = "high" if item["confidence"] == "high" else "medium"
         elif assessed:
-            original_confidence = (
-                str(finding.get("confidence"))
-                if finding.get("confidence") in _ORDER
-                else "none"
-            )
-            item["confidence"] = original_confidence
             item["severity"] = "info"
-            if original_confidence == "high":
+            if not target_health_complete:
+                item["confidence"] = "low"
+                item["summary"] = (
+                    "目标 workload 映射设备的 util/queue/await 字段覆盖不足，"
+                    "不能高置信排除 Host IO 压力。"
+                )
+                item.setdefault("missing_evidence", []).append(
+                    "目标设备完整的 util + queue/await 指标"
+                )
+            elif finding.get("confidence") == "high":
+                item["confidence"] = "high"
                 item["summary"] = "目标 workload 映射设备在有效窗口内未检测到 IO 饱和。"
             else:
+                item["confidence"] = (
+                    str(finding.get("confidence"))
+                    if finding.get("confidence") in _ORDER
+                    else "none"
+                )
                 item["summary"] = (
                     "目标 workload 映射设备在当前窗口内未检测到 IO 饱和，但原始证据"
                     "不足以高置信排除偶发 Host IO 压力。"
@@ -2838,20 +4178,54 @@ def _host_io_ruled_out(findings: list[dict]) -> bool:
     return r100_clear and r200_clear
 
 
+def _profile_overlaps_finding(profile: dict, finding: dict | None) -> bool:
+    """Require the profile to overlap a finding's actual dynamic evidence window."""
+    if not isinstance(finding, dict):
+        return False
+    return intervals_have_common_overlap(
+        _profile_interval(profile), _finding_evidence_interval(finding)
+    )
+
+
+def _host_io_ruled_out_in_profile_window(findings: list[dict], profile: dict) -> bool:
+    """Return whether negative Host IO evidence applies to this profile window."""
+    if not _host_io_ruled_out(findings):
+        return False
+    r100 = next(
+        (f for f in findings if isinstance(f, dict) and f.get("rule_id") == "R100"),
+        None,
+    )
+    if not _profile_overlaps_finding(profile, r100):
+        return False
+    r200 = next(
+        (f for f in findings if isinstance(f, dict) and f.get("rule_id") == "R200"),
+        None,
+    )
+    if not isinstance(r200, dict):
+        return False
+    scope = str(r200.get("nfs_metric_required_scope") or "")
+    relevant_network_mount = bool(r200.get("network_mounts")) and not scope.endswith(
+        "_non_nfs"
+    )
+    return not relevant_network_mount or _profile_overlaps_finding(profile, r200)
+
+
 def analyze_r500_with_host(
     snapshot: dict, profile: dict, host_findings: list[dict] | bool
 ) -> dict:
-    """R500 的实际实现，接收已判定的 Host 根因集合（Review P1-5）。
+    """R500 public API; Host findings are always re-derived from the snapshot.
 
-    host_findings：R100~R400 的完整 finding 列表；函数内部只接受严格确认项。
-    旧 bool 不携带可审计证据，按 unknown 处理，不得升级传导。
+    ``host_findings`` is retained for call compatibility but is never trusted. A caller
+    cannot certify R500 by supplying a hand-written R100-R400 finding.
 
-    设备侧传导链的置信度阶梯（Review P1-7：确定性 analyzer 不重建 profiler 时间线，
-    只读取已采集指标 + agent 交叉验证后传入的 overlap 证据）：
-      - high：Host IO 异常 + device Free 高 + (同窗重叠被观测 OR 对照实验改善)。
-      - medium：Host IO 异常 + device Free 高，但无同窗/对照证据（封顶 medium，不称"已传导"）。
-      - info（降级）：Host IO 异常但 NPU 不空泡（被计算掩盖）。
+    确定性 analyzer 不重建或验证 profiler artifact；任何 JSON-only R500 结论
+    置信度封顶 medium。可信 artifact verifier 实现前，不声称已认证的传导链。
     """
+    # Public callers may invoke this rule directly. Normalize the snapshot/profile and
+    # recompute every Host rule so supplied findings cannot forge certifying evidence.
+    snapshot, profile, _validation_errors, _profile_errors, fatal = (
+        validate_analysis_request(snapshot, profile)
+    )
     finding = _finding(
         "R500",
         "medium",
@@ -2862,54 +4236,86 @@ def analyze_r500_with_host(
             "做对照实验：本地缓存/降低 IO 并发，观察空泡是否同步下降",
         ],
     )
-    # bool 无 provenance，不能作为 Host 根因证据。
-    if isinstance(host_findings, bool):
-        assessments: list[dict] = []
-    else:
-        assessments = [f for f in host_findings if isinstance(f, dict)]
-    # 直接 API 调用者可能只传一个手写 finding。若其声称 high 却缺严格确认字段，
-    # 从 snapshot 重新计算同规则，防止伪造/旧结构绕过 provenance 契约。
-    if any(
-        f.get("confidence") == "high" and not _is_confirmed_host_issue(f)
-        for f in assessments
-    ):
-        actual_r100 = analyze_r100(snapshot)
-        actual_r200 = analyze_r200(snapshot)
-        actual_r300 = analyze_r300(snapshot)
-        actual_r400 = analyze_r400(snapshot, actual_r100)
-        actual_by_rule = {
-            item["rule_id"]: item
-            for item in (actual_r100, actual_r200, actual_r300, actual_r400)
-        }
-        assessments = [
-            f
-            if _is_confirmed_host_issue(f)
-            else actual_by_rule.get(str(f.get("rule_id")), f)
-            for f in assessments
-        ]
+    if fatal is not None:
+        finding.update(
+            confidence="none",
+            severity="info",
+            summary=f"Snapshot 输入不可分析：{fatal}",
+            missing_evidence=["合法且资源受限的 IO Snapshot JSON"],
+        )
+        return finding
+    del host_findings
+    actual_r100 = analyze_r100(snapshot)
+    assessments = [
+        actual_r100,
+        analyze_r200(snapshot),
+        analyze_r300(snapshot),
+        analyze_r400(snapshot, actual_r100),
+    ]
     assessments = _project_host_assessments_to_target(snapshot, assessments)
+    target_binding_certified = _target_binding_is_certified(snapshot)
+    finding["target_binding_certified"] = target_binding_certified
     confirmed_hosts = [f for f in assessments if _is_confirmed_host_issue(f)]
     has_host_io_issue = bool(confirmed_hosts)
     host_ruled_out = _host_io_ruled_out(assessments)
+    host_ruled_out_same_window = _host_io_ruled_out_in_profile_window(
+        assessments, profile
+    )
     host_rules = [f.get("rule_id", "") for f in confirmed_hosts]
+    profile_host_rules = _profile_host_overlap_rules(profile, confirmed_hosts)
+    profile_snapshot_overlap = _profile_window_matches_snapshot(snapshot, profile)
+    host_ruled_out_same_window = host_ruled_out_same_window and profile_snapshot_overlap
+    if not profile_snapshot_overlap:
+        profile_host_rules = []
+    host_profile_overlap = bool(profile_host_rules)
 
     mte2 = profile.get("mte2_ratio")
     device_free_pct = profile.get("device_free_percent")
-    # agent 交叉验证后传入的传导证据（确定性 analyzer 自身无法产生）
-    conduction = profile.get("conduction_evidence") or {}
-    overlap_observed = bool(
-        conduction.get("io_npu_overlap_observed")
-        and _profile_window_matches_snapshot(snapshot, profile)
-    )
-    experiment = conduction.get("controlled_experiment") or {}
-    experiment_improved = experiment.get("result") == "improved"
+    certified_metrics = _certified_profile_metrics(profile)
+    finding["certified_profile_metrics"] = certified_metrics
+    mte2_certified = "mte2_ratio" in certified_metrics
+    device_free_certified = "device_free_percent" in certified_metrics
+    # JSON can describe overlap or an experiment, but cannot prove that the referenced
+    # artifacts were inspected. Keep supplied context visible without certifying it.
+    conduction = profile.get("conduction_evidence")
+    unverified_conduction_evidence: list[str] = []
+    if isinstance(conduction, dict):
+        if conduction.get("io_npu_overlap_observed") is True:
+            unverified_conduction_evidence.append("timeline_overlap")
+        if isinstance(conduction.get("controlled_experiment"), dict):
+            unverified_conduction_evidence.append("controlled_experiment")
+    finding["certified_conduction_evidence"] = []
+    if unverified_conduction_evidence:
+        finding["unverified_conduction_evidence"] = unverified_conduction_evidence
+    if has_host_io_issue and _profile_interval(profile) is not None:
+        finding["profile_host_overlap_rules"] = profile_host_rules
 
-    # 反例：高 mte2 + Host IO 正常 → 转交计算分析（P1 关键修复）
+    # 反例：高 mte2 + Host IO 正常 → 转交计算分析。
     if mte2 is not None and mte2 >= 0.3 and not has_host_io_issue:
-        if host_ruled_out:
-            confidence = "high"
+        if host_ruled_out_same_window and mte2_certified and target_binding_certified:
+            confidence = "medium"
             host_statement = "有效窗口内未发现设备级 Host IO 压力"
             missing: list[str] = []
+        elif host_ruled_out_same_window:
+            confidence = "medium"
+            gaps = []
+            missing = []
+            if not mte2_certified:
+                gaps.append("mte2_ratio 的 profiler 来源未认证")
+                missing.append(
+                    "profile.profile_window.scope + profile.provenance.mte2_ratio（认证 profiler database 来源）"
+                )
+            if not target_binding_certified:
+                gaps.append("目标 workload 身份未认证")
+            host_statement = f"Host IO 负向证据同窗，但{'、'.join(gaps)}"
+        elif host_ruled_out:
+            confidence = "low"
+            host_statement = (
+                "Host IO 负向证据与 profiler 不同窗，不能确认 profiler 窗口内正常"
+            )
+            missing = [
+                "profile.profile_window 与 Host IO 负向 evidence_interval 的足量公共交集"
+            ]
         else:
             confidence = "low"
             host_statement = "Host IO 证据不足，尚不能确认正常或异常"
@@ -2917,6 +4323,11 @@ def analyze_r500_with_host(
                 "R100 有效设备窗口（iostat 或递增 diskstats）",
                 "必要时补充 R200/R300/R400 证据",
             ]
+        mte2_provenance_requirement = "profile.profile_window.scope + profile.provenance.mte2_ratio（认证 profiler database 来源）"
+        if not mte2_certified and mte2_provenance_requirement not in missing:
+            missing.append(mte2_provenance_requirement)
+        if not target_binding_certified:
+            missing.append("显式 target.pid/path 及其强身份设备或当前 NFS 挂载映射")
         finding.update(
             confidence=confidence,
             severity="info",
@@ -2925,7 +4336,15 @@ def analyze_r500_with_host(
                 f"不代表 Host 存储供给不足，应转交 ascend-computation-analysis 分析算子数据搬运。"
             ),
             handoff="ascend-computation-analysis",
-            evidence_fields=["profile.mte2_ratio"],
+            evidence_fields=(
+                [
+                    "profile.mte2_ratio",
+                    "profile.profile_window.scope",
+                    "profile.provenance.mte2_ratio",
+                ]
+                if mte2_certified
+                else ["profile.mte2_ratio"]
+            ),
             missing_evidence=missing,
         )
         return finding
@@ -2954,16 +4373,44 @@ def analyze_r500_with_host(
         )
         return finding
 
-    # Review P1-2：无任何已确认 Host IO 根因时，R500 不得输出 severity>=medium 的正向传导 finding。
+    # 没有已确认 Host IO 根因时，R500 不得输出 severity>=medium 的正向传导 finding。
     # device Free 高更可能来自 CPU 预处理/调度/通信/同步，应转交对应 skill，而非推荐 IO 缓存。
     if not has_host_io_issue:
-        if host_ruled_out:
+        if (
+            host_ruled_out_same_window
+            and device_free_certified
+            and target_binding_certified
+        ):
             summary = (
                 f"有效窗口内未发现设备级 Host IO 压力，device Free={device_free_pct}% 的空泡"
                 f"更可能来自 CPU 预处理/调度/通信/同步，转交对应 skill。"
             )
             missing = []
-            confidence = "high"
+            confidence = "medium"
+        elif host_ruled_out_same_window:
+            gaps = []
+            missing = []
+            if not device_free_certified:
+                gaps.append("profiler scope/来源未认证")
+                missing.append(
+                    "profile.profile_window.scope + profile.provenance.device_free_percent（认证 profiler timeline/DB 来源）"
+                )
+            if not target_binding_certified:
+                gaps.append("目标 workload 身份未认证")
+            summary = (
+                f"Host IO 负向证据与 device Free={device_free_pct}% 同窗，但"
+                f"{'、'.join(gaps)}，不能高置信排除存储；先补齐认证。"
+            )
+            confidence = "medium"
+        elif host_ruled_out:
+            summary = (
+                f"Host IO 负向证据与 device Free={device_free_pct}% 的 profiler 窗口不同窗，"
+                "不能据此排除存储；先补同窗采集，再检查 CPU/调度/通信。"
+            )
+            missing = [
+                "profile.profile_window 与 Host IO 负向 evidence_interval 的足量公共交集"
+            ]
+            confidence = "low"
         else:
             summary = (
                 f"Host IO 证据不足，不能把 device Free={device_free_pct}% 归因于或排除存储；"
@@ -2974,11 +4421,30 @@ def analyze_r500_with_host(
                 "R200/R300/R400 与 workload 同窗证据",
             ]
             confidence = "none"
+        device_free_provenance_requirement = (
+            "profile.profile_window.scope + profile.provenance.device_free_percent"
+            "（认证 profiler timeline/DB 来源）"
+        )
+        if (
+            not device_free_certified
+            and device_free_provenance_requirement not in missing
+        ):
+            missing.append(device_free_provenance_requirement)
+        if not target_binding_certified:
+            missing.append("显式 target.pid/path 及其强身份设备或当前 NFS 挂载映射")
         finding.update(
             confidence=confidence,
             severity="info",
             summary=summary,
-            evidence_fields=["profile.device_free_percent"],
+            evidence_fields=(
+                [
+                    "profile.device_free_percent",
+                    "profile.profile_window.scope",
+                    "profile.provenance.device_free_percent",
+                ]
+                if device_free_certified
+                else ["profile.device_free_percent"]
+            ),
             missing_evidence=missing,
             handoff="mindstudio-cpu-binding / ascend-schedule-analysis / ascend-communication-analysis",
             recommended_next_checks=[
@@ -2990,46 +4456,99 @@ def analyze_r500_with_host(
         return finding
 
     if device_free_pct >= 10 and has_host_io_issue:
-        # 有同窗重叠或对照实验证据 → high；否则封顶 medium（不声称"已传导"）。
-        if overlap_observed or experiment_improved:
-            proof = "同窗相关性已被观测" if overlap_observed else "对照实验已改善"
+        missing = []
+        limitations = []
+        evidence_fields = ["profile.device_free_percent"]
+        if unverified_conduction_evidence:
+            missing.append(
+                "可信 profiler artifact verifier（核验 timeline/实验工件内容）"
+            )
+            limitations.append("传导证据已提供但未经可信工件核验")
+            evidence_fields.append("profile.conduction_evidence")
+        else:
+            missing.extend(
+                [
+                    "profile.conduction_evidence.io_npu_overlap_observed（Host IO 异常区间与 device Free/step 空泡的同窗相关性）",
+                    "profile.conduction_evidence.controlled_experiment（本地缓存/降并发后空泡是否同步下降）",
+                ]
+            )
+            limitations.append("未提供同窗相关性/对照实验证据")
+        if not host_profile_overlap:
+            missing.append(
+                "profile.profile_window 与至少一个已确认 Host finding.evidence_interval 的足量公共交集"
+            )
+        if not device_free_certified:
+            missing.append(
+                "profile.profile_window.scope + profile.provenance.device_free_percent（认证 profiler timeline/DB 来源）"
+            )
+            limitations.append("profiler scope/来源未认证")
+        if not target_binding_certified:
+            missing.append("显式 target.pid/path 及其强身份设备或当前 NFS 挂载映射")
+            limitations.append("目标 workload 身份未认证")
+        limitation_text = "、".join(limitations) or "认证证据不完整"
+        finding.update(
+            confidence="medium",
+            severity="medium",
+            summary=(
+                f"{host_desc}，device Free={device_free_pct}%，IO 压力可能传导到设备侧空泡，"
+                f"但{limitation_text}，置信度封顶 medium（不声称已传导）。"
+            ),
+            evidence_fields=evidence_fields,
+            missing_evidence=missing,
+        )
+    elif device_free_pct < 5 and has_host_io_issue:
+        if host_profile_overlap and device_free_certified and target_binding_certified:
             finding.update(
-                confidence="high",
-                severity="high",
+                confidence="medium",
+                severity="info",
                 summary=(
-                    f"{host_desc}，device Free={device_free_pct}%，且{proof}，"
-                    f"IO 压力已传导到设备侧空泡（传导链成立）。"
+                    f"{host_desc}，JSON-only profile 报告 device Free={device_free_pct}%，"
+                    "未观察到明显设备空泡；但未经可信工件核验，"
+                    "不能据此确认 R500 传导链未成立或降低存储问题优先级。"
                 ),
                 evidence_fields=[
                     "profile.device_free_percent",
-                    "profile.conduction_evidence",
+                    "profile.profile_window.scope",
+                    "profile.provenance.device_free_percent",
                 ],
+                missing_evidence=[
+                    "可信 profiler artifact verifier（核验 timeline 中的设备空泡区间）"
+                ],
+            )
+        elif host_profile_overlap:
+            missing = []
+            limitations = []
+            if not device_free_certified:
+                missing.append(
+                    "profile.profile_window.scope + profile.provenance.device_free_percent（认证 profiler timeline/DB 来源）"
+                )
+                limitations.append("profiler scope/来源未认证")
+            if not target_binding_certified:
+                missing.append("显式 target.pid/path 及其强身份设备或当前 NFS 挂载映射")
+                limitations.append("目标 workload 身份未认证")
+            finding.update(
+                confidence="medium",
+                severity="medium",
+                summary=(
+                    f"{host_desc}，device Free={device_free_pct}% 与 Host IO 证据同窗，"
+                    f"但{'、'.join(limitations)}，不能据此降低存储问题优先级。"
+                ),
+                evidence_fields=["profile.device_free_percent"],
+                missing_evidence=missing,
             )
         else:
             finding.update(
                 confidence="medium",
                 severity="medium",
                 summary=(
-                    f"{host_desc}，device Free={device_free_pct}%，IO 压力可能传导到设备侧空泡，"
-                    f"但缺同窗相关性/对照实验证据，置信度封顶 medium（不声称已传导）。"
+                    f"{host_desc}，但 device Free={device_free_pct}% 与 Host IO 证据不同窗，"
+                    "不能据此降低存储问题优先级。"
                 ),
                 evidence_fields=["profile.device_free_percent"],
                 missing_evidence=[
-                    "profile.conduction_evidence.io_npu_overlap_observed（Host IO 异常区间与 device Free/step 空泡的同窗重叠）",
-                    "profile.conduction_evidence.controlled_experiment（本地缓存/降并发后空泡是否同步下降）",
+                    "profile.profile_window 与已确认 Host finding.evidence_interval 的足量公共交集"
                 ],
             )
-    elif device_free_pct < 5 and has_host_io_issue:
-        finding.update(
-            confidence="high",
-            severity="info",
-            summary=(
-                f"{host_desc}，但 device Free={device_free_pct}%（设备侧不空泡），"
-                f"IO 压力被计算掩盖，当前不是关键瓶颈（R500 降级）。"
-            ),
-            evidence_fields=["profile.device_free_percent"],
-            priority_downgrade=True,
-        )
     else:
         finding.update(
             confidence="medium",
@@ -3039,8 +4558,15 @@ def analyze_r500_with_host(
 
 
 def load_snapshot(path: str) -> dict:
+    size = os.path.getsize(path)
+    if size > _MAX_JSON_FILE_BYTES:
+        raise ValueError(
+            f"JSON file is {size} bytes; limit is {_MAX_JSON_FILE_BYTES} bytes"
+        )
     with open(path, encoding="utf-8") as f:
-        return json.load(f)
+        payload = json.load(f)
+    _validate_json_resources(payload)
+    return payload
 
 
 def _r500_host_findings_for_standalone(snapshot: dict) -> list[dict]:
@@ -3081,24 +4607,30 @@ def main(argv: list[str] | None = None) -> int:
     except FileNotFoundError:
         print(f"错误: Snapshot 文件不存在: {args.snapshot}", file=sys.stderr)
         return 1
-    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+    except (ValueError, RecursionError, UnicodeDecodeError) as e:
         print(f"错误: Snapshot JSON 解析失败: {args.snapshot}: {e}", file=sys.stderr)
         return 1
     except OSError as e:
-        # 第八轮 P2-2：目录路径 / 权限 / 其他 OS 错误 → 稳定非零，不泄露堆栈。
+        # 目录路径、权限及其他 OS 错误稳定返回非零且不泄露堆栈。
         print(f"错误: 无法读取 Snapshot {args.snapshot}: {e}", file=sys.stderr)
         return 1
 
     profile = None
     if args.profile:
         try:
-            with open(args.profile, encoding="utf-8") as f:
-                profile = json.load(f)
-        except (OSError, json.JSONDecodeError, UnicodeDecodeError) as e:
-            print(f"警告: profile 解析失败，忽略: {e}", file=sys.stderr)
+            profile = load_snapshot(args.profile)
+        except (OSError, ValueError, RecursionError, UnicodeDecodeError) as e:
+            print(f"错误: profile 解析失败: {e}", file=sys.stderr)
+            return 1
 
-    # 第八轮 P1-1：所有 mode 共用 validate_analysis_request（schema/collected_at/顶层 fatal）。
+    # 所有 mode 共用 validate_analysis_request 处理 schema、时间和顶层错误。
     snapshot, profile, verr, pverr, fatal = validate_analysis_request(snapshot, profile)
+    if args.profile and not ({"device_free_percent", "mte2_ratio"} & profile.keys()):
+        pverr = sorted(
+            set(pverr)
+            | {"显式 --profile 未提供可用的 device_free_percent 或 mte2_ratio"}
+        )
+    profile_invalid = bool(args.profile and pverr)
     if fatal:
         result = {"error": fatal, "schema_version": "unknown", "findings": []}
     elif args.mode == "all":
@@ -3115,14 +4647,14 @@ def main(argv: list[str] | None = None) -> int:
             ),
         }[args.mode]
         result = func()
-        # 单规则结果携带 validation_errors（第八轮 P1-1B）
+        # 单规则结果也携带 validation_errors。
         if isinstance(result, dict):
             if verr:
                 result["validation_errors"] = verr
             if pverr:
                 result["profile_validation_errors"] = pverr
 
-    # 第七轮 P1-1C/P2-1：顶层 error/unsupported schema 返回非零；输出写入失败也非零。
+    # 顶层 error、unsupported schema 和输出写入失败均返回非零。
     out_text = json.dumps(result, ensure_ascii=False, indent=2, default=str)
     if args.output:
         tmp = _temp_name(args.output)
@@ -3142,6 +4674,8 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print(out_text)
     if isinstance(result, dict) and "error" in result:
+        return 2
+    if profile_invalid:
         return 2
     return 0
 

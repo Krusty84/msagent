@@ -17,7 +17,10 @@
       "disks": {
         "nvme0n1": {"r_per_s": 100, "rkB_per_s": 200000, "r_await_ms": 30,
                     "avgqu_sz": 4, "util_percent": 99, "util_max": 99, "util_p95": 99,
-                    "sample_count": 5, "device_type": "ssd"}
+                    "sample_count": 5, "util_sample_count": 5,
+                    "avgqu_sz_sample_count": 5, "r_await_ms_sample_count": 5,
+                    "avgqu_sz_with_util_sample_count": 5,
+                    "r_await_ms_with_util_sample_count": 5, "device_type": "ssd"}
       },
       "reports": 5
     }

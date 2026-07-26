@@ -17,7 +17,7 @@ Only conclude from observed evidence. Identify missing evidence explicitly, cap 
 - Prefer the deterministic collector and analyzer over ad hoc threshold reasoning.
 - Treat provider failures as partial evidence, never as a healthy result.
 
-Cover local disk throughput, IOPS, queue and await pressure; NFS latency and retransmission; remote metadata and small-file overhead; multi-process IO interference; and Host-IO-to-device-idle triage.
+Cover local disk throughput, IOPS, queue and await pressure; NFS latency and retransmission; remote metadata and small-file overhead; multi-process IO interference; and Host-IO-to-device-idle triage. Automated network-storage confirmation is currently NFS-only; other network filesystems are identified and handed off without an R200/R300 high conclusion.
 
 ### Non-negotiable safety gate
 
@@ -56,7 +56,7 @@ readahead 首答
 
 Respect these boundaries:
 
-- Automatic network-storage performance confirmation currently covers NFS only and requires current-window RTT, execute latency, retransmission, timeout, or throughput evidence; mount type alone never confirms a bottleneck.
+- Automatic network-storage performance confirmation currently covers NFS only and requires current-window mountstats RTT, execute latency, retransmission, or major-timeout evidence; mount type or low throughput alone never confirms a bottleneck.
 - Lustre, CIFS, GPFS, BeeGFS, Ceph, and FUSE mounts are identified and routed to provider-specific manual evidence collection unless dedicated metrics are supplied.
 - High `mte2_ratio` is not Host storage evidence. If Host IO is healthy and `mte2_ratio` is high, hand off to computation analysis.
 - Treat `npu-smi` as hardware-health and coarse-utilization evidence only. Do not use an idle `npu-smi` sample as R500 conduction evidence.
@@ -76,13 +76,17 @@ Multi-rank, DataLoader, or NPU-idle wording alone is not proof of a storage issu
 ## Workflow
 
 1. Classify the scenario: DataLoader/dataset reads, checkpoint loading, NFS/remote access, small files, rank/worker contention, or suspected device starvation.
-2. Collect a read-only IO Snapshot for the affected workload window. Pass `--pid` and `--path` whenever available.
+2. Collect a read-only IO Snapshot for the affected workload window. Pass `--pid` for bounded R400 PID-to-device mapping; add `--path` to bind the affected data scope. A path alone never triggers a host-wide `/proc` scan.
 3. Run the deterministic analyzer. Do not replace analyzer output with invented thresholds.
 4. Inspect R100-R400 as the Host IO chain.
 5. Inspect R500 separately. Require profiler-side idle plus confirmed Host IO before attributing device idle to storage.
 6. Report confidence, evidence fields, missing evidence, safe recommendations, rollback, and before/after validation.
 
 ## Prerequisites
+
+All relative commands below assume the current directory is the Skill root: the directory
+containing this `SKILL.md`. Resolve that directory from the loaded Skill location and `cd` to
+it before running `scripts/...` or `evals/...`; do not assume the repository root is the cwd.
 
 Use Python 3.10 or newer. Verify dependencies before running the collector or evals:
 
@@ -96,7 +100,7 @@ If dependencies are missing, obtain user approval before modifying the Python en
 python3 -m pip install -r requirements.txt
 ```
 
-Treat `iostat` and `pidstat` from `sysstat` as optional but strongly preferred. The collector falls back to `/proc/diskstats` when they are unavailable and records the confidence loss.
+Treat `iostat` and `pidstat` from `sysstat` as optional but strongly preferred. The collector falls back to a two-endpoint `/proc/diskstats` delta when they are unavailable. That fallback can identify a candidate window but cannot certify either pressure or health above medium confidence.
 
 ## Collect and analyze
 
@@ -123,34 +127,69 @@ Use this profile-summary shape only after reading profiler output from the same 
   "profile_window": {
     "start": "2026-07-20T10:00:05+00:00",
     "end": "2026-07-20T10:00:20+00:00",
-    "scope": "between_first_and_last_exported_device_task"
+    "scope": "matched_workload_device_timeline"
+  },
+  "provenance": {
+    "device_free_percent": {
+      "source_type": "profiler_timeline",
+      "artifact_id": "PROF_20260720/device_0_timeline",
+      "device_id": 0,
+      "metric": "device_free_percent",
+      "extraction_method": "device_idle_interval_ratio"
+    },
+    "mte2_ratio": {
+      "source_type": "profiler_database",
+      "artifact_id": "PROF_20260720/ascend_pytorch_profiler.db",
+      "device_id": 0,
+      "metric": "mte2_ratio",
+      "extraction_method": "workload_total_cycle_ratio"
+    }
   },
   "conduction_evidence": {
     "io_npu_overlap_observed": true,
-    "controlled_experiment": {"result": "improved"}
+    "overlap_provenance": {
+      "artifact_id": "PROF_20260720/device_0_timeline",
+      "device_id": 0,
+      "metric": "device_free_percent",
+      "extraction_method": "timeline_interval_overlap",
+      "host_rule_ids": ["R100"],
+      "host_evidence_interval": {
+        "start": "2026-07-20T10:00:00+00:00",
+        "end": "2026-07-20T10:00:20+00:00"
+      },
+      "device_evidence_interval": {
+        "start": "2026-07-20T10:00:05+00:00",
+        "end": "2026-07-20T10:00:20+00:00"
+      },
+      "target": {"pid": 42, "path": "/data/train"}
+    }
   }
 }
 ```
 
-- `device_free_percent` 和 `mte2_ratio` 必须带合法的 `profile_window.start/end`；至少一半的 profiler 窗口必须落在 Snapshot.window 内，否则 analyzer 会丢弃动态指标并报告 validation error。
-Set `io_npu_overlap_observed=true` only after verifying temporal overlap between Host IO pressure and device Free/DataLoader wait/step idle. Set `controlled_experiment.result="improved"` only when a controlled cache, storage, or IO-concurrency change improves the device idle symptom. Omit unverifiable fields instead of guessing.
+- `device_free_percent` must come from an actual profiler timeline or DB idle/wait view, not gaps reconstructed from `op_summary`. Dynamic metrics require a valid `profile_window.start/end`; at least half of the profiler window must overlap `Snapshot.window`.
+- Any high positive conclusion, high-confidence handoff, or storage-priority downgrade requires `profile_window.scope="matched_workload_device_timeline"` and metric-specific `provenance`. `device_free_percent` accepts a profiler timeline `device_idle_interval_ratio` or profiler database `database_device_free_metric`; `mte2_ratio` accepts only a profiler database `workload_total_cycle_ratio`. Each provenance entry must include a non-empty artifact ID, non-negative device ID, exact metric name, and extraction method. Missing, arbitrary, `op_summary`, or exported-task-gap provenance is non-certifying and caps the cross-chain conclusion below high.
+- A future trusted R500 artifact verifier must require an explicit `Snapshot.target.pid` or `target.path` with a repeated, identity-bound block-device mapping or current NFS mount identity. The profile window must overlap at least one target-scoped, confirmed R100-R400 `evidence_interval` for at least 1 second and 50% of the shorter interval. A null target or broad top-level Snapshot window is not a substitute.
+- Apply the same-window requirement to negative cross-chain conclusions too: do not hand off high-confidence MTE2/device-idle findings or downgrade a confirmed storage issue using a disjoint profile window.
+- `mte2_ratio` is computation-side context only. Do not aggregate per-operator cycle ratios into a workload ratio without their compatible total-cycle denominators.
+`io_npu_overlap_observed` and `controlled_experiment` supplied only in profile JSON are non-certifying context: artifact identifiers and intervals are not proof that the underlying timeline or experiment artifacts were verified. They may support a medium-confidence candidate but cannot produce R500 high until this Skill has a trusted external artifact verifier. A bare boolean, null target, or bare result is invalid. Omit unverifiable fields instead of guessing.
 
-从 Ascend `msprof` 导出目录生成保守 profile 摘要：
+从 Ascend `msprof` 的 `op_summary` 导出生成仅供排查的诊断摘要：
 
 ```bash
-python3 scripts/summarize_msprof.py /path/to/msprof-output --device 0 -o npu_metrics.json
+python3 scripts/summarize_msprof.py /path/to/msprof-output --device 0 -o op_summary_diagnostics.json
 ```
 
-该摘要器只计算导出的 task 区间和指标，不会自动推断 `io_npu_overlap_observed`。
+`op_summary` 不是设备 timeline。摘要器只输出 `op_summary_task_gap_proxy_percent` 和逐列 MTE2 ratio 统计等明确标注的 proxy；它不会输出可认证 R500 的 `device_free_percent`、聚合 `mte2_ratio`、`profile_window` 或 `conduction_evidence`，其结果不能直接作为 `--profile` 输入。
 
 ## Interpret rules
 
 - R000: report missing, unsupported, failed, stale, or malformed evidence.
-- R100: report local device throughput, IOPS, await, queue, or sustained pressure.
-- R200: confirm NFS performance only from current-window mountstats RTT/execute/retransmission or equivalent timeout/throughput evidence; identify other network filesystems and hand off.
+- R100: report local device throughput, IOPS, await, queue, or sustained pressure. High positive or negative conclusions require an actual evidence window of at least 10 seconds and at least three samples covering util plus the supporting queue/await field; shorter or sparse evidence is capped at medium. A two-endpoint `diskstats` delta remains medium even when its window is longer than 10 seconds.
+- R200: confirm NFS performance only from current-window mountstats RTT/execute/retransmission or major-timeout evidence; low throughput alone is context, not pressure proof. Identify other network filesystems and hand off.
 - R300: confirm remote metadata pressure from NFS metadata operation latency; treat small IO as a candidate signal only.
-- R400: require same-device mapping, data-relevant paths, active PID IO, R100 device pressure, and overlapping windows for high confidence.
-- R500: require confirmed Host IO plus device-side idle. Cap at medium without verified overlap or a controlled experiment.
+- R400: require same-device mapping, data-relevant paths, each PID active in more than half of at least three pidstat reports, R100 device pressure, `observation_count>=2` for each PID's mapping, stable `boot_id` + PID starttime identity, and a real common interval across those mappings, R100, pidstat, and process-map evidence for high confidence. Mount and backing-device identity must be freshly observed at both process-map endpoints.
+- R500: require target-scoped confirmed Host IO plus device-side idle. With the current JSON-only profile contract, cap at medium; do not infer a high-confidence conduction chain from self-declared overlap or experiment evidence.
 
 ## Safety
 
@@ -174,11 +213,16 @@ python3 -m unittest discover -s evals -p 'test_*.py' -v
 Run read-only validation on a Linux/Ascend host while the representative workload is active:
 
 ```bash
-python3 evals/run_live_eval.py --duration 10 --path /data --require-npu
-python3 evals/run_live_eval.py --duration 30 --path /data --profile npu_metrics.json --require-npu-runtime
+python3 evals/run_live_eval.py --duration 10 --pid <workload_pid> --path /data --require-npu
 ```
 
-Interpret `SKIP` as an unmet prerequisite, not a pass. Require `--require-npu-runtime`, `--require-nfs`, or `--require-r500-high` in an environment intended to certify those capabilities.
+For R500 investigation, capture the IO Snapshot during the profiled workload and obtain `device_free_percent` with timestamps from an actual profiler timeline/DB view. The current JSON-only profile contract reports this as medium-confidence context; it does not certify an R500 positive-high conclusion until a trusted artifact verifier exists. The `op_summary` diagnostic summarizer cannot create certifying metrics. Validate the paired artifacts without starting a new collection window:
+
+```bash
+python3 evals/run_live_eval.py --snapshot io_snapshot.json --profile npu_metrics.json --require-npu-runtime
+```
+
+Interpret `SKIP` as an unmet prerequisite, not a pass. `--require-nfs` certifies activity only for the NFS mount containing `snapshot.target.path`; unrelated NFS traffic cannot satisfy it. Require `--require-npu-runtime` or `--require-nfs` only in an environment intended to certify those capabilities.
 
 For an explicitly idle, isolated test node only, an operator may run the bounded real-device smoke below. It is synthetic NPU load and must never be launched automatically by this Skill or against a production workload:
 
@@ -194,7 +238,7 @@ python3 evals/run_npu_runtime_eval.py --elements 1048576 --iterations 100 --repo
 - `references/failure_handbook.md`: root-cause evidence and remediation mapping.
 - `scripts/collect_io_snapshot.py`: read-only collector.
 - `scripts/analyze_io_snapshot.py`: deterministic analyzer.
-- `scripts/summarize_msprof.py`: conservative `msprof` CSV-to-profile summarizer.
+- `scripts/summarize_msprof.py`: non-certifying `msprof op_summary` diagnostic summarizer.
 - `evals/cases.yaml` and `evals/run_eval.py`: deterministic behavior cases and runner.
 - `evals/run_live_eval.py`: read-only Linux, provider, NPU, NFS, and R500 environment validation.
 - `evals/run_npu_runtime_eval.py`: explicit, bounded ACLNN real-device smoke; operator-invoked only.

@@ -50,7 +50,7 @@ description: 技能的详细描述，说明它做什么，以及什么时候使�
 | `ascend-communication-analysis` | 分析通信侧瓶颈 | `查这个集群里通信耗时和慢卡` |
 | `ascend-schedule-analysis` | 分析调度、下发和 Host Bound 问题 | `看看下发延迟和调度卡在哪里` |
 | `mindstudio-cpu-binding` | 分析 CPU 绑核、NUMA 和 Host 侧瓶颈 | `排查这个多卡任务的 CPU binding 问题` |
-| `mindstudio-storage-analysis` | 分析存储、Host IO 和 NFS 瓶颈及其 NPU 空泡传导 | `排查 DataLoader 变慢是否由存储 IO 导致` |
+| `mindstudio-storage-analysis` | 分析存储、Host IO 和 NFS 瓶颈及其对 NPU 空闲的影响 | `排查 DataLoader 变慢是否由存储 IO 导致` |
 
 ### 2.2 精度 Skills
 

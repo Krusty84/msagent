@@ -24,6 +24,11 @@
           "util_max": 99,
           "util_p95": 99,
           "sample_count": 5,
+          "util_sample_count": 5,
+          "avgqu_sz_sample_count": 5,
+          "r_await_ms_sample_count": 5,
+          "avgqu_sz_with_util_sample_count": 5,
+          "r_await_ms_with_util_sample_count": 5,
           "device_type": "ssd"
         }
       },
@@ -34,7 +39,17 @@
     "device_free_percent": 25,
     "profile_window": {
       "start": "2026-07-01T12:00:05+08:00",
-      "end": "2026-07-01T12:00:20+08:00"
+      "end": "2026-07-01T12:00:20+08:00",
+      "scope": "matched_workload_device_timeline"
+    },
+    "provenance": {
+      "device_free_percent": {
+        "source_type": "profiler_timeline",
+        "artifact_id": "fixture://rc-r500-invalid-conduction/device-0-timeline",
+        "device_id": 0,
+        "metric": "device_free_percent",
+        "extraction_method": "device_idle_interval_ratio"
+      }
     },
     "conduction_evidence": {"io_npu_overlap_observed": "true"}
   }

@@ -74,7 +74,7 @@ trigger_cases:
 # 二、四类根因 rubric（需配合 fixture Snapshot）
 # ============================================================================
 # rootcause_cases / missing_data_cases 中带 fixture_file 的案例由 evals/run_eval.py
-# 自动执行（加载 evals/fixtures/<id>.json → analyzer → 按 expected_rule/expected_confidence 判定）。
+# 自动执行（加载 evals/fixtures/<id>.json → analyzer → 按 rule/confidence/severity 判定）。
 # cases.yaml 是唯一用例清单；runner 校验每个机器案例都有 fixture + 期望，避免漂移。
 # trigger_cases / safety_cases 需 msAgent 运行时 + 固定模型温度，属人工流程。
 rootcause_cases:
@@ -82,10 +82,11 @@ rootcause_cases:
   # --- R100 存储读取瓶颈 ---
   - id: rc-r100-bandwidth
     fixture_file: "fixtures/rc-r100-bandwidth.json"
-    description: "iostat 显示某 NVMe rMB/s 接近规格带宽、util 99%、r_await 抬升"
+    description: "iostat 显示某 NVMe rkB/s 接近规格带宽、util 99%、r_await 抬升"
     fixture: "iostat.parsed.disks: nvme0n1 util=99, r_await=30, avgqu_sz=4"
     expected_rule: R100
     expected_confidence: high
+    expected_severity: high
     must_conclude: ["bandwidth"]
     must_evidence: ["iostat.disks"]
     forbidden: ["无证据就下结论"]
@@ -104,6 +105,7 @@ rootcause_cases:
     fixture: "iostat 饱和；started_at/ended_at 缺失"
     expected_rule: R100
     expected_confidence: medium
+    expected_severity: medium
     maximum_confidence: medium
     must_conclude: ["时间窗", "封顶 medium"]
     must_evidence: ["iostat.disks"]
@@ -116,6 +118,7 @@ rootcause_cases:
     fixture: "mounts 含 nfs4；nfs.mount_metrics 为空"
     expected_rule: R200
     expected_confidence: low
+    expected_severity: medium
     must_conclude: ["不能确认网络存储瓶颈"]
     must_evidence: ["mounts.fstype"]
     forbidden: ["性能异常"]
@@ -126,6 +129,7 @@ rootcause_cases:
     fixture: "mounts 含 nfs4；nfs.mount_metrics 含 avg_rtt_ms=60, retrans=0（窗内差值）"
     expected_rule: R200
     expected_confidence: high
+    expected_severity: high
     must_conclude: ["性能异常"]
     must_evidence: ["nfs.mount_metrics"]
 
@@ -135,6 +139,7 @@ rootcause_cases:
     fixture: "nfs provider 与 snapshot.window 零重叠；metric 自称 delta 且 RTT 高"
     expected_rule: R200
     expected_confidence: medium
+    expected_severity: medium
     maximum_confidence: medium
     must_conclude: ["性能异常"]
     must_validation_errors: ["nfs: invalid or outside"]
@@ -146,16 +151,19 @@ rootcause_cases:
     description: "高 IOPS、低平均 IO 大小 + inode 使用高"
     fixture: "iostat r_per_s=30000, rkB/s=60000；df iuse_percent=92%"
     expected_rule: R300
+    expected_confidence: medium
+    expected_severity: medium
     must_conclude: ["小文件特征"]
     must_evidence: ["iostat.disks"]
 
   # --- R400 IO 干扰 ---
   - id: rc-r400-conflict
     fixture_file: "fixtures/rc-r400-conflict.json"
-    description: "多 PID 映射到同一设备 + 数据路径 + 活跃IO + 设备饱和（P1-5：四项全需）"
-    fixture: "process_io_map.mappings: pid100,101→/dev/sda（/data/*.bin）；pidstat 活跃；iostat sda 饱和"
+    description: "多 PID 同窗映射到同一设备 + 数据路径 + 活跃 IO + 设备饱和"
+    fixture: "process_io_map 两次观测 pid100,101→/dev/sda（/data/*.bin）且映射区间重叠；pidstat 活跃；iostat sda 饱和"
     expected_rule: R400
     expected_confidence: high
+    expected_severity: high
     must_conclude: ["争抢数据 IO"]
     must_evidence: ["process_io_map.mappings", "pidstat.processes", "R100.saturated_devices"]
 
@@ -178,21 +186,23 @@ rootcause_cases:
   # --- R500 NPU 传导（mte2 反例是重点）---
   - id: rc-r500-mte2-handoff
     fixture_file: "fixtures/rc-r500-mte2-handoff.json"
-    description: "高 mte2_ratio + Host IO 正常（P1 关键反例）"
+    description: "高 mte2_ratio + Host IO 正常（计算侧搬运反例）"
     fixture: "无饱和设备；profile.mte2_ratio=0.6"
     expected_rule: R500
-    expected_confidence: high
+    expected_confidence: medium
+    expected_severity: info
     must_conclude: ["转交 ascend-computation-analysis"]
     must_evidence: ["handoff=ascend-computation-analysis"]
     forbidden: ["命中存储瓶颈", "把 mte2 当传导证据"]
 
   - id: rc-r500-downgrade
     fixture_file: "fixtures/rc-r500-downgrade.json"
-    description: "Host IO 异常但 NPU 不空泡"
+    description: "Host IO 异常但同窗 NPU 无明显空泡"
     fixture: "iostat 饱和；profile.device_free_percent=2"
     expected_rule: R500
-    expected_confidence: high
-    must_conclude: ["计算掩盖"]
+    expected_confidence: medium
+    expected_severity: info
+    must_conclude: ["未观察到明显设备空泡", "不能据此确认 R500 传导链未成立"]
 
   - id: rc-r500-conduction
     fixture_file: "fixtures/rc-r500-conduction.json"
@@ -200,16 +210,17 @@ rootcause_cases:
     fixture: "iostat 饱和；profile.device_free_percent=25；无 conduction_evidence"
     expected_rule: R500
     expected_confidence: medium
+    expected_severity: medium
     must_conclude: ["可能传导"]
 
   - id: rc-r500-conduction-confirmed
     fixture_file: "fixtures/rc-r500-conduction-confirmed.json"
-    description: "Host IO 异常 + device Free 高 + 已验证的同窗重叠证据"
+    description: "Host IO 异常 + device Free 高 + 自声明同窗证据，仍需可审计的 timeline 样本"
     fixture: "iostat 饱和；profile.device_free_percent=25；io_npu_overlap_observed=true"
     expected_rule: R500
-    expected_confidence: high
-    must_conclude: ["传导链成立"]
-    must_evidence: ["profile.conduction_evidence"]
+    expected_confidence: medium
+    expected_severity: medium
+    must_conclude: ["可能传导"]
 
   - id: rc-r500-invalid-conduction
     fixture_file: "fixtures/rc-r500-invalid-conduction.json"
@@ -217,6 +228,7 @@ rootcause_cases:
     fixture: "io_npu_overlap_observed='true'（非法类型）"
     expected_rule: R500
     expected_confidence: medium
+    expected_severity: medium
     maximum_confidence: medium
     must_conclude: ["可能传导"]
     forbidden: ["传导链成立"]
@@ -228,6 +240,7 @@ rootcause_cases:
     fixture: "target=/nfs/train；mapping 仅含 /cache/unrelated.bin→sda 且伪造 path_relevant=true"
     expected_rule: R100
     expected_confidence: high
+    expected_severity: high
     must_not_have_positive_rules: [R500]
     rubric: "无关 FD 不得覆盖显式 target.path，也不得把全机 R100 拼成 R500 high"
 
@@ -314,19 +327,19 @@ environment_cases:
     command: "source /path/to/cann/set_env.sh && python3 evals/run_npu_runtime_eval.py --elements 1048576 --iterations 100 --report /tmp/npu-runtime.json"
     safety: "不得由 Skill 自动触发；不得对忙碌的生产 workload 运行"
 
-  - id: ascend-msprof-profile-summary
-    validation: "从同一 workload 的 msprof 导出生成带 profile_window 的保守 profile 摘要"
-    command: "python3 scripts/summarize_msprof.py /path/to/msprof-output --device 0 -o npu_metrics.json"
-    safety: "摘要器不推断 io_npu_overlap_observed"
+  - id: ascend-msprof-op-summary-diagnostics
+    validation: "从 msprof op_summary 生成不参与 R500 认证的 task-gap/MTE2 诊断 proxy"
+    command: "python3 scripts/summarize_msprof.py /path/to/msprof-output --device 0 -o op_summary_diagnostics.json"
+    safety: "op_summary 不是设备 timeline；输出不含 device_free_percent、profile_window 或 conduction_evidence，不能作为 --profile 输入"
 
   - id: npu-e2e-local-disk
-    prerequisite: "同一 workload 窗口的 IO Snapshot 与带 profile_window 的 Ascend profiler 摘要 JSON"
-    command: "python3 evals/run_live_eval.py --profile npu_metrics.json --require-npu-runtime --require-r500-high"
+    prerequisite: "带显式 target.pid/path 及强身份设备/NFS 映射的同一 workload IO Snapshot、从真实 profiler timeline/DB 构建且带认证 scope/metric provenance 并与目标 Host evidence_interval 重叠的 profile JSON，以及人工核验后写入的 conduction_evidence"
+    command: "python3 evals/run_live_eval.py --snapshot io_snapshot.json --profile npu_metrics.json --require-npu-runtime"
 
   - id: npu-e2e-nfs-latency
     prerequisite: "测试 NFS 挂载上正在运行的代表性 workload"
     command: "python3 evals/run_live_eval.py --path /nfs/dataset --require-nfs"
 
   - id: npu-e2e-multi-rank
-    prerequisite: "分别对 1/2/4/8 rank workload 运行 live eval，并保留每轮吞吐和 profiler 证据"
-    command: "python3 evals/run_live_eval.py --path /data --profile npu_metrics.json --require-r500-high"
+    prerequisite: "分别对 1/2/4/8 rank workload 用显式 target.pid/path 运行 live eval，保留每轮吞吐和 profiler 证据，并人工核验 conduction_evidence"
+    command: "python3 evals/run_live_eval.py --snapshot io_snapshot.json --profile npu_metrics.json"

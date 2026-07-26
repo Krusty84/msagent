@@ -2,13 +2,23 @@
 
 本文件定义 `mindstudio-storage-analysis` 的只读采集命令清单、IO Snapshot 数据契约和提问协议。所有命令默认**只读**，不修改系统状态。
 
+## 目录
+
+- [1. 只读采集命令清单](#1-只读采集命令清单)
+- [2. IO Snapshot 数据契约](#2-io-snapshot-数据契约)
+- [3. 提问协议](#3-提问协议)
+- [4. 降级采集](#4-降级采集)
+
+本文中的相对路径命令均以 Skill 根目录（包含 `SKILL.md` 的目录）为当前目录；先从已加载 Skill 的位置解析并进入该目录，不要假设当前位于 msagent 仓库根目录。
+
 ## 1. 只读采集命令清单
 
 ### 1.1 设备级 IO 统计（核心）
 
 ```bash
-# 推荐格式：扩展字段 + 每秒采样 + 重复 N 次。涵盖 %util / await / r/s w/s / rMB/s / aqu-sz。
-iostat -xz 1 10
+# 推荐格式：扩展字段 + kB/s 单位 + 每秒采样 + 重复 N 次。
+# 涵盖 %util / await / r/s w/s / rkB/s wkB/s / aqu-sz。
+iostat -xz -k 1 10
 
 # 备选：/proc/diskstats 两次采样差值（sysstat 未安装时）
 # 字段顺序见内核文档 Documentation/iostats.txt
@@ -17,13 +27,13 @@ sleep 10
 cat /proc/diskstats
 ```
 
-关键字段解读（`iostat -xz`）：
+关键字段解读（`iostat -xz -k`）：
 
 | 字段 | 含义 | 关注点 |
 |---|---|---|
 | `%util` | 设备忙时间占比 | 长期接近 100% 提示饱和（NVMe 含义弱化，需结合队列） |
 | `r/s w/s` | 每秒读 / 写完成数 | IOPS 维度，小文件场景关注 |
-| `rMB/s wMB/s` | 每秒读 / 写吞吐 | 带宽维度，大文件场景关注 |
+| `rkB/s wkB/s` | 每秒读 / 写吞吐（KiB/s） | 带宽维度，大文件场景关注 |
 | `r_await w_await` | 平均读 / 写等待时间（ms） | SSD < 5ms，HDD < 20ms，网络存储更高 |
 | `aqu-sz` | 平均队列长度 | 持续高说明请求积压 |
 | `rrqm/s wrqm/s` | 合并的读 / 写请求 | 高说明 IO 可被合并（大块友好） |
@@ -31,8 +41,10 @@ cat /proc/diskstats
 ### 1.2 进程级 IO 统计
 
 ```bash
-# 每个进程 / 线程的读写字节与延迟，用于定位是哪些进程在压盘
+# 默认按进程统计读写速率和累计 block IO delay 指示量，用于定位哪些进程在压盘
+# iodelay 不是单次 IO latency；需要线程维度时显式加 -t
 pidstat -d 1 10
+pidstat -d -t 1 10
 
 # 配合找出训练主进程及其 DataLoader worker
 ps -eo pid,ppid,comm,args | grep -E 'python|torch|dataloader'
@@ -79,6 +91,8 @@ lctl get_param osc.*.stats
 lfs df -h
 ```
 
+使用 `--pid --path` 时，collector 会在 `/proc/<pid>/root` 对目标路径做符号链接解析；Snapshot 的 `target.path` 记录该进程视角下的规范路径，若发生解析则以 `target.requested_path` 保留原始命令行路径。
+
 ### 1.5 内存 / page cache
 
 ```bash
@@ -110,37 +124,84 @@ IO 传导链证据来自 Ascend profiler 数据，不在此采集：
   "profile_window": {
     "start": "2026-07-20T10:00:05+00:00",
     "end": "2026-07-20T10:00:20+00:00",
-    "scope": "between_first_and_last_exported_device_task"
+    "scope": "matched_workload_device_timeline"
+  },
+  "provenance": {
+    "device_free_percent": {
+      "source_type": "profiler_timeline",
+      "artifact_id": "PROF_20260720/device_0_timeline",
+      "device_id": 0,
+      "metric": "device_free_percent",
+      "extraction_method": "device_idle_interval_ratio"
+    },
+    "mte2_ratio": {
+      "source_type": "profiler_database",
+      "artifact_id": "PROF_20260720/ascend_pytorch_profiler.db",
+      "device_id": 0,
+      "metric": "mte2_ratio",
+      "extraction_method": "workload_total_cycle_ratio"
+    }
   },
   "conduction_evidence": {
     "io_npu_overlap_observed": true,
-    "controlled_experiment": {"result": "improved"}
+    "overlap_provenance": {
+      "artifact_id": "PROF_20260720/device_0_timeline",
+      "device_id": 0,
+      "metric": "device_free_percent",
+      "extraction_method": "timeline_interval_overlap",
+      "host_rule_ids": ["R100"],
+      "host_evidence_interval": {
+        "start": "2026-07-20T10:00:00+00:00",
+        "end": "2026-07-20T10:00:20+00:00"
+      },
+      "device_evidence_interval": {
+        "start": "2026-07-20T10:00:05+00:00",
+        "end": "2026-07-20T10:00:20+00:00"
+      },
+      "target": {"pid": 42, "path": "/data/train"}
+    }
   }
 }
 ```
 
-- `device_free_percent` 和 `mte2_ratio` 必须来自目标 workload 的 profiler 窗口，范围分别为 0~100 和 0~1。
+- `device_free_percent` 必须来自 profiler timeline/DB 的真实设备空闲或 wait 视图，不能由 `op_summary` task 间隙推导；范围为 0~100。
+- `mte2_ratio` 只作计算侧上下文，范围为 0~1；不同算子的 cycle ratio 没有兼容 total-cycle 分母时不得按 Task Duration 聚合。
 - 动态 profile 必须带 `profile_window.start/end`，并且至少 50% 的 profiler 窗口与 Snapshot.window 重叠；缺失或陈旧时 analyzer 丢弃动态指标。
-- `io_npu_overlap_observed` 只接受 JSON boolean；仅在 Host IO 异常区间与 device Free/DataLoader wait/step idle 存在足量重叠时设为 `true`。
-- `controlled_experiment.result` 只接受 `improved`、`no_change`、`worse`、`inconclusive`；仅 `improved` 可把 R500 升级为 high。
+- high 正向、high 负向或存储优先级降级要求 scope 精确为 `matched_workload_device_timeline`，并为对应指标提供完整 `provenance`。允许的 source/extraction 组合见下方 live 验收说明；缺失、任意 scope 或 `op_summary` task-gap 来源只作非认证候选。
+- 当前 JSON-only profile 契约下 R500 正向结论封顶 medium。未来接入可信 profiler artifact verifier 时，R500 high 还必须要求显式 `Snapshot.target.pid/path` 已由重复观测、进程身份和 sysfs 设备映射（或当前 NFS 挂载身份）认证；profile window 与至少一个目标作用域内已确认 R100~R400 finding 的 `evidence_interval` 至少重叠 1 秒，且公共交集不少于较短区间的 50%。空 target 和顶层 Snapshot.window 都不能替代该绑定。
+- 负向跨链结论同样必须同窗：不同窗的 MTE2/device Free 不能用于高置信转交；
+  低 device Free 只能说明未观察到明显设备空泡，不能推断设备忙的具体原因。
+- `io_npu_overlap_observed=true` 必须同时提供 `overlap_provenance`。其中 artifact/device 必须匹配 `provenance.device_free_percent`，`host_rule_ids` 必须对应目标作用域内已确认 Host finding，Host/device interval 必须分别包含在 finding/profile 的证据窗内并有足量交集，非空 `target` 必须与 Snapshot 的 `{pid,path}` 精确一致。裸 boolean 或 `{pid:null,path:null}` 不认证。
+- 对照实验必须提供 `experiment_id`、`device_id`、`metric=device_free_percent`、`action`、精确 `target`，以及各含 artifact、window、device-Free 值的 `baseline`/`treatment`。baseline 必须匹配当前 profile，两个 artifact 不同且窗口不重叠；`result=improved` 还要求 treatment 的 device Free 更低。`result` 只接受 `improved`、`no_change`、`worse`、`inconclusive`，裸 result 不认证。
 - `npu-smi` 空闲采样只能验证设备可见性/健康，不能替代 profiler 时间线或对照实验。
 - 无法核验的字段应省略，不得按现象猜测。
 
-如果输入是 Ascend `msprof` 导出目录，可用仓库内的保守摘要器：
+如果输入是 Ascend `msprof` 导出目录，可用摘要器查看 `op_summary` 诊断 proxy：
 
 ```bash
-python3 scripts/summarize_msprof.py /path/to/msprof-output --device 0 -o npu_metrics.json
+python3 scripts/summarize_msprof.py /path/to/msprof-output --device 0 -o op_summary_diagnostics.json
 ```
 
-它只读取唯一的 `op_summary_*.csv`，对重叠 task 做区间合并，并记录 profile window/provenance；它不会推断 `io_npu_overlap_observed`。
+它只读取唯一的 `op_summary_*.csv`，输出明确标注的 task-gap 和逐列 MTE2 ratio 统计 proxy。`op_summary` 没有设备 timeline，Task Duration 也包含调度、执行和响应阶段；因此摘要器不会生成 `device_free_percent`、全局 `mte2_ratio`、`profile_window` 或 `conduction_evidence`，输出不能直接传给 analyzer 的 `--profile`。
 
-用 live runner 检查环境和 profile 接入：
+用 live runner 检查实时环境：
 
 ```bash
-python3 evals/run_live_eval.py --duration 30 --path /data --profile npu_metrics.json
+python3 evals/run_live_eval.py --duration 30 --pid <workload_pid> --path /data --require-npu-runtime
 ```
 
-`run_live_eval.py --profile` 要求 profile 带 `profile_window.start/end`，并会在实际分析时拒绝与新 Snapshot 不同窗的动态指标。`--require-npu-runtime` 会执行真实 ACL init、设备枚举和 finalize，但不会制造负载。
+R500 验收必须使用同一 workload 时间窗内配对的 Snapshot 和真实 profiler timeline/DB 指标。应在 profiler 覆盖目标 workload 时并行运行 collector，再复用该 Snapshot；不要为已完成的 profile 启动一个新的采集窗口：
+
+```bash
+# 终端 A：在 profiler 覆盖目标 workload 的同时采集
+python3 scripts/collect_io_snapshot.py --duration 30 --pid 42 --path /data/train --out io_snapshot.json
+# 可选：生成不参与 R500 认证的 op_summary 诊断 proxy
+python3 scripts/summarize_msprof.py /path/to/msprof-output --device 0 -o op_summary_diagnostics.json
+# 从 timeline/DB 取得真实 device Free、认证 scope、metric provenance 及其窗口，生成 npu_metrics.json；核验实际 Host evidence_interval 同窗传导或受控实验后执行
+python3 evals/run_live_eval.py --snapshot io_snapshot.json --profile npu_metrics.json --require-npu-runtime
+```
+
+第一条 collector 命令必须用 `--pid`/`--path` 显式绑定目标，并与被 profile 的 workload 时间窗口重叠。`summarize_msprof.py` 只产生非认证 proxy。`npu_metrics.json` 必须由真实 timeline/DB 指标构建，带 `profile_window.scope="matched_workload_device_timeline"`，并为每个动态指标记录 `provenance.{metric}`：`source_type`、可审计的 `artifact_id`、非负整数 `device_id`、精确 `metric` 和允许的 `extraction_method`。当前 JSON-only contract 只能给出 medium R500 候选；可信 artifact verifier 尚未实现时不得要求 R500 high。`op_summary`、导出 task gap、缺失或任意 scope 均不参与认证。`run_live_eval.py --profile` 要求 profile 带 `profile_window.start/end`，analyzer 会拒绝与所给 Snapshot 不同窗的动态指标。`--require-npu-runtime` 会执行真实 ACL init、设备枚举和 finalize，但不会制造负载。`--require-nfs` 只认证包含 `snapshot.target.path` 的 NFS 挂载及其同窗 delta，不接受其他挂载的活动。
 
 在明确空闲的隔离测试节点上，若需要验证 ACLNN 编译、HBM 拷贝、算子执行和结果校验，可由操作者显式运行有界 smoke；这不是 collector 的自动步骤：
 
@@ -151,7 +212,7 @@ python3 evals/run_npu_runtime_eval.py --elements 1048576 --iterations 100 --repo
 
 ## 2. IO Snapshot 数据契约
 
-`scripts/collect_io_snapshot.py` 输出的 JSON 结构。机器可校验的契约定义在 `scripts/collect_io_snapshot.py` 的 pydantic 模型（`IoSnapshot` / `ProviderResult` / `DiskStat` 等），字段说明见 `references/io_snapshot_schema.md`。
+`scripts/collect_io_snapshot.py` 输出的 JSON 结构采用两层校验：collector 的 pydantic 模型校验顶层 envelope 和自身生成的结构；analyzer 的 `validate_analysis_request()` / `normalize_and_validate()` 校验 provider `parsed` 深层容器、计数关系、时间窗、证据绑定和 profile 语义。完整字段说明见 `references/io_snapshot_schema.md`。
 
 **核心变更（相对旧版）**：每个数据源用统一的 `ProviderResult` 表达，**不再用布尔 `available`**：
 
@@ -165,7 +226,11 @@ python3 evals/run_npu_runtime_eval.py --elements 1048576 --iterations 100 --repo
   "stderr": "",
   "error": "",
   "raw": "<iostat -xk 原始文本>",
-  "parsed": { "...结构化字段..." }
+  "parsed": {
+    "disks": {
+      "sda": {"util_percent": 87.2, "sample_count": 3}
+    }
+  }
 }
 ```
 
@@ -175,57 +240,20 @@ python3 evals/run_npu_runtime_eval.py --elements 1048576 --iterations 100 --repo
 - `permission_denied`：无权限
 - `command_failed`：命令存在但非零退出
 - `parse_failed`：解析失败
-- `empty`：命令成功但无输出
+- `empty`：命令成功但无输出，或格式已识别但没有受支持的真实采集对象
 - `unsupported`：平台/工具不支持（如无 NFS 挂载、无 Lustre 工具）
 
-顶层结构示例：
+完整顶层模型和各 provider 的 `parsed` 字段只在 `references/io_snapshot_schema.md` 维护，避免两份契约漂移。采集时重点检查以下运行语义：
 
-```json
-{
-  "schema_version": "1.4",
-  "collected_at": "2026-06-30T16:53:25+08:00",
-  "host": {"hostname": "node-01", "kernel": "Linux 5.10.0", "platform": "..."},
-  "duration_seconds": 30,
-  "window": {"start": "2026-06-30T16:53:25+08:00", "end": "2026-06-30T16:53:56+08:00"},
-  "target": {"pid": 12345, "path": "/data"},
-  "mounts": [
-    {"device": "192.168.1.10:/data", "mount_point": "/data", "fstype": "nfs4", "options": "rw,relatime,vers=4.1,..."}
-  ],
-  "mounts_provider": {"source": "mounts", "status": "ok", "started_at": "...", "ended_at": "...",
-                      "parsed": [{"device": "192.168.1.10:/data", "mount_point": "/data", "fstype": "nfs4", "options": "rw,..."}]},
-  "diskstats_sample": [
-    {"sample_index": 0, "timestamp": 1234567.89, "disks": {"nvme0n1": {"reads_completed": 123456, "sectors_read": 9876543, "...": "..."}}},
-    {"sample_index": 1, "timestamp": 1234598.89, "disks": {"nvme0n1": {"reads_completed": 123556, "...": "..."}}}
-  ],
-  "block_devices": {"source": "block_devices", "status": "ok", "started_at": "...", "ended_at": "..."},
-  "iostat": {"source": "iostat", "status": "ok", "exit_code": 0,
-             "parsed": {"disks": {"nvme0n1": {"r_per_s": 185000, "rkB_per_s": 740000, "avgqu_sz": 2.5, "await": 1.2, "util_percent": 99.5}}, "reports": 2},
-             "raw": "..."},
-  "pidstat": {"source": "pidstat", "status": "ok",
-              "parsed": {"processes": [{"pid": 12345, "uid": "1000", "kbr_per_s": 0, "kbw_per_s": 0, "command": "python"}]}},
-  "process_io_map": {"source": "process_io_map", "status": "ok",
-                     "parsed": {"mappings": [{"pid": 12345, "path": "/data/x", "mount_point": "/data", "source": "192.168.1.10:/data", "fstype": "nfs4"}], "pid_count": 1}},
-  "memory": {"source": "memory", "status": "ok", "parsed": {"memtotal": 27000000, "memavailable": 20000000, "cached": 5000000}},
-  "df": {"source": "df", "status": "ok",
-         "parsed": {"filesystems": [{"filesystem": "/dev/nvme0n1", "size": "3.5T", "used": "1.2T", "avail": "2.1T", "use_percent": "38%", "mounted_on": "/workspace", "inodes": "234M", "iuse_percent": "5%"}]}},
-  "nfs": {"source": "nfs", "status": "ok",
-          "parsed": {"client_stats_raw": "...", "mount_metrics": [{"mount_point": "/data", "ops": 12345, "rtt": 15, "execute": 20, "retrans": 0}]}},
-  "readahead": {"/dev/nvme0n1": 256},
-  "scheduler": {"/dev/nvme0n1": "none"},
-  "availability": {"missing": [], "partial": [], "errors": []}
-}
-```
-
-字段说明：
-
-- `diskstats_sample`：两次采样，用于差值计算速率；`sectors_read` 单位为 512B sector。**只含主设备，不含分区**（已用 `/sys/class/block/<name>/partition` 过滤）。
-- `mounts_provider`：记录挂载列表的采集状态与时间来源。只有 `ok`/`empty` 且 `started_at`/`ended_at` 落在顶层窗口内，才能判断是否存在网络挂载；缺失、无权限、命令失败或陈旧列表必须降级为证据不足。
-- `iostat.parsed.disks`：结构化的 per-device 指标（`r_per_s`、`rkB_per_s`、`avgqu_sz`、`await`、`util_percent` 等）；全窗口聚合（-y 后保留全部真实区间报告，rate 算术平均、await IO 加权、util 保留 mean/max/p95/sample_count）。
-- `pidstat.parsed.processes`：结构化的 per-process 指标（`pid`、`kbr_per_s`、`kbw_per_s`、`command`）。
-- `process_io_map.parsed.mappings`：PID → path → mount → device 映射（R400 所需，需 `--pid`/`--path` 触发；无则 `status=unsupported`）。
+- `diskstats_sample`：两次采样，用于差值计算速率；`sectors_read` 单位为 512B sector。**只含主设备，不含分区**（已用 `/sys/class/block/<name>/partition` 过滤）。两个 counter 端点不等于 3 个持续指标样本；即使间隔超过 10 秒，R100 正向和负向结论也最高为 medium。
+- `mounts_provider`：记录挂载列表的采集状态与时间来源。只有 `ok`、非空列表，且 `started_at`/`ended_at` 落在顶层窗口内，才能判断是否存在网络挂载。`empty`、缺失、无权限、命令失败或陈旧列表都必须降级为证据不足。
+- `iostat.parsed.disks`：结构化的 per-device 指标（`r_per_s`、`rkB_per_s`、`avgqu_sz`、`await`、`util_percent` 等）；每个设备至少要有一项真实 IO 指标，只有 `sample_count` 或空对象属于 `parse_failed`。全窗口聚合时 rate 算术平均、await 按总 IOPS 加权、util 保留 mean/max/p95；`sample_count` 是设备的有效报告数且不得大于 `parsed.reports`，`*_sample_count` 是字段样本数，`*_with_util_sample_count` 是该字段与 util 的同报告共现数。R100 正向或负向 high 要求至少 10 秒实际证据窗口，且至少 3 个样本同时覆盖 util 与触发判定的 queue/await 字段；缺少共现计数时必须降级，不能用独立计数猜测。
+- `iostat`/`pidstat` 外部命令的 stdout 上限为 8 MiB、stderr 上限为 256 KiB。超限时 collector 终止该命令、将 provider 标记为 `command_failed`，且只保留最多 64 KiB 的诊断，避免长时间采集耗尽内存或写出超大 Snapshot。
+- `pidstat.parsed.processes`：结构化的 per-process 指标（`pid`、`kbr_per_s`、`kbw_per_s`、`command`、`sample_count`、`active_sample_count`）；后者统计读或写 IO 速率至少 100 KiB/s 的真实报告数。`reports`、`sample_count`、`active_sample_count` 必须是 JSON 整数，并满足 `0 <= active_sample_count <= sample_count <= reports`；`reports` 必须为正。文本输出的 `Average:` 汇总块不计入 `reports`。R400 high 要求每个候选 PID 至少 3 个活跃样本且覆盖超过半数 `reports`，避免把错时的短暂 IO 拼成同时争抢。
+- `process_io_map.parsed.mappings`：PID → path → mount → device 映射（R400 所需，必须提供 `--pid`；`--path` 用于收窄数据范围，单独提供 path 会返回 `status=unsupported` 而不会扫描全机 `/proc`）。进程树最多 256 项；后代项记录直接 `parent_pid`，analyzer 只将能沿父链回到显式目标 PID 的强身份后代纳入目标作用域；无父链的旧快照后代不参与归因。每个 PID 最多保留 256 条 FD 映射。指定 `--path` 时，collector 在最多 1 秒的 FD 扫描预算内优先保留数据相关路径；达到数量或时间预算都会在 `partial` 标明覆盖不完整，不能据此作 high。`observation_samples` 必须是正 JSON 整数；每条 mapping 的 `observation_count` 必须是非负 JSON 整数且不得超过它。每条 mapping 的 `boot_id`/`pid_starttime_ticks` 用于排除数值 PID 复用，`first_seen`/`last_seen`/`observation_count` 和顶层 `observation_samples` 用于证明多个 PID 确实同时映射该设备；同一进程和映射未实际观测两次或映射区间错开时不得 high。mountinfo 和 sysfs backing topology 只在单次观测内复用，窗口末次观测会重新读取；FD 提供 `mnt_id` 时必须精确匹配，不得退化为路径前缀认证。
 - `df.parsed.filesystems`：空间与 inode 合并（`df -hP` + `df -iP`）。
-- `nfs.parsed.mount_metrics`：`/proc/self/mountstats` per-op 统计的**窗内两次采样差值**（`windowing`/`avg_rtt_ms`/`avg_execute_ms`/`retrans`/`ops`，R200 性能证据）；无 NFS 挂载时 `status=unsupported`。单次累计值不反映本次 workload，差值才可作性能证据。
-- `readahead`：单位为 512B sector（`blockdev --getra` 原始输出）。
+- `nfs.parsed.mount_metrics`：`/proc/self/mountstats` per-op 统计的**窗内两次采样差值**（`windowing`/`avg_rtt_ms`/`avg_execute_ms`/`retrans`/`ops`，R200 性能证据）；无 NFS 挂载时 `status=unsupported`。单次累计值不反映本次 workload，差值才可作性能证据。`major_timeouts` 只有在同一 delta 中与非负整数 `ops`/`transmissions`/`retrans` 一致且不大于 `ops` 时才可确认瓶颈。
+- `readahead`：单位为 512B sector（`blockdev --getra` 原始输出）。readahead 与 scheduler 为窗口外的静态上下文采集，所有块设备共用最多 5 秒探测预算；超时或未处理设备写入 `availability.partial`，不延长动态证据窗口。
 - `availability`：`missing`（数据源缺失）/`partial`（unsupported/empty）/`errors`（permission/command_failed/parse_failed）三类汇总。
 - `schema_version`：major.minor。minor 只增可选字段；analyzer 遇到未知 major 拒绝确定性分析。
 

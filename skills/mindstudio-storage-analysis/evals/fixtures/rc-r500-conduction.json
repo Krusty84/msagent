@@ -5,6 +5,32 @@
     "start": "2026-07-01T12:00:00+08:00",
     "end": "2026-07-01T12:00:30+08:00"
   },
+  "target": {"pid": 42, "path": "/data/train"},
+  "process_io_map": {
+    "source": "process_io_map",
+    "status": "ok",
+    "started_at": "2026-07-01T12:00:00+08:00",
+    "ended_at": "2026-07-01T12:00:30+08:00",
+    "parsed": {
+      "observation_samples": 2,
+      "pid_count": 1,
+      "pid_tree": [{"pid": 42, "role": "root", "boot_id": "11111111-1111-1111-1111-111111111111", "pid_starttime_ticks": 4200}],
+      "mappings": [{
+        "pid": 42,
+        "boot_id": "11111111-1111-1111-1111-111111111111",
+        "pid_starttime_ticks": 4200,
+        "path": "/data/train/shard.bin",
+        "source": "/dev/sda",
+        "fstype": "ext4",
+        "canonical_device": "sda",
+        "backing_devices": [],
+        "device_resolution": "sysfs",
+        "first_seen": "2026-07-01T12:00:00+08:00",
+        "last_seen": "2026-07-01T12:00:30+08:00",
+        "observation_count": 2
+      }]
+    }
+  },
   "mounts": [],
   "mounts_provider": {"source": "mounts", "status": "empty", "started_at": "2026-07-01T12:00:00+08:00", "ended_at": "2026-07-01T12:00:01+08:00", "parsed": []},
   "availability": {"missing": [], "errors": [], "partial": []},
@@ -17,7 +43,10 @@
       "disks": {
         "sda": {"r_per_s": 100, "rkB_per_s": 5000, "r_await_ms": 30,
                 "avgqu_sz": 4, "util_percent": 99, "util_max": 99, "util_p95": 99,
-                "sample_count": 5, "device_type": "ssd"}
+                "sample_count": 5, "util_sample_count": 5,
+                "avgqu_sz_sample_count": 5, "r_await_ms_sample_count": 5,
+                "avgqu_sz_with_util_sample_count": 5,
+                "r_await_ms_with_util_sample_count": 5, "device_type": "ssd"}
       },
       "reports": 5
     }
@@ -26,7 +55,17 @@
     "device_free_percent": 25,
     "profile_window": {
       "start": "2026-07-01T12:00:05+08:00",
-      "end": "2026-07-01T12:00:20+08:00"
+      "end": "2026-07-01T12:00:20+08:00",
+      "scope": "matched_workload_device_timeline"
+    },
+    "provenance": {
+      "device_free_percent": {
+        "source_type": "profiler_timeline",
+        "artifact_id": "fixture://rc-r500-conduction/device-0-timeline",
+        "device_id": 0,
+        "metric": "device_free_percent",
+        "extraction_method": "device_idle_interval_ratio"
+      }
     }
   }
 }

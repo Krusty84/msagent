@@ -6,11 +6,11 @@
 #
 # MindStudio is licensed under Mulan PSL v2.
 # -------------------------------------------------------------------------
-"""mindstudio-storage-analysis 确定性 eval runner（Review P2-1 重构）。
+"""mindstudio-storage-analysis 确定性 eval runner。
 
 **cases.yaml 是唯一用例清单**：本 runner 解析 evals/cases.yaml，对每个
 rootcause/missing 案例校验 fixture/期望并加载对应 JSON fixture，跑 analyzer，
-按 `expected_rule` / `expected_confidence` 自动判定，并校验配置一致性
+按 `expected_rule` / `expected_confidence` / `expected_severity` 自动判定，并校验配置一致性
 （每个机器可执行案例都必须有 fixture + 期望，避免 YAML 与 runner 漂移）。
 
 诚实边界（不伪造）：
@@ -46,6 +46,7 @@ import yaml  # noqa: E402
 import analyze_io_snapshot as a  # noqa: E402
 
 _ORDER = {"none": 0, "low": 1, "medium": 2, "high": 3}
+_SEVERITIES = {"info", "low", "medium", "high"}
 
 
 def _load_cases() -> dict:
@@ -87,7 +88,7 @@ def _resolve_fixture_path(case: dict) -> str:
 
 
 def _check_rubric(case: dict, finding: dict | None, findings: list[dict]) -> list[str]:
-    """执行 must_evidence / handoff_to / must_conclude / forbidden 断言（Review P2-1）。
+    """执行 must_evidence / handoff_to / must_conclude / forbidden 断言。
 
     返回失败原因列表（空表示全过）。结构化字段断言优先于文本匹配。
     """
@@ -96,7 +97,7 @@ def _check_rubric(case: dict, finding: dict | None, findings: list[dict]) -> lis
         finding = {}
 
     # must_evidence：只匹配 evidence_fields（或结构化字段路径/非空），不得用 str(finding)
-    # （Review P2-1：str(finding) 会把 missing_evidence 里的串误当证据通过）。
+    # 不能使用 str(finding)，否则 missing_evidence 中的文本可能让证据断言误通过。
     evs = finding.get("evidence_fields") or []
     for ev in case.get("must_evidence") or []:
         if ev.startswith("handoff="):
@@ -172,7 +173,7 @@ def _check_rubric(case: dict, finding: dict | None, findings: list[dict]) -> lis
 
 
 def evaluate_case(case: dict) -> tuple[bool, str]:
-    """跑单个案例，返回 (pass, detail)。Review P2-1：执行 rubric 断言。"""
+    """跑单个案例并执行 rubric 断言，返回 (pass, detail)。"""
     cid = case["id"]
     fixture_name = _resolve_fixture_path(case)
     if not fixture_name or not os.path.exists(
@@ -185,6 +186,7 @@ def evaluate_case(case: dict) -> tuple[bool, str]:
     profile = doc.pop("_profile", None)
     expected_rule = str(case.get("expected_rule", "")).strip()
     expected_conf = case.get("expected_confidence")
+    expected_severity = case.get("expected_severity")
 
     try:
         res = a.analyze_all(doc, profile)
@@ -200,18 +202,36 @@ def evaluate_case(case: dict) -> tuple[bool, str]:
 
     findings = res["findings"]
     result_rubric_fails: list[str] = []
-    validation_text = " ".join(str(item) for item in res.get("validation_errors", []))
-    for keyword in case.get("must_validation_errors") or []:
+    validation_errors = [str(item) for item in res.get("validation_errors", [])]
+    validation_text = " ".join(validation_errors)
+    required_validation = case.get("must_validation_errors") or []
+    allowed_validation = [
+        *required_validation,
+        *(case.get("allowed_validation_errors") or []),
+    ]
+    for keyword in required_validation:
         if keyword not in validation_text:
             result_rubric_fails.append(f"must_validation_errors 缺失：{keyword}")
-    profile_validation_text = " ".join(
+    for error in validation_errors:
+        if not any(keyword in error for keyword in allowed_validation):
+            result_rubric_fails.append(f"unexpected validation_error：{error}")
+    profile_validation_errors = [
         str(item) for item in res.get("profile_validation_errors", [])
-    )
-    for keyword in case.get("must_profile_validation_errors") or []:
+    ]
+    profile_validation_text = " ".join(profile_validation_errors)
+    required_profile_validation = case.get("must_profile_validation_errors") or []
+    allowed_profile_validation = [
+        *required_profile_validation,
+        *(case.get("allowed_profile_validation_errors") or []),
+    ]
+    for keyword in required_profile_validation:
         if keyword not in profile_validation_text:
             result_rubric_fails.append(
                 f"must_profile_validation_errors 缺失：{keyword}"
             )
+    for error in profile_validation_errors:
+        if not any(keyword in error for keyword in allowed_profile_validation):
+            result_rubric_fails.append(f"unexpected profile_validation_error：{error}")
     if expected_rule in ("", "none", "None"):
         hits = [
             f for f in findings if _is_positive_problem(f) and f["rule_id"] != "R000"
@@ -250,6 +270,11 @@ def evaluate_case(case: dict) -> tuple[bool, str]:
             False,
             f"{expected_rule} confidence={f['confidence']}（期望={expected_conf}）",
         )
+    if expected_severity and f.get("severity") != expected_severity:
+        return (
+            False,
+            f"{expected_rule} severity={f.get('severity')}（期望={expected_severity}）",
+        )
     maximum_conf = case.get("maximum_confidence")
     if maximum_conf and _ORDER.get(f["confidence"], 0) > _ORDER.get(
         str(maximum_conf), 0
@@ -278,7 +303,7 @@ def evaluate_case(case: dict) -> tuple[bool, str]:
 def run(report_path: str | None = None, verbose: bool = True) -> int:
     """运行确定性 eval。
 
-    Review P2-2：默认不写任何文件（避免 pytest 污染源码工作树）。
+    默认不写任何文件，避免 pytest 污染源码工作树。
     仅当显式传入 report_path（CLI）时才写 JSON 报告。
     返回退出码（0=全过，1=有失败/配置错误）。
     """
@@ -313,6 +338,11 @@ def run(report_path: str | None = None, verbose: bool = True) -> int:
             case_errors.append("缺 fixture_file")
         if "expected_rule" not in case:
             case_errors.append("缺 expected_rule")
+        expected_rule = str(case.get("expected_rule", "")).strip().lower()
+        if expected_rule not in {"", "none", "reject"}:
+            expected_severity = case.get("expected_severity")
+            if expected_severity not in _SEVERITIES:
+                case_errors.append("正向 expected_rule 必须声明合法 expected_severity")
         if case_errors:
             detail = "; ".join(case_errors)
             config_errors.extend(f"{cid}: {error}" for error in case_errors)
@@ -351,7 +381,7 @@ def run(report_path: str | None = None, verbose: bool = True) -> int:
         print("=" * 72)
 
     # 仅在显式指定 report_path 时写文件（默认无副作用）。
-    # Review 第六轮 P2-1：显式交付物写入失败必须非零退出 + stderr 诊断（不得吞掉报成功）。
+    # 显式交付物写入失败必须非零退出并输出 stderr 诊断。
     write_failed = False
     if report_path:
         report = {
@@ -449,7 +479,7 @@ def _release_report_lock(lock: str | None) -> None:
 
 class _EvalAsTest(unittest.TestCase):
     def test_all_machine_cases(self):  # noqa: D401
-        # verbose=False 避免污染 pytest 输出；不传 report_path 避免写源码目录（Review P2-2）
+        # verbose=False 避免污染 pytest 输出；不传 report_path 避免写源码目录。
         rc = run(verbose=False)
         self.assertEqual(rc, 0, "确定性 eval 存在失败/配置错误，见上文详情")
 

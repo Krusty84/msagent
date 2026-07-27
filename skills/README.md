@@ -82,6 +82,7 @@ description: 技能的详细描述，说明它做什么，以及什么时候使�
 | `ascendc-operator-performance-optim` | 做 AscendC 算子性能调优 | `分析这个算子并给出优化代码` |
 | `msot-msopprof-operator-profiler` | 做 msprof op 算子分析 | `输出这个算子的瓶颈和优化建议` |
 | `op-mfu-calculator` | 计算算子 MFU | `按这个 shape 和耗时算 MFU` |
+| `op-mfu-profiler` | 采集Profiling并解析算子 MFU | `运行这个程序帮我分析这个算子的 MFU` |
 
 ### 2.5 文档审查 Skills
 

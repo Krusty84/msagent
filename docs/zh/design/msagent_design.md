@@ -704,7 +704,7 @@ tools:
 skills:
   patterns:
     - default:ascend-profiler-db-explorer
-    - "!default:op-mfu-calculator"
+    - "!default:op-mfu-profiler"
 ```
 
 #### 2.3 MCP 配置

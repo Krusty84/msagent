@@ -30,12 +30,12 @@
 
 | 参数 | 规则 |
 |------|------|
-| 调优策略类型 | 用户指定优先；**不在此写死某一算法为全局默认**；由对话、`msmodelslim/skills` 命中的策略 Skill 或项目约定决定。LLM 与 VLM 使用同一调优策略流程，少量 schema 差异由基准 Practice 的 `apiversion` 决定 |
+| 调优策略类型 | 用户指定优先；未指定时由对话、`msmodelslim/skills` 命中的策略 Skill 或项目约定决定，**不设统一默认值**。 |
 | 调优历史记录路径 | 用户指定优先，否则 `{save_path}/tuning_history` 等可审计路径；**新任务**与**续跑**须与用户确认是否清空或沿用 |
 | **权重量化位数**（w_bit） | "8bit"/"int8"→8，"4bit"/"int4"→4；**未提及时常用 8**（与 `auto_config_generation.md` 位数表一致） |
 | **激活量化位数**（a_bit） | 常与 w_bit 一致，除非用户指定；组合见 `auto_config_generation.md` |
 | **是否量化 KV 缓存** | 用户提到则开启；默认 false |
-| **校准数据集** | 用户指定值优先；未指定时，`modelslim_v1` 使用 `mix_calib.jsonl`，`multimodal_vlm_modelslim_v1` 使用 `calibImages`。显式指定的数据集须符合当前模型适配器的格式要求 |
+| **校准数据集** | 用户指定时，须确认其符合当前模型适配器及 `lab_calib` 的格式要求；未指定时，由配置生成 Skill 选择默认值 |
 
 **与必填「量化方案」对齐**：用户已说明 **W8A8**、**W4A8** 等时，上表 **w_bit / a_bit**、KV、动态量化相关推导须与之**一致**，不得用另一套默认悄悄覆盖。
 

@@ -8,8 +8,6 @@
 2. 调用 quant-tuning-quantize skill，传入：`config_path`、`model_path`、`save_path`、`model_type`、`device`、`selected_npu_ids`、`trust_remote_code`
 3. 量化结束后，按下方输出协议回传
 
-NPU 场景的物理卡绑定和 `--device` 写法统一按 `quant-tuning-quantize` skill 执行，本 prompt 不另行定义。
-
 ## 输出协议（强制）
 
 从主 Agent 委派的 `msagent-io` 块读取 `input`；任务完成后按下列格式回传。最终回复须含**有且仅有一个** ` ```msagent-io v1 ` 块；块外最多 3 行摘要。

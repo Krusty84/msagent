@@ -28,7 +28,7 @@
 
 | Skill | 命令 / 脚本 | 功能用途 |
 | --- | --- | --- |
-| `tune-practice-cfg` | `msmodelslim analyze layer ...` | 敏感层分析；VLM 使用当前模型适配器支持的多模态校准数据 |
+| `tune-practice-cfg` | `msmodelslim analyze layer ...` | 敏感层分析 |
 | `tune-practice-cfg` | `scripts/validate_practice_yaml.py` | Practice YAML 校验 |
 | `quant-tuning-quantize` | `msmodelslim quant --config_path ...` | 执行量化 |
 | `quant-tuning-evaluate` | `scripts/run_evaluation.py` | 执行评测 |
@@ -169,11 +169,10 @@
 | `model_type` | string | ✓ | 模型类型名 |
 | `model_path` | string | ✓ | 模型路径 |
 | `save_path` | string | ✓ | 工作目录，Practice YAML 写入此目录 |
-| `base_practice_path` | string\|null | | 与当前 `model_type` 匹配的基准 Practice。存在时须继承其 `apiversion`、`include` 与静态 `exclude`；不存在时由子 Skill 先生成保守基准 Practice |
-| `device` | string | ✓ | 敏感层分析设备类型：`npu` 或 `cpu`，不含设备索引；NPU 物理卡范围以 `selected_npu_ids` 为准 |
-| `selected_npu_ids` | int[] | 条件必填 | NPU 场景必填；所有相关命令必须据此设置 `ASCEND_RT_VISIBLE_DEVICES`。非 NPU 场景填 `[]` |
-| `strategy` | string | ✓ | 搜索算法：`standing_high` 或 `standing_high_with_experience`；LLM 与 VLM 共用同一搜索流程 |
-| `calib_dataset` | string\|null | | 可选覆盖值；为 `null` 时，`modelslim_v1` 默认使用 `mix_calib.jsonl`，`multimodal_vlm_modelslim_v1` 默认使用 `calibImages` |
+| `device` | string | ✓ | NPU 场景默认使用 `npu`；当前任务明确支持并启用多卡时，根据 `selected_npu_ids` 的数量使用从逻辑 0 开始的连续索引，如 `npu:0,1,...` |
+| `selected_npu_ids` | int[] | 条件必填 | NPU 场景的物理卡列表；实际命令必须据此设置 `ASCEND_RT_VISIBLE_DEVICES`。非 NPU 场景填 `[]` |
+| `strategy` | string | ✓ | 搜索算法：`standing_high` 或 `standing_high_with_experience`； |
+| `calib_dataset` | string\|null | | 校准数据集覆盖值；为 `null` 时，由子 Skill 根据基准 Practice 的 `apiversion` 选择默认数据集` |
 | `max_iterations` | int | ✓ | 最大迭代轮次 |
 | `round` | int | ✓ | 当前调优轮次 |
 | `prev_result` | object\|null | | 上轮评测结果，首轮 `null` |
@@ -192,7 +191,6 @@
     "model_type": "",
     "model_path": "",
     "save_path": "",
-    "base_practice_path": null,
     "device": "",
     "selected_npu_ids": [],
     "strategy": "standing_high",
@@ -263,9 +261,9 @@
 | `config_path` | string | ✓ | Practice YAML 路径 |
 | `model_path` | string | ✓ | 原始模型路径 |
 | `save_path` | string | ✓ | 量化产物目录，如 `.../round_N/quantized` |
-| `model_type` | string | ✓ | 模型类型名，用于 `msmodelslim quant --model_type` |
-| `device` | string | ✓ | NPU 默认使用 `npu`；仅 `modelslim_v1` 多卡分布式量化使用 `npu:0,1,...` |
-| `selected_npu_ids` | int[] | 条件必填 | NPU 场景必填；量化命令必须据此设置 `ASCEND_RT_VISIBLE_DEVICES`。非 NPU 场景填 `[]` |
+| `model_type` | string | ✓ | msModelSlim 注册的模型适配器名称，用于 `msmodelslim quant --model_type` |
+| `device` | string | ✓ | NPU 场景默认使用 `npu`；当前任务明确支持并启用多卡时，根据 `selected_npu_ids` 的数量使用从逻辑 0 开始的连续索引，如 `npu:0,1,...` |
+| `selected_npu_ids` | int[] | 条件必填 | NPU 场景的物理卡列表；实际命令必须据此设置 `ASCEND_RT_VISIBLE_DEVICES`。非 NPU 场景填 `[]` |
 | `trust_remote_code` | bool | | 默认 `true` |
 | `round` | int | | 建议填写当前轮次 |
 

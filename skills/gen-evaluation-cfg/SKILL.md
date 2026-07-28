@@ -100,6 +100,7 @@ inference_engine:
 | `demand.expectations[].target` | float | 必须 > 0 |
 | `demand.expectations[].tolerance` | float | 必须 ≥ 0 |
 | `evaluation.type` | string | 必须为 `aisbench` |
+| `evaluation.aisbench.request_rate` | float | 每秒发送的请求数，必须大于 `0`；< 0.001 为不限速发送，默认设为 `0.0001` |
 | `evaluation.datasets` | dict | 必须非空 |
 | `evaluation.datasets.*.config_name` | string | AISBench 注册名（查找方法见 [how_to_find_aisbench_config_name.md](references/how_to_find_aisbench_config_name.md)） |
 | `evaluation.host` | string | 与 `inference_engine.host` 保持一致 |
@@ -116,9 +117,9 @@ VLM 测评仍然生成同一类 `service_oriented + aisbench + vllm-ascend` YAML
 | 路径 | 类型 | 说明 |
 |------|------|------|
 | `evaluation.aisbench.max_out_len` | int | VLM 客观问答通常答案较短，可按数据集要求调小，减少无效生成时间；不得小于任务正确答案所需长度 |
-| `evaluation.aisbench.batch_size` | int | AISBench 中表示请求最大并发数。对于样本量大、输出较短的 VLM 测评集，推荐从 `64` 开始以提高吞吐；若出现服务过载、超时、限流或显存不足，再逐级降低 |
-| `inference_engine.args.max-model-len` | int | 需要覆盖文本 token + 图像 token 后的总长度；不能直接沿用 LLM 的较小上下文配置。 |
-| `inference_engine.args.max-num-batched-tokens` | int | 需与 max-model-len 和显存容量匹配；VLM 图像 token 会显著增加 token 占用。 |
+| `evaluation.aisbench.batch_size` | int | AISBench 中表示请求最大并发数。对于样本量大、输出较短的测评集，推荐从 `64` 开始以提高吞吐 |
+| `inference_engine.args.max-model-len` | int | 需要覆盖文本 token + 图像 token 后的总长度；并满足当前数据集和模型要求 |
+| `inference_engine.args.max-num-batched-tokens` | int | 需与 max-model-len 和显存容量匹配；VLM 图像 token 会显著增加 token 占用 |
 
 ### 文件检查步骤（直接检查即可，无需写检查脚本）
 
@@ -126,8 +127,7 @@ VLM 测评仍然生成同一类 `service_oriented + aisbench + vllm-ascend` YAML
 2. 确保生成的 YAML 文件语法正确，可以被 YAML 解析器成功解析
 3. 如果你在测浮点模型精度基线，则 `demand.expectations[].target` 和 `demand.expectations[].tolerance` **必须**都设置为 100 进行占位。
 4. 确保测评配置一致性，你应确保测评浮点权重和量化权重的配置的通用参数一致，尤其是 `evaluation.aisbench`、`inference_engine.args.max-model-len`**必须**保持一致。在不一致的情况下，你应该修改当前生成的配置文件。例如先前生成了浮点的测评配置且已经测评过了，则你应该修改当前生成的量化测评配置。
-5. 对 VLM 配置，额外检查 `config_name` 是否为图片文本任务注册名，图片输入方式是否与服务能力一致。
-6. 对 VLM 配置，确认 `batch_size` 表示请求并发而不是模型张量 batch；推荐值 `64` 必须与服务并发能力匹配，出现过载、超时、限流或显存不足时降低。
+5. 对 VLM 配置，额外检查 `config_name` 是否与数据集模态匹配，图片输入方式是否与推理服务能力一致。
 
 ## 执行约束
 

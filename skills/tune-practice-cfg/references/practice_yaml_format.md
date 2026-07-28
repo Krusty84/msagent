@@ -153,32 +153,19 @@ spec:
 
 ## VLM 专属字段
 
-- `spec.runner`：当前 VLM 服务支持 `layer_wise` 和 `model_wise`，默认使用 `layer_wise`。
-- `spec.default_text`：字符串，默认值为 `"Describe this image in detail."`，不能是空字符串。
-- `spec.dataset`：必填字符串，下文详细说明。
-- `spec.process[].include`：默认使用 `["*"]`。
-- `spec.process[type=linear_quant].exclude`：由 `protected_exclude` 与 `tuning_exclude` 合并生成。`protected_exclude` 继承匹配模型的基准 Practice，用于永久保护视觉、投影、路由或其他不应参与自动调优的模块；`tuning_exclude` 才由敏感层搜索增减。
+- `spec.default_text`：默认值为 `"Describe this image in detail."`。
+- `spec.dataset`：VLM 校准数据集，默认使用 `calibImages`。
+- `spec.process[].include`：继承基准 Practice 中对应处理器的配置；自动调优过程中不得扩大其作用范围。
+- `spec.process[type=linear_quant].exclude`：由 `protected_exclude` 与 `tuning_exclude` 合并生成。`protected_exclude` 包含基准 Practice 的静态 `exclude`，以及为保护视觉编码器、多模态投影层等非调优模块而增加的固定排除项；`tuning_exclude` 由敏感层搜索增减。
 
 ### 静态排除与调优排除
 
 1. 优先选择与当前 `model_type` 和量化方案匹配的已验证 Practice，并原样继承其中的静态 `exclude`。
 2. 静态排除项记录为 `protected_exclude`，自动调优过程中不得删除。
 3. 每轮最终写入 YAML 的 `exclude` 为 `protected_exclude ∪ tuning_exclude`，并保持稳定顺序、去除重复项。
-4. 若没有匹配的 VLM Practice，采用保守基线：默认不量化名称命中 `visual`、`vision`、`vit`、`merger`、`projector`、`multi_modal_projector` 等视觉或投影模块的层；生成前应检查通配模式实际命中的模块并回显。后续只有在获得该模型的验证结果后，才能缩小这组保护范围。
-
-### dataset 使用方式
-
-优先使用指向 `index.json` 或 `index.jsonl`，或指向只包含一个 index 文件的目录。配置示例：`dataset: "/path/to/calib_dir"`、`dataset: "/path/to/index.jsonl"`，或能解析到上述路径的短名称。
-
-索引中的媒体类型必须与当前模型适配器匹配：图像语言模型使用图像；音频或视频只有在对应适配器明确支持时才能使用。文本字段缺失时是否允许由 `default_text` 补齐，也以适配器和 loader 约束为准。
-
-纯图像目录仍可用于图像语言模型；目录内仅包含 `.jpg`、`.jpeg`、`.png` 时，所有图像共享使用 `default_text`。
-
-图像目录中附带一个任意文件名的非 index `.json` / `.jsonl` 属于兼容用法。新配置优先使用标准 `index.json` / `index.jsonl`，避免依赖旧格式的隐式路由。
+4. 若没有匹配的已验证 VLM Practice，应根据实际模型结构生成保守基线，确保视觉编码器和多模态投影层不在目标量化处理器的作用范围内；无法确认量化范围时立即返回，不得仅根据通用模块名称推断。
 
 ## VLM 完整示例（W8A8 默认配置）
-
-以下配置仅作为 Qwen3-VL-4B W8A8 的已验证示例，不是所有 VLM 的通用模板。生成配置时必须先按 `model_type` 选择匹配的已验证 Practice；没有匹配项时，不得直接复制 Qwen3-VL 专用的 `down_proj`、`linear_fc2` 层名，而应使用上文的保守视觉/投影保护规则。
 
 ```yaml
 apiversion: multimodal_vlm_modelslim_v1
@@ -223,8 +210,8 @@ spec:
       include:
         - "*"
       exclude:
-        - "model.language_model.layers.*.mlp.down_proj"
-        - "*linear_fc2"
+        - "*vit*"
+        - "*visual*"
         - "*merger*"
   save:
     - type: "ascendv1_saver"

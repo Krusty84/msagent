@@ -91,9 +91,11 @@ quant-tuning-quantize (tool)
 | `model_path` | string | ✅ | 原始模型路径 |
 | `save_path` | string | ✅ | 量化产物保存路径；须体现调优轮次，推荐 `{workdir}/round_{N}/quantized`（如 `round_1/quantized`） |
 | `model_type` | string | ✅ | 模型类型名 |
-| `device` | string | ✅ | 设备参数；NPU 默认统一使用 `npu`，仅 `modelslim_v1` 多卡分布式量化使用 `npu:0,1,...` |
+| `device` | string | ✅ | 设备参数 |
 | `selected_npu_ids` | int[] | 条件必填 | NPU 场景的物理卡白名单；实际命令必须据此设置 `ASCEND_RT_VISIBLE_DEVICES` |
 | `trust_remote_code` | bool | ❌ | 是否信任远程代码 |
+
+`device`：默认使用 `npu`。仅当 `config_path` 的 `apiversion` 为 `modelslim_v1` 且本轮明确执行多卡分布式量化时，才将参数写成从零开始、与可见卡数量一致的逻辑索引，例如两张可见卡使用 `npu:0,1`。
 
 ---
 
@@ -113,7 +115,7 @@ ASCEND_RT_VISIBLE_DEVICES="${SELECTED_NPU_IDS_CSV}" msmodelslim quant \
 
 **成功判定**：exit code 为 0，且 `${SAVE_PATH}` 下出现量化权重产物。
 
-执行前将 `selected_npu_ids` 按原顺序连接为逗号分隔的 `SELECTED_NPU_IDS_CSV`，通过 `ASCEND_RT_VISIBLE_DEVICES` 绑定物理卡。NPU 量化默认使用 `--device npu`。仅当 `config_path` 的 `apiversion` 为 `modelslim_v1` 且本轮明确执行多卡分布式量化时，才将参数写成从零开始、与可见卡数量一致的逻辑索引，例如两张可见卡使用 `--device npu:0,1`。`multimodal_vlm_modelslim_v1` 不支持设备索引，始终使用 `--device npu`。
+执行前将 `selected_npu_ids` 按原顺序连接为逗号分隔的 `SELECTED_NPU_IDS_CSV`，通过 `ASCEND_RT_VISIBLE_DEVICES` 绑定物理卡。
 
 ### 错误处理
 

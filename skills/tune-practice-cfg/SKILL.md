@@ -47,25 +47,18 @@ metadata:
 | `model_type` | `str` | 模型类型名 |
 | `model_path` | `str` | 模型路径 |
 | `save_path` | `str` | 工作目录，Practice YAML 写入此目录下 |
-| `base_practice_path` | `str \| None` | 与当前模型匹配的基准 Practice；存在时继承其 schema、处理器范围与静态排除项 |
-| `device` | `str` | 分析设备类型：`"npu"` 或 `"cpu"`；分析命令不接受设备索引 |
-| `selected_npu_ids` | `list[int]` | NPU 场景的物理卡白名单；所有相关命令必须据此设置 `ASCEND_RT_VISIBLE_DEVICES` |
-| `strategy` | `str` | 搜索算法：`"standing_high"` 或 `"standing_high_with_experience"`；LLM 与 VLM 共用 |
-| `calib_dataset` | `str \| None` | 可选覆盖值；为 `None` 时，`modelslim_v1` 默认使用 `mix_calib.jsonl`，`multimodal_vlm_modelslim_v1` 默认使用 `calibImages` |
+| `device` | `str` | 分析设备，默认为 `"npu"` |
+| `selected_npu_ids` | `list[int]` | NPU 场景的物理卡列表；敏感层分析命令必须据此设置 `ASCEND_RT_VISIBLE_DEVICES` |
+| `strategy` | `str` | 调优策略：`"standing_high"` 或 `"standing_high_with_experience"` |
+| `calib_dataset` | `str \| None` | 可选的校准数据集覆盖值；默认值见 [敏感层分析](references/sensitive_layer_analysis.md) |
 | `max_iterations` | `int` | 最大迭代轮次，由用户指定 |
+| `round` | `int` | 当前调优轮次，用于生成本轮 Practice 文件名 |
 | `prev_result` | `dict \| None` | 上轮评测结果（EvaluateResult 结构），首轮为 `None` |
 | `anchor_practice` | `str \| None` | 当前已知最优且达标的 Practice YAML 路径（锚点） |
 
 **产出**：`practice_path`（合法的 Practice YAML 文件路径）
 
 **工具**：`msmodelslim analyze`（敏感层分析）、`scripts/validate_practice_yaml.py`（校验）
-
-**统一流程不变量**：
-
-- LLM 与 VLM 使用同一套敏感层分析、二分搜索、量化和评测闭环。
-- schema 与少量专属字段由基准 Practice 的 `apiversion` 决定；生成结果必须继承该值。
-- 基准 Practice 中已有的 `include` 和静态 `exclude` 是量化能力边界。调优只能在该边界内增加或减少“调优排除项”，不得删除静态排除项。
-- 没有匹配的基准 Practice 时，先生成并保存保守基准 Practice，再进行敏感层分析；不得在分析完成后才决定量化范围。
 
 ## 执行步骤
 
@@ -74,25 +67,25 @@ metadata:
 ```
         ┌─────────────────────┐
         │ ① 读取/生成基准      │  ← 确定 schema 与静态量化边界
-        │    Practice          │
+        │    Practice         │
         └──────────┬──────────┘
                    ▼
         ┌─────────────────────┐
-        │   ② 敏感层分析       │  ← 调优任务开始前执行一次
-        │ (msmodelslim analyze)│
+        │   ② 敏感层分析       │  ← 敏感层分析只执行一次
+        │(msmodelslim analyze)│
         └──────────┬──────────┘
                    │ 敏感度得分文件（各轮复用）
                    ▼
      (>>> 每轮循环 <<<)  ◄──────────────────┐
                    ▼                        │
         ┌─────────────────────────────────┐  │
-         │ ③ 根据策略选择回退层              │  │
+        │ ③ 根据策略选择回退层              │  │
         │   + 生成/修改 Practice YAML      │  │
         └──────────┬──────────────────────┘  │
                    │                          │
                    ▼                          │
         ┌─────────────────────┐              │
-         │ ④ 校验 Practice YAML │              │
+        │ ④ 校验 Practice YAML │              │
         │ (validate_practice_  │              │
         │  yaml)               │              │
         └──────────┬──────────┘              │
@@ -107,26 +100,32 @@ metadata:
 
 ### ① 读取或生成基准 Practice
 
-优先读取与当前 `model_type` 和量化方案匹配的 `base_practice_path`。若未提供，则先生成 `{save_path}/practice_base.yaml`。从基准 Practice 提取：
+优先从 Practice 仓库中查找与当前 `model_type` 匹配的已验证 Practice；存在多个候选时，返回候选项，由主 Agent 确认后继续。未找到时，按照 [量化配置格式](references/practice_yaml_format.md) 生成保守基准 Practice，保存为 `{save_path}/practice_base.yaml`。基准 Practice 必须在敏感层分析前确定并通过校验。
+
+从基准 Practice 中继承：
 
 - `apiversion`
 - 目标量化处理器的 `include`
-- 因模型能力、视觉/投影结构或已验证经验而存在的静态 `exclude`
-- VLM 的 `spec.default_text`
+- 因模型能力或已验证经验而存在的静态 `exclude`
+- 当前 schema 要求的其他静态字段，如 VLM 的 `spec.default_text`。
 
-将静态排除项记录为 `protected_exclude`。它在全部调优轮次中保持不变；每轮最终 `exclude = protected_exclude ∪ tuning_exclude`。
+将静态排除项记录为 `protected_exclude`，在全部调优轮次中保持不变。每轮最终写入的 `exclude` 为 `protected_exclude ∪ tuning_exclude`；调优只能增减 `tuning_exclude`，不得删除静态排除项。
 
 ### ② 敏感层分析
 
-通过 `execute` 调用 **msmodelslim CLI** 获取当前模型各 Decoder Block 的量化敏感度得分（score 越高越敏感）。**每个调优任务调用一次**，后续各轮复用该得分结果。当前服务支持 `mse_layer_wise` 和 `mse_model_wise`，默认使用 `mse_layer_wise`。
+按照[敏感层分析](references/sensitive_layer_analysis.md) 调用 `msmodelslim analyze layer`，获取各 Decoder Block 的量化敏感度得分。每个调优任务只执行一次，结果写入 `{save_path}/analysis_result.yaml`，供后续各轮复用。
 
-若当前调优任务的 `{save_path}/analysis_result.yaml` 已存在，先按 [敏感层分析](references/sensitive_layer_analysis.md) 校验结果结构；校验通过后跳过本步骤并复用，校验失败则重新分析并覆盖旧结果。
+复用已有 `analysis_result.yaml` 前，必须按敏感层分析文档验证其结构；校验通过时跳过分析，校验失败时重新执行并覆盖旧结果。
 
-分析命令、参数构造、日志保存、成功判定和结果转换统一按 [敏感层分析](references/sensitive_layer_analysis.md) 执行；该 reference 是这些细节的唯一来源。分析数据集必须与当前生成 Practice 的 `spec.dataset` 一致，分析候选范围不得越过基准 Practice 定义的量化能力边界。
+敏感层分析必须遵守基准 Practice 确定的量化边界：
 
-仅当分析能力不可用或分析超时，且已确认模型、数据集和参数本身合法时，才可用经验规则占位，并在结果中记录 `source: heuristic` 与具体原因。数据集、模型加载、schema 或参数错误必须立即失败返回，不得用经验规则掩盖。
+- 使用与后续 Practice `spec.dataset` 一致的校准数据；
+- 根据目标量化处理器的 `include` 确定分析范围；
+- 不得将静态 `exclude` 中的模块作为可调回退项。
 
-> 完整命令、参数说明、metrics 选项与分析结果结构见 [敏感层分析](references/sensitive_layer_analysis.md)。
+分析命令、设备绑定、指标选择、日志保存、成功判定及结果转换均以该文档为准，不在此重复定义。
+
+仅当分析能力不可用或分析超时，且已确认模型、数据集和参数本身合法时，才可用经验规则占位。数据集、模型加载、schema 或参数错误必须立即失败返回，不得用经验规则掩盖。
 
 ---
 
@@ -165,7 +164,7 @@ metadata:
 - 确认瓶颈后再考虑更强或组合策略
 - **二分阶段抑制组合固定，只动回退刻度**；摸高阶段才允许切换抑制
 
-> LLM 与 VLM 共用由 `strategy` 决定的搜索算法，schema 差异由基准 Practice 的 `apiversion` 承载。`"standing_high"` 详见 [standing_high 策略](references/strategy_standing_high.md)；`"standing_high_with_experience"` 详见 [standing_high_with_experience 策略](references/strategy_standing_high_with_experience.md)。
+> 调优策略由入参 `strategy` 决定。`"standing_high"` 详见 [standing_high 策略](references/strategy_standing_high.md)；`"standing_high_with_experience"` 详见 [standing_high_with_experience 策略](references/strategy_standing_high_with_experience.md)。
 
 **始终保留锚点**：掉精度时可回滚到上一已知达标配置。
 

@@ -56,6 +56,10 @@
 |----------|------|
 | 模型、离群值抑制策略候选、量化配置模板 | 多轮 Practice YAML |
 
-## VLM 复用说明
+## 适用范围与配置边界
 
-LLM 与 VLM 完全复用本策略的二分搜索和摸高算法。每轮 Practice 继承基准 Practice 的 `apiversion`、静态字段和 `protected_exclude`；调优只改变 `tuning_exclude` 等策略字段。具体 YAML 字段、校准数据和 include/exclude 规则见 [量化配置格式](practice_yaml_format.md) 与 [敏感层分析](sensitive_layer_analysis.md)。
+本策略不依赖模型模态；所有受支持的模型共用上述二分搜索和摸高算法，具体配置结构由基准 Practice 决定。
+
+每轮 Practice 必须继承基准 Practice 的 `apiversion`、`include`、静态 `exclude` 及其他 schema 专属字段。策略只能调整 `tuning_exclude` 和离群值抑制等调优字段，最终写入的 `exclude` 为静态排除项与 `tuning_exclude` 的并集。
+
+具体 YAML 字段和量化边界见 [量化配置格式](practice_yaml_format.md)，敏感层排序规则见 [敏感层分析](sensitive_layer_analysis.md)。

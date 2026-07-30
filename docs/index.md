@@ -26,12 +26,15 @@ zh/agent_guide/Operator
 :maxdepth: 2
 :caption: 用户指南
 
-zh/user_guide/faq
-zh/user_guide/configuration-and-extension
-zh/user_guide/document-ux-review
-zh/user_guide/context-compaction-guide
-zh/user_guide/retry-middleware-guide
 zh/user_guide/agent-tool-skill-filter-rules
+zh/user_guide/configuration-and-extension
+zh/user_guide/context-compaction-guide
+zh/user_guide/document-ux-review
+zh/user_guide/faq
+zh/user_guide/integration-guide
+zh/user_guide/loop-task-guide
+zh/user_guide/retry-middleware-guide
+zh/user_guide/usemap
 ```
 
 ```{toctree}

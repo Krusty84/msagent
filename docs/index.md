@@ -26,6 +26,7 @@ zh/agent_guide/Operator
 :maxdepth: 2
 :caption: 用户指南
 
+zh/user_guide/usemap
 zh/user_guide/faq
 zh/user_guide/configuration-and-extension
 zh/user_guide/document-ux-review

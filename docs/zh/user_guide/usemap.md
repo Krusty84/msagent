@@ -13,6 +13,7 @@
 | `/tools` | 查看当前可用工具。 |
 | `/skills` | 浏览当前可用 Skills。 |
 | `/mcp` | 管理 MCP 服务启用状态。 |
+| `/loop` | 创建、查看或取消当前会话的定时任务。 |
 | `/remember <content>` | 保存长期记忆，例如用户偏好、项目背景或后续会话需要持续参考的事实。 |
 | `/showmemory` | 查看当前项目已保存的长期记忆。 |
 | `/offload` | 压缩并卸载较早的会话消息。 |
@@ -60,6 +61,7 @@
 | 主题 | 说明 | 文档 |
 |---|---|---|
 | 配置与扩展 | 本地配置目录、模型 Provider、MCP 配置、Skills 扩展与加载顺序 | [配置与扩展](configuration-and-extension.md) |
+| 定时任务 | 在交互式会话中创建、查看和取消一次性或循环任务 | [定时任务使用说明](loop-task-guide.md) |
 | 上下文压缩 | 长会话的上下文压缩与卸载机制（`/offload` 等）配置与行为 | [上下文压缩使用指南](context-compaction-guide.md) |
 | 重试与超时 | 模型调用的 Retry Middleware 重试、退避与超时配置 | [Retry Middleware 使用指南](retry-middleware-guide.md) |
 | 能力边界 | Agent / Tool / Skill 的过滤与匹配规则 | [Agent / Tool / Skill 过滤规则](agent-tool-skill-filter-rules.md) |

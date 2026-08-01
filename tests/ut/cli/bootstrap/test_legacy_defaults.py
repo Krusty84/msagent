@@ -118,7 +118,7 @@ def test_initializer_resolves_default_skill_search_order(tmp_path: Path) -> None
 def test_skill_factory_default_skills_dir_prefers_repo_root_skills() -> None:
     default_skills_dir = SkillFactory.get_default_skills_dir()
 
-    assert default_skills_dir == Path(__file__).resolve().parents[1] / "skills"
+    assert default_skills_dir == Path(__file__).resolve().parents[4] / "skills"
     assert default_skills_dir.name == "skills"
 
 

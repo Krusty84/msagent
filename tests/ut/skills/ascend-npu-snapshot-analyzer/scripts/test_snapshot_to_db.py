@@ -9,7 +9,7 @@ import sys
 import tempfile
 import unittest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "skills", "ascend-npu-snapshot-analyzer", "scripts"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "..", "skills", "ascend-npu-snapshot-analyzer", "scripts"))
 
 from snapshot_to_db import (
     _stack_hash,

@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 
 from msagent.configs import LLMConfig
@@ -143,7 +144,7 @@ def test_llm_factory_disables_responses_api_for_openai_compatible_endpoint(
     assert captured["kwargs"]["stream_usage"] is True
 
 
-def test_llm_factory_normalizes_deepseek_base_url_without_v1(
+def test_llm_factory_preserves_deepseek_base_url_without_v1(
     monkeypatch,
 ) -> None:
     captured: dict[str, object] = {}
@@ -168,7 +169,7 @@ def test_llm_factory_normalizes_deepseek_base_url_without_v1(
 
     LLMFactory().create(config)
 
-    assert captured["kwargs"]["base_url"] == "https://api.deepseek.com/v1"
+    assert captured["kwargs"]["base_url"] == "https://api.deepseek.com"
     assert captured["kwargs"]["use_responses_api"] is False
 
 
@@ -225,8 +226,12 @@ def test_llm_factory_uses_environment_trust_for_custom_openai_endpoint_by_defaul
     LLMFactory().create(config)
 
     kwargs = captured["kwargs"]
-    assert "http_client" not in kwargs
-    assert "http_async_client" not in kwargs
+    http_client = kwargs["http_client"]
+    http_async_client = kwargs["http_async_client"]
+    assert http_client._trust_env is True
+    assert http_async_client._trust_env is True
+    http_client.close()
+    asyncio.run(http_async_client.aclose())
 
 
 def test_llm_factory_respects_explicit_trust_env_for_custom_endpoint(
@@ -256,8 +261,12 @@ def test_llm_factory_respects_explicit_trust_env_for_custom_endpoint(
     LLMFactory().create(config)
 
     kwargs = captured["kwargs"]
-    assert "http_client" not in kwargs
-    assert "http_async_client" not in kwargs
+    http_client = kwargs["http_client"]
+    http_async_client = kwargs["http_async_client"]
+    assert http_client._trust_env is True
+    assert http_async_client._trust_env is True
+    http_client.close()
+    asyncio.run(http_async_client.aclose())
 
 
 def test_llm_factory_respects_explicit_trust_env_false_for_custom_endpoint(
@@ -292,8 +301,6 @@ def test_llm_factory_respects_explicit_trust_env_false_for_custom_endpoint(
     assert http_client._trust_env is False
     assert http_async_client._trust_env is False
     http_client.close()
-    import asyncio
-
     asyncio.run(http_async_client.aclose())
 
 

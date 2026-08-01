@@ -21,6 +21,7 @@ from __future__ import annotations
 import tomllib
 from pathlib import Path
 
+from packaging.version import Version
 import yaml
 
 from msagent.core.constants import (
@@ -34,7 +35,7 @@ from msagent.core.constants import (
 from msagent.utils.version import get_version
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_CONFIG_ROOT = PROJECT_ROOT / "resources" / "configs" / "default"
 
 
@@ -67,14 +68,14 @@ def _resolve_default_config_version(version: str, project_version: str) -> str:
 
 
 def test_runtime_version_uses_project_version() -> None:
-    project_version = _project_version()
+    project_version = str(Version(_project_version()))
 
     assert APP_VERSION == project_version
     assert get_version() == project_version
 
 
 def test_config_version_constants_match_project_version() -> None:
-    project_version = _project_version()
+    project_version = str(Version(_project_version()))
 
     assert AGENT_CONFIG_VERSION == project_version
     assert LLM_CONFIG_VERSION == project_version

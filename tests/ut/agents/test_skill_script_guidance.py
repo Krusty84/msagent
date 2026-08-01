@@ -39,7 +39,7 @@ def test_skill_discovers_scripts(tmp_path: Path) -> None:
     assert skill.get_script_relative_paths() == ["scripts/run_demo.py"]
 
 
-def test_build_skills_text_contains_script_workflow(tmp_path: Path) -> None:
+def test_agent_factory_builds_allowed_skill_paths(tmp_path: Path) -> None:
     skill_dir = tmp_path / "skills" / "analysis" / "demo-skill"
     scripts_dir = skill_dir / "scripts"
     scripts_dir.mkdir(parents=True)
@@ -53,8 +53,6 @@ def test_build_skills_text_contains_script_workflow(tmp_path: Path) -> None:
         path=skill_dir / "SKILL.md",
     )
 
-    text = AgentFactory._build_skills_text([skill], use_catalog=False)
+    allowed_paths = AgentFactory._build_allowed_skill_paths([skill])
 
-    assert "Always call `get_skill(name, category)`" in text
-    assert "prefer running those scripts" in text
-    assert "`scripts/run_demo.py`" in text
+    assert allowed_paths == {skill.path.as_posix()}

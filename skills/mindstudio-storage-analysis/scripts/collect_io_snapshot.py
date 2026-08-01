@@ -997,7 +997,31 @@ def _aggregate_iostat_samples(
         out["await"] = round(aggregate_await, 4)
         out["await_sample_count"] = len(await_samples)
 
-    util = sorted(_col("util_percent"))
+    util_samples = [sample for sample in samples if "util_percent" in sample]
+    valid_util_samples = [
+        sample
+        for sample in util_samples
+        if 0 <= float(sample["util_percent"]) <= 100.5
+    ]
+    invalid_util_count = len(util_samples) - len(valid_util_samples)
+    if (
+        invalid_util_count
+        and valid_util_samples
+        and invalid_util_count / len(util_samples) <= 0.01
+    ):
+        # Long sysstat windows can contain an isolated impossible %util sample
+        # while all surrounding reports are valid. Do not let <=1% bad samples
+        # invalidate every device; preserve the count for evidence review.
+        accepted_util_samples = valid_util_samples
+        out["util_invalid_sample_count"] = invalid_util_count
+    else:
+        accepted_util_samples = util_samples
+    util = sorted(float(sample["util_percent"]) for sample in accepted_util_samples)
+    # sysstat can report a small rounding overshoot while a device is fully
+    # busy (for example 100.10%). Clamp only that narrow range; larger invalid
+    # values remain visible for the analyzer's strict validation.
+    if util and util[0] >= 0 and util[-1] <= 100.5:
+        util = [min(value, 100.0) for value in util]
     if util:
         util_mean = _finite_mean(util)
         if util_mean is None:
@@ -1019,7 +1043,7 @@ def _aggregate_iostat_samples(
     for field in ("avgqu_sz", "await", "r_await_ms", "w_await_ms"):
         if field in out and util:
             out[f"{field}_with_util_sample_count"] = sum(
-                1 for sample in samples if "util_percent" in sample and field in sample
+                1 for sample in accepted_util_samples if field in sample
             )
     return out
 

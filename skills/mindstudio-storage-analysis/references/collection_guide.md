@@ -38,7 +38,43 @@ cat /proc/diskstats
 | `aqu-sz` | 平均队列长度 | 持续高说明请求积压 |
 | `rrqm/s wrqm/s` | 合并的读 / 写请求 | 高说明 IO 可被合并（大块友好） |
 
-### 1.2 进程级 IO 统计
+### 1.2 自动发现目标进程和数据路径
+
+当用户没有提供训练 PID 或数据路径时，Agent 先运行目标发现器，不要求用户自己登录服务器查找：
+
+```bash
+# 完全未知：在有界时间内扫描训练进程候选
+python3 scripts/discover_io_target.py -o target_candidates.json
+
+# 用户只记得启动方式或大致绝对路径时，把它作为线索
+python3 scripts/discover_io_target.py --process-pattern torchrun --path-hint /data -o target_candidates.json
+
+# 已知 PID，只补充寻找它访问的数据路径
+python3 scripts/discover_io_target.py --pid 12345 -o target_candidates.json
+```
+
+发现器只读取以下信息：
+
+- `/proc/<pid>/cmdline`：判断它是否像训练/推理进程，并提取 `--data-dir`、`--dataset`、`--checkpoint` 等显式路径参数；常见口令和令牌参数会被脱敏。
+- `/proc/<pid>/cwd`：记录进程工作目录，只作为弱线索。
+- `/proc/<pid>/fd` 的符号链接：查看进程当前打开的文件落在哪些目录，不读取文件内容。
+- `/proc/<pid>/mountinfo`：判断候选路径位于本地盘、NFS 或其他网络文件系统。
+
+它不会读取 `/proc/<pid>/environ`，不会打开数据集、配置或 checkpoint 内容，不递归遍历目录，也不会连接远端存储。默认最多展开 20 个候选进程、每个进程 256 个文件描述符，总时间预算 3 秒；达到限制时输出 `status=partial` 和原因。
+
+输出 `target_candidates.json` 的重点字段：
+
+| 字段 | 含义 | Agent 怎么用 |
+|---|---|---|
+| `process_candidates[]` | 按证据排序的训练进程候选 | 向用户展示 PID、启动命令摘要和入选原因 |
+| `process_candidates[].path_candidates[]` | 每个进程可能使用的数据/checkpoint 路径 | 展示路径、来源、打开文件样例和挂载类型 |
+| `recommendation.pid/path` | 证据足够区分时给出的推荐目标 | 仅在无需确认时传给 collector |
+| `recommendation.requires_confirmation` | 是否仍有相近或证据较弱的候选 | 为 `true` 时必须让用户确认，不能替用户猜 |
+| `recommendation.preview_command` | 已填好目标的只读采集命令 | 确认后执行，生成 `io_snapshot.json` |
+
+无显式值时，进程候选需达到 50 分且领先第二名至少 15 分；路径候选需达到 70 分且领先至少 15 分。启动命令里的数据参数和当前打开的数据文件是强证据，单独的工作目录是弱证据。分数只用于选择采集目标，不是存储异常结论。
+
+### 1.3 进程级 IO 统计
 
 ```bash
 # 默认按进程统计读写速率和累计 block IO delay 指示量，用于定位哪些进程在压盘
@@ -53,7 +89,7 @@ ps -eo pid,ppid,comm,args | grep -E 'python|torch|dataloader'
 cat /proc/<pid>/io
 ```
 
-### 1.3 挂载与文件系统
+### 1.4 挂载与文件系统
 
 ```bash
 # 挂载点与挂载选项（识别 nfs/cifs/lustre/gpfs/fuse 与 noatime 等）
@@ -67,7 +103,7 @@ df -i
 findmnt
 ```
 
-### 1.4 网络存储专用（按需）
+### 1.5 网络存储专用（按需）
 
 ```bash
 # NFS：每挂载点的 RPC 延迟
@@ -93,7 +129,7 @@ lfs df -h
 
 使用 `--pid --path` 时，collector 会在 `/proc/<pid>/root` 对目标路径做符号链接解析；Snapshot 的 `target.path` 记录该进程视角下的规范路径，若发生解析则以 `target.requested_path` 保留原始命令行路径。
 
-### 1.5 内存 / page cache
+### 1.6 内存 / page cache
 
 ```bash
 # Cached / Buffers 大小，判断热数据是否能在内存中缓存
@@ -107,7 +143,7 @@ blockdev --getra /dev/<dev>
 cat /sys/block/<dev>/queue/scheduler
 ```
 
-### 1.6 NPU 侧交叉验证（来自 profiler，非本 skill 采集）
+### 1.7 NPU 侧交叉验证（来自 profiler，非本 skill 采集）
 
 IO 传导链证据来自 Ascend profiler 数据，不在此采集：
 
@@ -265,14 +301,16 @@ python3 evals/run_npu_runtime_eval.py --elements 1048576 --iterations 100 --repo
 - 优先用选择题；选择项使用用户语言，并提供 "不确定，先帮我看" 或 "使用默认值"。
 - 用户已经提供的信息不要重复问。
 - 不询问 `iostat`、`mount`、拓扑等采集器能自取的信息。
+- PID 或数据路径未知时，先运行 `discover_io_target.py`；不要先把服务器定位工作推给用户。
+- `recommendation.requires_confirmation=false` 时可直接使用推荐目标进行只读采集；为 `true` 时只展示最相关的 2～3 个候选和原因，并让用户确认其中一个。
+- `status=partial` 或 `no_candidates` 不是“没有训练任务”的证明。说明扫描限制后，再询问一个最能缩小范围的信息，例如启动命令特征或大致数据目录。
 - 如果用户已有 Snapshot，跳过采集提问，直接进入 Snapshot 质量检查。
 
 ### 3.2 必问项（按顺序）
 
 1. **问题场景**：数据加载慢 / checkpoint 慢 / 多实例互相拖慢 / 网络存储疑似慢。
-2. **数据集形态**：大文件 / 海量小文件 / 混合（决定是带宽瓶颈还是元数据瓶颈）。
-3. **数据存放位置**：本地盘 / NFS/CIFS / Lustre/GPFS / 对象存储挂载。
-4. **是否允许只读采集**：决定走 Snapshot 还是用户手动提供输出。
+2. **目标确认（仅发现结果不明确时）**：从候选 PID 或路径中确认本次要分析的目标。
+3. **数据集形态（自动分析后仍需补充时）**：大文件 / 海量小文件 / 混合（用于解释带宽与元数据线索）。
 
 ### 3.3 补问项（仅在采集后或信息不足时）
 

@@ -1,4 +1,4 @@
 interface:
   display_name: "MindStudio Storage Analysis"
   short_description: "Diagnose Ascend host storage and IO bottlenecks"
-  default_prompt: "Use $mindstudio-storage-analysis to diagnose whether Host IO is causing an Ascend workload slowdown."
+  default_prompt: "Use $mindstudio-storage-analysis to diagnose whether Host IO is causing an Ascend workload slowdown; if the workload PID or data path is unknown, run bounded read-only target discovery first and ask me only when candidates remain ambiguous. Return a concise terminal diagnosis and, when the filesystem is writable, an offline HTML report generated from the original artifacts and Agent summary JSON."

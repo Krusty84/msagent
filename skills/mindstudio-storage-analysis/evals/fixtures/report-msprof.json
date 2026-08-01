@@ -1,0 +1,29 @@
+{
+  "diagnostic_proxies": {
+    "op_summary_task_gap_proxy_percent": 12.5,
+    "task_timestamp_extent_us": {"start": 0, "end": 30000000},
+    "mte2_ratio_by_column": {
+      "MTE2 Ratio": {
+        "sample_count": 120,
+        "min": 0.03,
+        "max": 0.31,
+        "arithmetic_mean": 0.12
+      }
+    }
+  },
+  "provenance": {
+    "source": "msprof op_summary",
+    "source_file": "PROF_20260731/device_0/op_summary.csv",
+    "device_id": 0,
+    "task_count": 120,
+    "merged_exported_task_duration_us": 26250000,
+    "task_timestamp_extent_us": 30000000,
+    "r500_certifying_metrics": [],
+    "conduction_evidence_inferred": false,
+    "limitations": [
+      "op_summary is aggregate data and does not provide a device timeline",
+      "exported task gaps are not device idle time",
+      "per-task cycle ratios are not aggregated into a workload mte2_ratio"
+    ]
+  }
+}

@@ -1,0 +1,1402 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="description" content="MindStudio Storage Analysis Skill 设计框架教学演示">
+<title>MindStudio Storage Analysis Skill｜设计框架</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;600;700;900&display=swap');
+
+/* ===========================================
+   THEME TOKENS
+   Modify these variables to recolor the deck.
+   =========================================== */
+:root {
+  --stage-bg: #030604;
+  --slide-bg: #07100d;
+  --surface: rgba(7, 18, 14, .88);
+  --surface-strong: #0a1712;
+  --ink: #edf4eb;
+  --muted: #91a098;
+  --dim: #617169;
+  --line: #29493c;
+  --grid: #153027;
+  --acid: #d8ff43;
+  --mint: #61e0b2;
+  --orange: #ff7a45;
+  --red: #ff5964;
+  --cyan: #5bd5ff;
+  --ease: cubic-bezier(.16, 1, .3, 1);
+}
+
+/* ===========================================
+   FIXED 16:9 STAGE: MANDATORY BASE STYLES
+   Include this ENTIRE file in every presentation.
+   Slides are authored at 1920×1080 and scaled as a whole.
+   =========================================== */
+
+/* 1. Lock the browser viewport */
+html,
+body {
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    overflow: hidden;
+    background: var(--stage-bg, #000);
+}
+
+/* 2. Full-window deck viewport */
+.deck-viewport {
+    position: fixed;
+    inset: 0;
+    overflow: hidden;
+    background: var(--stage-bg, #000);
+}
+
+/* 3. Fixed 16:9 design canvas.
+   JavaScript sets transform: translate(...) scale(...). */
+.deck-stage {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 1920px;
+    height: 1080px;
+    overflow: hidden;
+    transform-origin: 0 0;
+    background: var(--slide-bg, #fff);
+}
+
+/* 4. Slides stack inside the fixed stage.
+   Content must be laid out at 1920×1080, not reflowed per device. */
+.slide {
+    position: absolute;
+    inset: 0;
+    width: 1920px;
+    height: 1080px;
+    overflow: hidden;
+    display: block;
+    visibility: hidden;
+    opacity: 0;
+    pointer-events: none;
+    background: var(--slide-bg, #fff);
+}
+
+.slide.active,
+.slide.visible {
+    visibility: visible;
+    opacity: 1;
+    pointer-events: auto;
+    z-index: 1;
+}
+
+/* 5. Keep media inside authored slide bounds */
+img,
+video,
+canvas,
+svg {
+    max-width: 100%;
+    max-height: 100%;
+}
+
+/* 6. Presentation chrome stays outside the slide design system */
+.deck-controls {
+    position: fixed;
+    left: 50%;
+    bottom: 22px;
+    transform: translateX(-50%);
+    z-index: 1000;
+}
+
+/* 7. Print one fixed-size slide per page */
+@media print {
+    html,
+    body {
+        width: 1920px;
+        height: auto;
+        overflow: visible;
+        background: #fff;
+    }
+
+    .deck-viewport {
+        position: static;
+        overflow: visible;
+        background: #fff;
+    }
+
+    .deck-stage {
+        position: static;
+        width: auto;
+        height: auto;
+        transform: none !important;
+        background: none;
+    }
+
+    .slide {
+        position: relative;
+        display: block !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+        pointer-events: auto !important;
+        width: 1920px;
+        height: 1080px;
+        break-after: page;
+        page-break-after: always;
+    }
+
+    .slide:last-child {
+        break-after: auto;
+        page-break-after: auto;
+    }
+
+    .deck-controls {
+        display: none !important;
+    }
+}
+
+/* 8. Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.01ms !important;
+        transition-duration: 0.2s !important;
+    }
+}
+
+/* ===========================================
+   GLOBAL SLIDE SURFACE
+   Grid and atmosphere shared by all six slides.
+   =========================================== */
+* { box-sizing: border-box; }
+body { font-family: "Noto Sans SC", sans-serif; color: var(--ink); }
+.slide {
+  background:
+    radial-gradient(circle at 75% 48%, rgba(97, 224, 178, .075), transparent 32%),
+    linear-gradient(120deg, #07100d 0%, #0a1712 72%, #07100d 100%);
+}
+.slide::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  opacity: .38;
+  background-image:
+    linear-gradient(var(--grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+  background-size: 64px 64px;
+}
+.slide::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(90deg, rgba(3, 8, 6, .12), transparent 22%, transparent 78%, rgba(3, 8, 6, .16));
+}
+.slide-inner { position: absolute; inset: 0; z-index: 2; padding: 58px 86px 72px; }
+.topbar {
+  height: 60px;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  font: 500 18px/1 "DM Mono", monospace;
+  color: var(--mint);
+  letter-spacing: .08em;
+}
+.status { display: flex; align-items: center; gap: 12px; }
+.pulse {
+  width: 10px; height: 10px; border-radius: 50%; background: var(--acid);
+  box-shadow: 0 0 20px var(--acid); animation: pulse 1.9s ease-in-out infinite;
+}
+.page-no {
+  position: absolute; right: 86px; bottom: 54px;
+  font: 500 18px "DM Mono"; color: var(--dim); letter-spacing: .12em;
+}
+.section-kicker {
+  font: 500 20px "DM Mono"; color: var(--acid); letter-spacing: .12em;
+  margin-bottom: 18px;
+}
+h1, h2, h3, p { margin: 0; }
+h2 { font-size: 64px; line-height: 1.16; letter-spacing: -.035em; font-weight: 900; }
+.lead { color: var(--muted); font-size: 27px; line-height: 1.65; }
+.mono { font-family: "DM Mono"; }
+.acid { color: var(--acid); }
+.mint { color: var(--mint); }
+.orange { color: var(--orange); }
+.muted { color: var(--muted); }
+.small-note { font-size: 20px; line-height: 1.55; color: var(--muted); }
+.tag {
+  display: inline-flex; align-items: center; gap: 10px; padding: 9px 14px;
+  border: 1px solid var(--line); color: var(--mint);
+  font: 500 16px "DM Mono"; letter-spacing: .05em; background: rgba(4, 10, 8, .72);
+}
+.tag::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+
+/* ===========================================
+   ENTRANCE MOTION
+   Slides reveal in short, legible sequences.
+   =========================================== */
+.reveal {
+  opacity: 0;
+  transform: translateY(24px);
+  transition: opacity .62s var(--ease), transform .62s var(--ease);
+}
+.visible .reveal { opacity: 1; transform: none; }
+.visible .d1 { transition-delay: .08s; }
+.visible .d2 { transition-delay: .16s; }
+.visible .d3 { transition-delay: .24s; }
+.visible .d4 { transition-delay: .32s; }
+.visible .d5 { transition-delay: .40s; }
+@keyframes pulse { 50% { opacity: .35; transform: scale(.76); } }
+@keyframes travel { 0% { offset-distance: 0; opacity: 0; } 10%, 90% { opacity: 1; } 100% { offset-distance: 100%; opacity: 0; } }
+@keyframes scan { 0%, 100% { transform: translateX(-20px); opacity: .25; } 50% { transform: translateX(20px); opacity: 1; } }
+
+/* ===========================================
+   SLIDE 1 — TITLE / EVIDENCE CHAIN
+   =========================================== */
+.title-copy { position: absolute; left: 104px; top: 226px; width: 840px; }
+.title-copy h1 { font-size: 90px; line-height: 1.08; letter-spacing: -.05em; font-weight: 900; }
+.title-copy .lead { margin-top: 34px; width: 790px; font-size: 29px; }
+.title-chain { position: absolute; right: 86px; top: 214px; width: 760px; height: 650px; }
+.title-node {
+  position: absolute; width: 246px; min-height: 126px; padding: 24px 25px;
+  border: 1px solid #315a49; background: rgba(7, 16, 13, .9);
+  box-shadow: 0 20px 42px rgba(0, 0, 0, .24);
+}
+.title-node strong { display: block; font-size: 27px; margin-bottom: 10px; }
+.title-node span { font: 500 16px "DM Mono"; color: var(--mint); }
+.tn1 { left: 0; top: 0; }
+.tn2 { left: 268px; top: 214px; }
+.tn3 { right: 0; bottom: 0; border-color: var(--acid); }
+.beam {
+  position: absolute; height: 2px; transform-origin: left;
+  background: linear-gradient(90deg, var(--mint), var(--acid));
+  box-shadow: 0 0 15px rgba(97, 224, 178, .4);
+}
+.beam1 { width: 336px; left: 186px; top: 138px; transform: rotate(30deg); }
+.beam2 { width: 324px; left: 468px; top: 354px; transform: rotate(35deg); }
+.packet {
+  position: absolute; width: 14px; height: 14px; border-radius: 50%;
+  background: var(--acid); box-shadow: 0 0 18px var(--acid);
+  offset-path: path("M 186 138 L 470 305 L 704 520");
+  animation: travel 3.2s ease-in-out infinite;
+}
+.title-legend { position: absolute; left: 104px; bottom: 80px; display: flex; gap: 38px; font: 500 18px "DM Mono"; color: var(--dim); }
+.title-legend b { color: var(--ink); font-weight: 500; }
+
+/* ===========================================
+   SLIDE 2 — PROBLEM FRAMING
+   =========================================== */
+.problem-head { position: absolute; left: 86px; top: 158px; width: 1050px; }
+.problem-layout { position: absolute; left: 86px; right: 86px; top: 340px; bottom: 100px; display: grid; grid-template-columns: 610px 1fr; gap: 76px; }
+.npu-primer {
+  padding: 34px 36px; border: 1px solid var(--line); background: var(--surface);
+  position: relative; overflow: hidden;
+}
+.npu-primer::after {
+  content: ""; position: absolute; right: -70px; bottom: -70px; width: 230px; height: 230px;
+  border: 1px solid var(--mint); border-radius: 50%; opacity: .35;
+}
+.npu-primer h3 { font-size: 31px; margin-bottom: 22px; }
+.npu-primer p { font-size: 24px; line-height: 1.68; color: var(--muted); }
+.npu-equation { display: flex; align-items: center; gap: 16px; margin-top: 34px; font: 500 18px "DM Mono"; color: var(--mint); }
+.npu-equation i { height: 1px; width: 52px; background: var(--mint); }
+.causes { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+.cause {
+  border: 1px solid var(--line); background: rgba(6, 15, 12, .82); padding: 26px 28px;
+  position: relative; min-height: 160px;
+}
+.cause::before { content: attr(data-id); position: absolute; right: 20px; top: 18px; color: #355949; font: 500 17px "DM Mono"; }
+.cause strong { display: block; font-size: 25px; margin-bottom: 12px; }
+.cause p { color: var(--muted); font-size: 20px; line-height: 1.55; width: 88%; }
+.cause.primary { border-color: var(--acid); box-shadow: inset 4px 0 0 var(--acid); }
+.warning {
+  position: absolute; left: 764px; bottom: 62px; color: var(--acid);
+  font-size: 23px; font-weight: 700;
+}
+
+/* ===========================================
+   SLIDE 3 — END-TO-END PIPELINE
+   =========================================== */
+.flow-head { position: absolute; left: 86px; top: 158px; width: 1200px; }
+.flow {
+  position: absolute; left: 86px; right: 86px; top: 378px; height: 360px;
+  display: grid; grid-template-columns: repeat(6, 1fr); gap: 24px;
+}
+.flow-card {
+  position: relative; padding: 29px 24px 24px; border: 1px solid var(--line);
+  background: rgba(6, 15, 12, .9); min-width: 0;
+}
+.flow-card:not(:last-child)::after {
+  content: "→"; position: absolute; right: -27px; top: 128px; z-index: 3;
+  color: var(--acid); font: 500 27px "DM Mono";
+}
+.flow-card .step { color: var(--mint); font: 500 16px "DM Mono"; }
+.flow-card h3 { font-size: 25px; line-height: 1.35; margin: 26px 0 15px; }
+.flow-card p { color: var(--muted); font-size: 19px; line-height: 1.55; }
+.flow-card.artifact { border-color: #477765; background: rgba(10, 30, 22, .92); }
+.flow-card.final { border-color: var(--acid); }
+.flow-caption {
+  position: absolute; left: 86px; top: 786px; width: 1600px;
+  display: flex; justify-content: space-between; align-items: flex-start;
+  border-top: 1px solid var(--line); padding-top: 28px;
+}
+.flow-caption p { font-size: 23px; color: var(--muted); line-height: 1.55; max-width: 1240px; }
+
+/* ===========================================
+   SLIDE 6 — IO SNAPSHOT CONTENTS
+   =========================================== */
+.snapshot-head { position: absolute; left: 86px; top: 142px; width: 1500px; }
+.snapshot-head h2 { font-size: 58px; }
+.snapshot-head .lead { font-size: 25px; margin-top: 10px; }
+.snapshot-grid {
+  position: absolute; left: 86px; right: 86px; top: 326px; height: 600px;
+  display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(2, 1fr); gap: 22px;
+}
+.snapshot-card {
+  position: relative; border: 1px solid var(--line); background: rgba(6, 15, 12, .9);
+  padding: 24px 26px; overflow: hidden;
+}
+.snapshot-card.primary { border-color: var(--acid); box-shadow: inset 4px 0 0 var(--acid); }
+.snapshot-card .snapshot-index {
+  position: absolute; right: 20px; top: 18px; color: #376852; font: 500 17px "DM Mono";
+}
+.snapshot-card h3 { font-size: 25px; margin-bottom: 15px; }
+.snapshot-fields { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 15px; }
+.snapshot-fields code {
+  border: 1px solid #315443; padding: 5px 8px; color: var(--mint);
+  background: #07120e; font: 500 15px "DM Mono";
+}
+.snapshot-card p { color: var(--muted); font-size: 19px; line-height: 1.48; }
+.snapshot-use {
+  position: absolute; left: 26px; bottom: 21px; color: var(--acid);
+  font: 500 16px "DM Mono";
+}
+.snapshot-floor {
+  position: absolute; left: 86px; right: 86px; top: 955px;
+  display: flex; align-items: center; justify-content: space-between;
+  color: var(--muted); font-size: 21px;
+}
+.snapshot-floor strong { color: var(--acid); }
+
+/* ===========================================
+   SLIDE 4 — FOUR PRODUCTION SCRIPTS
+   =========================================== */
+.scripts-head { position: absolute; left: 86px; top: 142px; width: 1450px; }
+.script-grid {
+  position: absolute; left: 86px; right: 86px; top: 302px; height: 592px;
+  display: grid; grid-template-columns: repeat(2, 1fr); grid-template-rows: repeat(2, 1fr); gap: 18px 24px;
+}
+.script-card {
+  position: relative; border: 1px solid var(--line); background: var(--surface);
+  padding: 22px 28px 20px; overflow: hidden;
+}
+.script-card::after {
+  content: attr(data-num); position: absolute; right: 18px; bottom: -28px;
+  font: 500 112px "DM Mono"; color: rgba(97, 224, 178, .055);
+}
+.script-card.core { border-color: #44725f; }
+.script-card.aux { border-color: #665e37; }
+.script-role { font: 600 16px "Noto Sans SC"; color: var(--mint); letter-spacing: .08em; }
+.script-card.aux .script-role { color: var(--acid); }
+.script-card h3 { font: 500 23px/1.3 "DM Mono"; color: var(--ink); margin: 10px 0 8px; word-break: break-word; }
+.script-card .job { font-size: 24px; font-weight: 700; margin-bottom: 9px; }
+.io-row { border-top: 1px solid var(--line); padding: 9px 0; display: grid; grid-template-columns: 76px 1fr; gap: 12px; }
+.io-row span { font: 500 16px "DM Mono"; color: var(--dim); }
+.io-row strong { font-size: 19px; line-height: 1.45; font-weight: 500; color: var(--muted); }
+.script-note {
+  position: absolute; left: 86px; top: 923px; color: var(--muted); font-size: 21px;
+}
+.script-note b { color: var(--acid); }
+
+/* ===========================================
+   SLIDE 5 — DETERMINISTIC HTML REPORT
+   =========================================== */
+.report-head { position: absolute; left: 86px; top: 142px; width: 1480px; }
+.report-head h2 { font-size: 58px; }
+.report-head .lead { margin-top: 12px; font-size: 25px; }
+.report-layout {
+  position: absolute; left: 86px; right: 86px; top: 330px; height: 550px;
+  display: grid; grid-template-columns: 620px 1fr; gap: 32px;
+}
+.report-script {
+  position: relative; border: 1px solid var(--acid); background: var(--surface);
+  padding: 30px 34px; overflow: hidden;
+}
+.report-script::after {
+  content: "5"; position: absolute; right: 22px; bottom: -40px;
+  font: 500 150px "DM Mono"; color: rgba(216, 255, 67, .055);
+}
+.report-script h3 { font: 500 28px/1.3 "DM Mono"; margin: 18px 0 12px; }
+.report-script .job { font-size: 30px; font-weight: 800; margin-bottom: 25px; }
+.report-script .io-row { padding: 17px 0; }
+.report-script .io-row strong { font-size: 21px; }
+.report-right { display: grid; grid-template-rows: 1fr 174px; gap: 18px; min-width: 0; }
+.report-map {
+  border: 1px solid var(--line); background: rgba(6, 15, 12, .9); padding: 24px 28px;
+  display: grid; grid-template-columns: 1fr 68px 1fr; align-items: center; gap: 18px;
+}
+.artifact-stack { display: grid; gap: 10px; }
+.artifact-pill {
+  border: 1px solid #315443; background: #07120e; padding: 11px 14px;
+  color: var(--mint); font: 500 17px "DM Mono";
+}
+.artifact-pill.agent { border-color: #6c7131; color: var(--acid); }
+.report-arrow { text-align: center; color: var(--acid); font: 500 42px "DM Mono"; }
+.browser-card { border: 1px solid var(--acid); background: #091712; padding: 19px; }
+.browser-bar { display: flex; gap: 7px; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
+.browser-bar i { width: 8px; height: 8px; border-radius: 50%; background: var(--dim); }
+.browser-card strong { display: block; margin: 22px 0 15px; color: var(--acid); font-size: 25px; }
+.report-preview { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; }
+.report-preview span { height: 58px; border: 1px solid var(--line); background: rgba(97, 224, 178, .06); }
+.report-contract {
+  border: 1px solid #665e37; background: rgba(20, 20, 10, .48); padding: 22px 26px;
+  display: grid; grid-template-columns: 220px 1fr; gap: 24px; align-items: center;
+}
+.report-contract strong { color: var(--acid); font-size: 23px; }
+.report-contract p { color: var(--muted); font-size: 20px; line-height: 1.55; }
+.report-floor { position: absolute; left: 86px; top: 918px; color: var(--muted); font-size: 21px; }
+.report-floor b { color: var(--acid); }
+
+/* ===========================================
+   SLIDE 7 — TWO EVIDENCE CHAINS
+   =========================================== */
+.chains-head { position: absolute; left: 86px; top: 158px; width: 1320px; }
+.chain-grid { position: absolute; left: 86px; right: 86px; top: 344px; height: 506px; display: grid; grid-template-columns: 1fr 1fr; gap: 42px; }
+.evidence-chain { border: 1px solid var(--line); background: var(--surface); padding: 30px 32px; }
+.evidence-chain h3 { font-size: 29px; display: flex; align-items: center; justify-content: space-between; }
+.evidence-chain h3 span { font: 500 16px "DM Mono"; color: var(--mint); }
+.chain-rule-row { display: grid; grid-template-columns: 86px 1fr; gap: 16px; align-items: start; border-top: 1px solid var(--line); padding: 18px 0; }
+.chain-rule-row:first-of-type { margin-top: 24px; }
+.rule-id { font: 500 17px "DM Mono"; color: var(--acid); }
+.rule-copy strong { display: block; font-size: 21px; margin-bottom: 5px; }
+.rule-copy p { color: var(--muted); font-size: 18px; line-height: 1.45; }
+.r500-core {
+  height: 258px; margin-top: 30px; padding: 28px; border: 1px solid var(--acid);
+  display: grid; place-items: center; text-align: center; position: relative;
+  background: radial-gradient(circle, rgba(216, 255, 67, .09), transparent 62%);
+}
+.r500-core .big { font: 500 54px "DM Mono"; color: var(--acid); }
+.r500-core p { font-size: 22px; line-height: 1.55; color: var(--muted); max-width: 560px; }
+.r500-equation { display: flex; gap: 16px; align-items: center; justify-content: center; font: 500 18px "DM Mono"; color: var(--mint); }
+.chain-floor {
+  position: absolute; left: 86px; right: 86px; top: 882px; height: 73px;
+  border: 1px dashed #416653; display: flex; align-items: center; padding: 0 28px;
+  color: var(--muted); font-size: 20px;
+}
+.chain-floor b { color: var(--acid); margin-right: 18px; font-family: "DM Mono"; }
+
+/* ===========================================
+   SLIDES 8–13 — RULE DETAIL PAGES
+   Every rule uses the same input → decision → output grammar.
+   =========================================== */
+.rule-detail-head { position: absolute; left: 86px; top: 142px; right: 86px; }
+.rule-detail-head .section-kicker { font-family: "Noto Sans SC"; font-size: 22px; font-weight: 700; }
+.rule-title-line { display: flex; align-items: flex-end; justify-content: space-between; gap: 40px; }
+.rule-title-line h2 { font-size: 64px; }
+.rule-badge {
+  flex: 0 0 auto; min-width: 150px; padding: 13px 18px; border: 1px solid var(--acid);
+  color: var(--acid); text-align: center; font: 500 23px "DM Mono";
+  box-shadow: 0 0 28px rgba(216, 255, 67, .08);
+}
+.rule-purpose { margin-top: 13px; font-size: 27px; line-height: 1.5; color: var(--muted); }
+.rule-detail-grid {
+  position: absolute; left: 86px; right: 86px; top: 340px; height: 640px;
+  display: grid; grid-template-columns: 470px 720px 1fr; gap: 24px;
+}
+.rule-panel {
+  border: 1px solid var(--line); background: var(--surface); padding: 27px 29px;
+  overflow: hidden; position: relative;
+}
+.rule-panel h3 {
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 29px; margin-bottom: 19px; padding-bottom: 15px; border-bottom: 1px solid var(--line);
+}
+.rule-panel h3 span { color: var(--mint); font: 500 16px "DM Mono"; letter-spacing: .06em; }
+.input-list, .boundary-list { margin: 0; padding: 0; list-style: none; display: grid; gap: 16px; }
+.input-list li, .boundary-list li {
+  position: relative; padding-left: 23px; color: var(--muted); font-size: 23px; line-height: 1.43;
+}
+.input-list li::before { content: "•"; position: absolute; left: 0; color: var(--mint); }
+.input-list code {
+  color: var(--ink); font: 500 19px "DM Mono"; background: rgba(97, 224, 178, .055);
+}
+.logic-stack { display: grid; gap: 13px; }
+.logic-step {
+  display: grid; grid-template-columns: 46px 1fr; gap: 15px; align-items: start;
+  border: 1px solid #26483a; padding: 15px 17px; background: rgba(4, 12, 9, .58);
+}
+.logic-step .logic-id {
+  width: 38px; height: 38px; border: 1px solid var(--mint); display: grid; place-items: center;
+  color: var(--mint); font: 500 16px "DM Mono";
+}
+.logic-step strong { display: block; font-size: 23px; margin-bottom: 4px; }
+.logic-step p { color: var(--muted); font-size: 20px; line-height: 1.42; }
+.logic-step.positive { border-color: #61752d; }
+.logic-step.positive .logic-id { border-color: var(--acid); color: var(--acid); }
+.logic-step.stop { border-color: #70422f; }
+.logic-step.stop .logic-id { border-color: var(--orange); color: var(--orange); }
+.output-box { border: 1px solid var(--line); margin-bottom: 15px; }
+.output-row {
+  display: grid; grid-template-columns: 112px 1fr; gap: 12px;
+  padding: 14px 15px; border-bottom: 1px solid var(--line); align-items: start;
+}
+.output-row:last-child { border-bottom: 0; }
+.output-row span { color: var(--dim); font: 500 15px "DM Mono"; }
+.output-row strong { color: var(--muted); font-size: 20px; line-height: 1.4; font-weight: 500; }
+.boundary-card {
+  border: 1px solid #685b2f; background: rgba(28, 24, 9, .42); padding: 18px 20px;
+}
+.boundary-card .label { color: var(--acid); font: 500 15px "DM Mono"; margin-bottom: 10px; }
+.boundary-card p { color: var(--muted); font-size: 21px; line-height: 1.46; }
+.threshold-strip {
+  position: absolute; left: 86px; right: 260px; bottom: 18px; height: 54px;
+  display: flex; align-items: center; gap: 18px; padding: 0 20px;
+  border: 1px dashed #3a5d4c; color: var(--muted); font-size: 21px;
+}
+.threshold-strip b { color: var(--acid); font: 500 17px "DM Mono"; }
+
+/* ===========================================
+   SLIDE 14 — CAPABILITY, BOUNDARY, TALK TRACK
+   =========================================== */
+.final-head { position: absolute; left: 86px; top: 150px; width: 1200px; }
+.final-layout { position: absolute; left: 86px; right: 86px; top: 322px; display: grid; grid-template-columns: 890px 1fr; gap: 42px; }
+.capabilities { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+.cap {
+  min-height: 146px; padding: 24px 26px; border: 1px solid var(--line); background: var(--surface);
+}
+.cap strong { display: flex; align-items: center; gap: 12px; font-size: 23px; margin-bottom: 12px; }
+.cap strong::before { content: "✓"; color: var(--acid); font: 500 20px "DM Mono"; }
+.cap p { color: var(--muted); font-size: 18px; line-height: 1.5; }
+.boundary {
+  border: 1px solid #665e37; background: rgba(20, 20, 10, .5); padding: 28px 30px;
+}
+.boundary h3 { font-size: 27px; color: var(--acid); margin-bottom: 22px; }
+.boundary ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 17px; }
+.boundary li { color: var(--muted); font-size: 19px; line-height: 1.52; padding-left: 24px; position: relative; }
+.boundary li::before { content: "—"; position: absolute; left: 0; color: var(--orange); }
+.talk-track {
+  position: absolute; left: 86px; right: 86px; bottom: 76px; min-height: 224px;
+  border: 1px solid var(--acid); background: rgba(7, 16, 13, .94); padding: 27px 32px 25px;
+}
+.talk-track .label { font: 500 16px "DM Mono"; color: var(--acid); margin-bottom: 14px; }
+.talk-track blockquote { margin: 0; font-size: 24px; line-height: 1.64; color: var(--ink); }
+
+/* ===========================================
+   OUTSIDE-STAGE CONTROLS
+   Navigation and editing stay outside slide art.
+   =========================================== */
+.deck-controls {
+  display: flex; align-items: center; gap: 13px; padding: 9px 13px;
+  border: 1px solid rgba(97, 224, 178, .3); border-radius: 6px;
+  background: rgba(3, 8, 6, .88); backdrop-filter: blur(12px);
+  color: var(--ink); font: 500 13px "DM Mono"; opacity: .25;
+  transition: opacity .25s ease;
+}
+.deck-controls:hover { opacity: 1; }
+.deck-controls button {
+  border: 0; color: var(--ink); background: transparent; cursor: pointer;
+  font: inherit; padding: 3px 7px;
+}
+.deck-controls button:hover { color: var(--acid); }
+.progress-track { width: 120px; height: 3px; background: #29493c; }
+.progress-bar { height: 100%; width: 16.66%; background: var(--acid); transition: width .3s var(--ease); }
+.edit-hotzone { position: fixed; top: 0; left: 0; width: 80px; height: 80px; z-index: 10000; cursor: pointer; }
+.edit-toggle {
+  position: fixed; top: 16px; left: 16px; width: 44px; height: 44px;
+  border: 1px solid var(--line); border-radius: 5px; background: #07100d; color: var(--ink);
+  opacity: 0; pointer-events: none; transition: opacity .3s ease; z-index: 10001; cursor: pointer;
+}
+.edit-toggle.show, .edit-toggle.active { opacity: 1; pointer-events: auto; }
+.edit-toolbar {
+  position: fixed; top: 16px; left: 72px; z-index: 10001; display: none; gap: 8px;
+}
+.edit-toolbar.active { display: flex; }
+.edit-toolbar button {
+  border: 1px solid var(--line); border-radius: 5px; padding: 10px 14px;
+  background: #07100d; color: var(--ink); font: 500 13px "DM Mono"; cursor: pointer;
+}
+.editing [data-editable] { outline: 1px dashed var(--acid); outline-offset: 5px; cursor: text; }
+</style>
+</head>
+<body>
+<div class="deck-viewport">
+  <main class="deck-stage" id="deckStage">
+
+    <!-- Slide 1 speaker note: 先给结论——这不是让 LLM 猜指标，而是一条可复查的诊断链。 -->
+    <section class="slide active" aria-label="标题：把训练变慢变成证据链">
+      <div class="slide-inner">
+        <header class="topbar reveal">
+          <span>DIAGNOSTIC CHAIN / MSA-01</span>
+          <span class="status"><i class="pulse"></i>EVIDENCE ONLINE</span>
+        </header>
+        <div class="title-copy">
+          <div class="section-kicker reveal d1">STORAGE ANALYSIS SKILL</div>
+          <h1 class="reveal d2" data-editable>把“训练变慢”<br>变成证据链</h1>
+          <p class="lead reveal d3" data-editable>理解 MindStudio Storage Analysis 的设计框架，以及 Agent、采集器与规则引擎如何协作。</p>
+        </div>
+        <div class="title-chain reveal d3" aria-label="采集事实、固定规则、解释结论">
+          <div class="title-node tn1"><strong data-editable>采集事实</strong><span>IO SNAPSHOT</span></div>
+          <div class="title-node tn2"><strong data-editable>固定规则</strong><span>R000 — R500</span></div>
+          <div class="title-node tn3"><strong data-editable>解释结论</strong><span>AGENT REPORT</span></div>
+          <i class="beam beam1"></i><i class="beam beam2"></i><i class="packet"></i>
+        </div>
+        <div class="title-legend reveal d4"><span><b>FACT</b> 不靠猜</span><span><b>RULE</b> 可复现</span><span><b>AGENT</b> 讲人话</span></div>
+        <div class="page-no">01 / 14</div>
+      </div>
+    </section>
+
+    <!-- Slide 2 speaker note: NPU 先类比 GPU，只强调“持续需要数据”；不要讲芯片内部结构。 -->
+    <section class="slide" aria-label="为什么不能看到 NPU 空闲就怪存储">
+      <div class="slide-inner">
+        <header class="topbar reveal"><span>PROBLEM / WHY THIS SKILL</span><span>02</span></header>
+        <div class="problem-head">
+          <div class="section-kicker reveal d1">先理解问题</div>
+          <h2 class="reveal d2" data-editable>NPU 空闲，<span class="acid">不等于</span>存储一定慢</h2>
+        </div>
+        <div class="problem-layout">
+          <div class="npu-primer reveal d2">
+            <div class="tag">NPU PRIMER</div>
+            <h3 data-editable>NPU 可以先理解成“计算设备”</h3>
+            <p data-editable>它像 GPU 一样负责大量计算。训练时，CPU、DataLoader 和存储需要持续把数据送给它；没有数据可算时，它可能空闲。</p>
+            <div class="npu-equation"><span>STORAGE</span><i></i><span>DATALOADER</span><i></i><span>NPU</span></div>
+          </div>
+          <div class="causes">
+            <article class="cause primary reveal d2" data-id="01"><strong data-editable>存储读取慢</strong><p data-editable>本地盘、NFS 或远程元数据访问无法及时供数。</p></article>
+            <article class="cause reveal d3" data-id="02"><strong data-editable>CPU 处理慢</strong><p data-editable>例如图片解码繁忙，磁盘实际可能很空闲。</p></article>
+            <article class="cause reveal d3" data-id="03"><strong data-editable>通信或算子问题</strong><p data-editable>多卡通信、算子执行等也可能让设备出现等待。</p></article>
+            <article class="cause reveal d4" data-id="04"><strong data-editable>调度与任务下发</strong><p data-editable>Host 没有及时向设备提交下一批工作。</p></article>
+          </div>
+        </div>
+        <div class="warning reveal d5" data-editable>所以：先证明 Host IO 异常，再讨论是否影响 NPU。</div>
+        <div class="page-no">02 / 14</div>
+      </div>
+    </section>
+
+    <!-- Slide 3 speaker note: 用六个交接点解释 LLM 编排与确定性程序如何分工。 -->
+    <section class="slide" aria-label="完整诊断主流程">
+      <div class="slide-inner">
+        <header class="topbar reveal"><span>ARCHITECTURE / MAIN PIPELINE</span><span>03</span></header>
+        <div class="flow-head">
+          <div class="section-kicker reveal d1">整体框架</div>
+          <h2 class="reveal d2" data-editable>一条主流程，六个交接点</h2>
+          <p class="lead reveal d3" data-editable>Agent 负责理解与编排；程序负责稳定地采集和判断。</p>
+        </div>
+        <div class="flow">
+          <article class="flow-card reveal d1"><span class="step">01 / AGENT + DISCOVER</span><h3 data-editable>自动定位目标</h3><p data-editable>理解场景；PID 或路径未知时先只读找候选，不明确再请用户确认。</p></article>
+          <article class="flow-card reveal d2"><span class="step">02 / COLLECT</span><h3 data-editable>采集服务器事实</h3><p data-editable>只读采集磁盘、NFS、进程和挂载信息。</p></article>
+          <article class="flow-card artifact reveal d2"><span class="step">03 / ARTIFACT</span><h3>io_snapshot.json</h3><p data-editable>保存标准化事实，能够复查、归档和重新分析。</p></article>
+          <article class="flow-card reveal d3"><span class="step">04 / ANALYZE</span><h3 data-editable>执行固定规则</h3><p data-editable>通过 R000—R500 判断问题和证据质量。</p></article>
+          <article class="flow-card artifact reveal d3"><span class="step">05 / ARTIFACT</span><h3>findings.json</h3><p data-editable>保存根因、置信度、证据、缺失项与建议。</p></article>
+          <article class="flow-card final reveal d4"><span class="step">06 / AGENT + REPORT</span><h3 data-editable>解释并生成报告</h3><p data-editable>终端返回结论，同时生成可离线打开的 HTML。</p></article>
+        </div>
+        <div class="flow-caption reveal d5">
+          <p data-editable><span class="acid">关键取舍：</span>不让 Agent 临时发明阈值；同一份 Snapshot 交给分析器，应产生可复现的规则结果。</p>
+          <span class="tag">LLM + DETERMINISTIC TOOLS</span>
+        </div>
+        <div class="page-no">03 / 14</div>
+      </div>
+    </section>
+
+    <!-- Slide 4 speaker note: 前四个脚本产生诊断数据；discover 负责定位，summarize_msprof 属于辅助链。 -->
+    <section class="slide" aria-label="前四个生产脚本">
+      <div class="slide-inner">
+        <header class="topbar reveal"><span>PRODUCTION CODE / RESPONSIBILITIES</span><span>04</span></header>
+        <div class="scripts-head">
+          <div class="section-kicker reveal d1">代码分工</div>
+          <h2 class="reveal d2" data-editable>前四个脚本，负责产生诊断数据</h2>
+        </div>
+        <div class="script-grid">
+          <article class="script-card core reveal d2" data-num="1">
+            <div class="script-role">目标导航员 / CORE</div>
+            <h3>discover_io_target.py</h3>
+            <div class="job" data-editable>自动寻找训练进程与数据路径</div>
+            <div class="io-row"><span>输入</span><strong data-editable>可选 PID、启动命令特征、绝对路径线索</strong></div>
+            <div class="io-row"><span>输出</span><strong data-editable>候选目标、证据、是否需要用户确认</strong></div>
+          </article>
+          <article class="script-card core reveal d2" data-num="2">
+            <div class="script-role">现场采集员 / CORE</div>
+            <h3>collect_io_snapshot.py</h3>
+            <div class="job" data-editable>采集 Host IO 事实</div>
+            <div class="io-row"><span>输入</span><strong data-editable>采集时长、PID、数据路径</strong></div>
+            <div class="io-row"><span>输出</span><strong>io_snapshot.json</strong></div>
+          </article>
+          <article class="script-card core reveal d3" data-num="3">
+            <div class="script-role">规则裁判 / CORE</div>
+            <h3>analyze_io_snapshot.py</h3>
+            <div class="job" data-editable>执行确定性分析</div>
+            <div class="io-row"><span>输入</span><strong data-editable>Snapshot；可选正式 NPU Profile</strong></div>
+            <div class="io-row"><span>输出</span><strong>findings.json</strong></div>
+          </article>
+          <article class="script-card aux reveal d4" data-num="4">
+            <div class="script-role">侧面观察员 / AUXILIARY</div>
+            <h3>summarize_msprof.py</h3>
+            <div class="job" data-editable>摘要 NPU 侧线索</div>
+            <div class="io-row"><span>输入</span><strong data-editable>msprof op_summary</strong></div>
+            <div class="io-row"><span>输出</span><strong data-editable>非认证诊断摘要；不能单独证明 NPU 空闲</strong></div>
+          </article>
+        </div>
+        <div class="script-note reveal d5" data-editable><b>主诊断链：</b>发现并确认目标 → 采集 Snapshot → 分析 Findings；msprof 摘要器是可选辅助链。</div>
+        <div class="page-no">04 / 14</div>
+      </div>
+    </section>
+
+    <!-- Slide 5 speaker note: 第五个脚本只做确定性展示；纯语言模型只填写总结 JSON。 -->
+    <section class="slide" aria-label="第五个脚本生成 HTML 报告">
+      <div class="slide-inner">
+        <header class="topbar reveal"><span>PRODUCTION CODE / HUMAN-READABLE REPORT</span><span>05</span></header>
+        <div class="report-head">
+          <div class="section-kicker reveal d1">最终交付</div>
+          <h2 class="reveal d2" data-editable>第五个脚本，把 JSON 变成人能看的报告</h2>
+          <p class="lead reveal d3" data-editable>Agent 不写页面代码，只写通俗总结；固定程序负责图标、表格、样式和安全转义。</p>
+        </div>
+        <div class="report-layout">
+          <article class="report-script reveal d2">
+            <div class="script-role" style="color:var(--acid)">报告生成员 / CORE</div>
+            <h3>render_io_report.py</h3>
+            <div class="job" data-editable>生成单文件离线 HTML</div>
+            <div class="io-row"><span>输入</span><strong data-editable>四类脚本产物 + Agent 总结 JSON</strong></div>
+            <div class="io-row"><span>动作</span><strong data-editable>读取原始证据，生成图标、规则卡片和数据表格</strong></div>
+            <div class="io-row"><span>输出</span><strong>io_report.html</strong></div>
+          </article>
+          <div class="report-right">
+            <div class="report-map reveal d3">
+              <div class="artifact-stack">
+                <div class="artifact-pill">target_candidates.json</div>
+                <div class="artifact-pill">io_snapshot.json</div>
+                <div class="artifact-pill">findings.json</div>
+                <div class="artifact-pill">op_summary_diagnostics.json</div>
+                <div class="artifact-pill agent">agent_report.json</div>
+              </div>
+              <div class="report-arrow">→</div>
+              <div class="browser-card">
+                <div class="browser-bar"><i></i><i></i><i></i></div>
+                <strong>诊断报告</strong>
+                <div class="report-preview"><span></span><span></span><span></span></div>
+              </div>
+            </div>
+            <div class="report-contract reveal d4">
+              <strong data-editable>纯语言模型也可以</strong>
+              <p data-editable>模型只需读 JSON、写 agent_report.json、调用渲染器；不需要识图，也不需要自己生成 HTML。</p>
+            </div>
+          </div>
+        </div>
+        <div class="report-floor reveal d5" data-editable><b>输出方式：</b>终端简要结论 + io_report.html；两者来自同一份规则结果。</div>
+        <div class="page-no">05 / 14</div>
+      </div>
+    </section>
+
+    <!-- Slide 6 speaker note: Snapshot 是采集结果文件；按六类事实解释内容和规则用途。 -->
+    <section class="slide" aria-label="IO Snapshot 包含的信息">
+      <div class="slide-inner">
+        <header class="topbar reveal"><span>ARTIFACT / IO SNAPSHOT CONTENTS</span><span>06</span></header>
+        <div class="snapshot-head">
+          <div class="section-kicker reveal d1">采集结果文件</div>
+          <h2 class="reveal d2" data-editable><span class="acid">io_snapshot.json</span> 里面有什么？</h2>
+          <p class="lead reveal d3" data-editable>它保存服务器在指定时间内的存储事实，后续规则只读这份快照进行判断。</p>
+        </div>
+        <div class="snapshot-grid">
+          <article class="snapshot-card primary reveal d1">
+            <span class="snapshot-index">01</span>
+            <h3 data-editable>目标与时间</h3>
+            <div class="snapshot-fields"><code>target.pid</code><code>target.path</code><code>window</code></div>
+            <p data-editable>记录检查哪个训练进程、哪个数据路径，以及数据是什么时间采集的。</p>
+            <div class="snapshot-use">用途：把证据绑定到本次任务</div>
+          </article>
+          <article class="snapshot-card reveal d2">
+            <span class="snapshot-index">02</span>
+            <h3 data-editable>本地磁盘</h3>
+            <div class="snapshot-fields"><code>iostat</code><code>diskstats</code></div>
+            <p data-editable>记录磁盘使用率、读写速度、IOPS、等待时间和队列长度。</p>
+            <div class="snapshot-use">用于 R100：本地盘是否承压</div>
+          </article>
+          <article class="snapshot-card reveal d2">
+            <span class="snapshot-index">03</span>
+            <h3 data-editable>网络存储</h3>
+            <div class="snapshot-fields"><code>mounts</code><code>nfs</code></div>
+            <p data-editable>记录是否挂载 NFS，以及访问延迟、重传、超时和元数据操作耗时。</p>
+            <div class="snapshot-use">用于 R200 / R300：NFS 与远程文件</div>
+          </article>
+          <article class="snapshot-card reveal d3">
+            <span class="snapshot-index">04</span>
+            <h3 data-editable>进程与存储映射</h3>
+            <div class="snapshot-fields"><code>pidstat</code><code>process_io_map</code></div>
+            <p data-editable>记录哪些进程正在读写，以及它们访问的文件最终落在哪个存储设备上。</p>
+            <div class="snapshot-use">用于 R400：多个进程是否争抢</div>
+          </article>
+          <article class="snapshot-card reveal d3">
+            <span class="snapshot-index">05</span>
+            <h3 data-editable>系统背景</h3>
+            <div class="snapshot-fields"><code>df</code><code>memory</code><code>readahead</code><code>scheduler</code></div>
+            <p data-editable>记录磁盘空间、inode、内存缓存、预读大小和 IO 调度器等辅助信息。</p>
+            <div class="snapshot-use">用途：补充背景并生成优化建议</div>
+          </article>
+          <article class="snapshot-card reveal d4">
+            <span class="snapshot-index">06</span>
+            <h3 data-editable>证据质量</h3>
+            <div class="snapshot-fields"><code>availability</code><code>provider.status</code></div>
+            <p data-editable>记录哪些数据采到了，哪些缺失、权限不足、命令失败或解析失败。</p>
+            <div class="snapshot-use">用于 R000：决定结论可信度</div>
+          </article>
+        </div>
+        <div class="snapshot-floor reveal d5">
+          <span data-editable><strong>简单理解：</strong>Snapshot 是“现场检查记录”，不是分析结论。</span>
+          <span class="tag">FACTS → RULES → FINDINGS</span>
+        </div>
+        <div class="page-no">06 / 14</div>
+      </div>
+    </section>
+
+    <!-- Slide 7 speaker note: 这是方案最核心的一页，强调两个事实不能自动构成因果关系。 -->
+    <section class="slide" aria-label="两条证据链">
+      <div class="slide-inner">
+        <header class="topbar reveal"><span>EVIDENCE MODEL / TWO CHAINS</span><span>07</span></header>
+        <div class="chains-head">
+          <div class="section-kicker reveal d1">核心设计</div>
+          <h2 class="reveal d2" data-editable>两条证据链，<span class="acid">不能混为一谈</span></h2>
+        </div>
+        <div class="chain-grid">
+          <article class="evidence-chain reveal d2">
+            <h3 data-editable>① Host IO 压力链 <span>R100 — R400</span></h3>
+            <div class="chain-rule-row"><div class="rule-id">R100</div><div class="rule-copy"><strong data-editable>本地块设备</strong><p data-editable>吞吐、IOPS、await、队列是否持续承压。</p></div></div>
+            <div class="chain-rule-row"><div class="rule-id">R200</div><div class="rule-copy"><strong data-editable>NFS 网络存储</strong><p data-editable>当前窗口是否出现延迟、重传或超时。</p></div></div>
+            <div class="chain-rule-row"><div class="rule-id">R300</div><div class="rule-copy"><strong data-editable>小文件与远程元数据</strong><p data-editable>元数据操作延迟和 IO 粒度是否异常。</p></div></div>
+            <div class="chain-rule-row"><div class="rule-id">R400</div><div class="rule-copy"><strong data-editable>多进程 IO 干扰</strong><p data-editable>多个活跃 PID 是否争抢同一受压设备。</p></div></div>
+          </article>
+          <article class="evidence-chain reveal d3">
+            <h3 data-editable>② NPU 传导链 <span>R500</span></h3>
+            <div class="r500-core">
+              <div class="big">R500</div>
+              <div class="r500-equation"><span>HOST IO</span><span>+</span><span>NPU IDLE</span></div>
+              <p data-editable>必须属于同一 workload、同一目标设备，并且证据时间窗口真实重叠。</p>
+            </div>
+            <p class="small-note" style="margin-top:22px" data-editable>只有 Host IO 已确认，再看到可信的同窗 NPU 空闲证据，才能报告“存储可能导致 NPU 等待”。</p>
+          </article>
+        </div>
+        <div class="chain-floor reveal d4" data-editable><b>R000</b>证据质量底座：工具缺失、权限不足、格式错误或时间不重叠，都要降置信度，不能解释成“系统健康”。</div>
+        <div class="page-no">07 / 14</div>
+      </div>
+    </section>
+
+    <!-- Slide 8 speaker note: R000 不诊断性能根因，它负责阻止“没有采到”等于“系统健康”。 -->
+    <section class="slide" aria-label="R000 规则详解">
+      <div class="slide-inner">
+        <header class="topbar reveal"><span>规则详解 / 采集是否完整</span><span>08</span></header>
+        <div class="rule-detail-head">
+          <div class="section-kicker reveal d1">规则详解 01 / 06</div>
+          <div class="rule-title-line">
+            <h2 class="reveal d2" data-editable>R000：先判断<span class="acid">证据够不够</span></h2>
+            <div class="rule-badge reveal d2">R000</div>
+          </div>
+          <p class="rule-purpose reveal d3" data-editable>先检查信息有没有采全；信息不完整时，后面的结论就不能说得太确定。</p>
+        </div>
+        <div class="rule-detail-grid">
+          <article class="rule-panel reveal d2">
+            <h3 data-editable>采集什么 <span>输入</span></h3>
+            <ul class="input-list">
+              <li data-editable>哪些信息完全没有采到。</li>
+              <li data-editable>哪些信息只采到一部分，或者结果为空。</li>
+              <li data-editable>哪些信息因为权限、命令或格式问题采集失败。</li>
+              <li data-editable>这些状态统一记录在 Snapshot 的“采集情况”中。</li>
+            </ul>
+          </article>
+          <article class="rule-panel reveal d3">
+            <h3 data-editable>怎么判断 <span>判断</span></h3>
+            <div class="logic-stack">
+              <div class="logic-step"><div class="logic-id">1</div><div><strong data-editable>检查完全缺失</strong><p data-editable>只要有信息没采到，就明确写出缺少什么。</p></div></div>
+              <div class="logic-step"><div class="logic-id">2</div><div><strong data-editable>检查信息不完整</strong><p data-editable>只采到一点、空结果或当前系统不支持，都不能算完整成功。</p></div></div>
+              <div class="logic-step"><div class="logic-id">3</div><div><strong data-editable>检查采集失败</strong><p data-editable>权限不足、命令失败或格式错误，会让相关结论降低可信度。</p></div></div>
+              <div class="logic-step positive"><div class="logic-id">4</div><div><strong data-editable>确认关键数据都采到了</strong><p data-editable>只能说明“信息完整”，不能说明服务器没有性能问题。</p></div></div>
+            </div>
+          </article>
+          <article class="rule-panel reveal d4">
+            <h3 data-editable>得到什么 <span>输出</span></h3>
+            <div class="output-box">
+              <div class="output-row"><span>信息级别</span><strong>提示</strong></div>
+              <div class="output-row"><span>可信程度</span><strong data-editable>能明确知道哪些信息缺失</strong></div>
+              <div class="output-row"><span>结论</span><strong data-editable>列出缺失、不完整和采集失败的信息。</strong></div>
+              <div class="output-row"><span>判断依据</span><strong data-editable>Snapshot 中记录的采集状态。</strong></div>
+            </div>
+            <div class="boundary-card">
+              <div class="label">最容易讲错的地方</div>
+              <p data-editable>R000 只能确定“哪些信息没采到”，不能证明服务器是健康的。</p>
+            </div>
+          </article>
+        </div>
+        <div class="threshold-strip reveal d5"><b>一句话</b><span data-editable>R000 先检查信息是否完整：没采到，不等于没有问题。</span></div>
+        <div class="page-no">08 / 14</div>
+      </div>
+    </section>
+
+    <!-- Slide 9 speaker note: 重点解释“高 util 不够”，high 需要持续、压力和队列/基线背书。 -->
+    <section class="slide" aria-label="R100 规则详解">
+      <div class="slide-inner">
+        <header class="topbar reveal"><span>规则详解 / 本地磁盘</span><span>09</span></header>
+        <div class="rule-detail-head">
+          <div class="section-kicker reveal d1">规则详解 02 / 06</div>
+          <div class="rule-title-line">
+            <h2 class="reveal d2" data-editable>R100：本地磁盘是否<span class="acid">持续繁忙</span></h2>
+            <div class="rule-badge reveal d2">R100</div>
+          </div>
+          <p class="rule-purpose reveal d3" data-editable>同时查看磁盘忙碌程度、请求等待、排队和读写速度，不会只看某一瞬间的峰值。</p>
+        </div>
+        <div class="rule-detail-grid">
+          <article class="rule-panel reveal d2">
+            <h3 data-editable>采集什么 <span>输入</span></h3>
+            <ul class="input-list">
+              <li data-editable>磁盘有多忙，也就是忙碌时间占比。</li>
+              <li data-editable>每秒读写多少数据、处理多少次读写请求。</li>
+              <li data-editable>每次读写要等多久，以及有多少请求在排队。</li>
+              <li data-editable>磁盘类型：机械硬盘、固态硬盘或未知设备。</li>
+              <li data-editable>采集持续多久、有效样本有多少，以及可选的设备规格。</li>
+            </ul>
+          </article>
+          <article class="rule-panel reveal d3">
+            <h3 data-editable>怎么判断 <span>判断</span></h3>
+            <div class="logic-stack">
+              <div class="logic-step"><div class="logic-id">1</div><div><strong data-editable>先确认磁盘确实在读写</strong><p data-editable>读写速度 ≥1 MB/s，或每秒读写请求 ≥100 次，排除磁盘几乎没工作的情况。</p></div></div>
+              <div class="logic-step"><div class="logic-id">2</div><div><strong data-editable>再看是否出现排队或等待</strong><p data-editable>排队请求 ≥2，或等待达到参考线：机械盘 20ms、固态盘 5ms、未知设备 15ms。</p></div></div>
+              <div class="logic-step positive"><div class="logic-id">3</div><div><strong data-editable>确认持续繁忙</strong><p data-editable>平均忙碌程度 ≥85%，至少有 3 个有效样本，同时存在排队、等待或接近设备性能上限。</p></div></div>
+              <div class="logic-step stop"><div class="logic-id">4</div><div><strong data-editable>证据不足就降低可信度</strong><p data-editable>只有瞬间峰值，或者采集不到 10 秒，都不能直接判定为持续瓶颈。</p></div></div>
+            </div>
+          </article>
+          <article class="rule-panel reveal d4">
+            <h3 data-editable>得到什么 <span>输出</span></h3>
+            <div class="output-box">
+              <div class="output-row"><span>检查对象</span><strong data-editable>检查了哪些磁盘，哪些磁盘持续繁忙。</strong></div>
+              <div class="output-row"><span>繁忙程度</span><strong data-editable>持续异常 / 可能异常 / 短时峰值 / 正常</strong></div>
+              <div class="output-row"><span>问题类型</span><strong data-editable>速度到顶 / 请求过多 / 排队等待</strong></div>
+              <div class="output-row"><span>诊断结果</span><strong data-editable>严重程度、可信度和证据时间段</strong></div>
+            </div>
+            <div class="boundary-card">
+              <div class="label">最容易讲错的地方</div>
+              <p data-editable>高速固态盘可以同时处理很多队列。即使看起来很忙，只要等待和排队正常，就不能直接判定磁盘是瓶颈。</p>
+            </div>
+          </article>
+        </div>
+        <div class="threshold-strip reveal d5"><b>高可信条件</b><span data-editable>磁盘持续繁忙 + 确实有读写 + 出现排队或等待 + 有足够长的采集证据。</span></div>
+        <div class="page-no">09 / 14</div>
+      </div>
+    </section>
+
+    <!-- Slide 10 speaker note: “识别到 NFS”只是类型识别；只有同窗 mountstats 性能证据才能确认。 -->
+    <section class="slide" aria-label="R200 规则详解">
+      <div class="slide-inner">
+        <header class="topbar reveal"><span>规则详解 / 网络存储</span><span>10</span></header>
+        <div class="rule-detail-head">
+          <div class="section-kicker reveal d1">规则详解 03 / 06</div>
+          <div class="rule-title-line">
+            <h2 class="reveal d2" data-editable>R200：网络文件盘是否<span class="acid">真的变慢</span></h2>
+            <div class="rule-badge reveal d2">R200</div>
+          </div>
+          <p class="rule-purpose reveal d3" data-editable>数据放在网络文件盘上，不代表它一定有问题；还要看到访问慢、重复发送或超时。</p>
+        </div>
+        <div class="rule-detail-grid">
+          <article class="rule-panel reveal d2">
+            <h3 data-editable>采集什么 <span>输入</span></h3>
+            <ul class="input-list">
+              <li data-editable>数据路径是不是网络文件盘（NFS），连接的是哪台存储服务器。</li>
+              <li data-editable>当前采集时间内一共发生了多少次访问。</li>
+              <li data-editable>一次访问来回要多久，存储端处理要多久。</li>
+              <li data-editable>请求重复发送了多少次，是否出现严重超时。</li>
+              <li data-editable>这些数据是否属于目标训练任务，并且采集时间一致。</li>
+            </ul>
+          </article>
+          <article class="rule-panel reveal d3">
+            <h3 data-editable>怎么判断 <span>判断</span></h3>
+            <div class="logic-stack">
+              <div class="logic-step"><div class="logic-id">1</div><div><strong data-editable>确认是同一个网络文件盘</strong><p data-editable>存储服务器、挂载位置和文件系统类型都要对应，不能只看路径名字相似。</p></div></div>
+              <div class="logic-step"><div class="logic-id">2</div><div><strong data-editable>只看本次采集期间的数据</strong><p data-editable>历史累计数据、旧连接数据和其他任务的数据全部排除。</p></div></div>
+              <div class="logic-step positive"><div class="logic-id">3</div><div><strong data-editable>确认网络存储异常</strong><p data-editable>访问次数 ≥200，且来回延迟 ≥50ms、处理时间 ≥100ms 或重复发送率 ≥1%；出现严重超时也算强信号。</p></div></div>
+              <div class="logic-step stop"><div class="logic-id">4</div><div><strong data-editable>时间对不上就降低可信度</strong><p data-editable>挂载信息和性能数据不是同一时间采集的，就不能给出高可信结论。</p></div></div>
+            </div>
+          </article>
+          <article class="rule-panel reveal d4">
+            <h3 data-editable>得到什么 <span>输出</span></h3>
+            <div class="output-box">
+              <div class="output-row"><span>检查对象</span><strong data-editable>发现了哪些网络文件盘，哪些已经确认异常。</strong></div>
+              <div class="output-row"><span>任务范围</span><strong data-editable>目标数据路径是否覆盖，以及还缺什么信息。</strong></div>
+              <div class="output-row"><span>诊断结果</span><strong data-editable>确认异常、可能异常，或者证据不足。</strong></div>
+              <div class="output-row"><span>其他类型</span><strong data-editable>非 NFS 网络存储转交对应工具继续检查。</strong></div>
+            </div>
+            <div class="boundary-card">
+              <div class="label">自动化范围</div>
+              <p data-editable>当前只有 NFS 可以自动深入判断。其他网络存储只能识别类型，并建议下一步使用什么工具检查。</p>
+            </div>
+          </article>
+        </div>
+        <div class="threshold-strip reveal d5"><b>证据不足</b><span data-editable>只知道“数据在网络盘上”或“读取速度低”，都不能直接认定网络存储是瓶颈。</span></div>
+        <div class="page-no">10 / 14</div>
+      </div>
+    </section>
+
+    <!-- Slide 11 speaker note: 强证据是 NFS 元数据操作延迟；小 IO 和 inode 只是候选或背景。 -->
+    <section class="slide" aria-label="R300 规则详解">
+      <div class="slide-inner">
+        <header class="topbar reveal"><span>规则详解 / 远程文件访问</span><span>11</span></header>
+        <div class="rule-detail-head">
+          <div class="section-kicker reveal d1">规则详解 04 / 06</div>
+          <div class="rule-title-line">
+            <h2 class="reveal d2" data-editable>R300：大量小文件是否<span class="acid">拖慢读取</span></h2>
+            <div class="rule-badge reveal d2">R300</div>
+          </div>
+          <p class="rule-purpose reveal d3" data-editable>重点检查打开文件、查找文件和读取目录是否很慢，同时识别大量小文件读取特征。</p>
+        </div>
+        <div class="rule-detail-grid">
+          <article class="rule-panel reveal d2">
+            <h3 data-editable>采集什么 <span>输入</span></h3>
+            <ul class="input-list">
+              <li data-editable>打开文件、查找文件、读取目录等操作发生了多少次。</li>
+              <li data-editable>这些操作一次来回要多久，存储端处理要多久。</li>
+              <li data-editable>每秒读取次数和读取速度，用来计算每次读取的数据大小。</li>
+              <li data-editable>文件数量空间（inode）使用率，只作为辅助背景。</li>
+              <li data-editable>是否属于目标网络文件盘，以及采集时间是否一致。</li>
+            </ul>
+          </article>
+          <article class="rule-panel reveal d3">
+            <h3 data-editable>怎么判断 <span>判断</span></h3>
+            <div class="logic-stack">
+              <div class="logic-step positive"><div class="logic-id">1</div><div><strong data-editable>确认找文件等操作很慢</strong><p data-editable>相关操作 ≥50 次，并且平均来回延迟 ≥10ms 或处理时间 ≥20ms。</p></div></div>
+              <div class="logic-step"><div class="logic-id">2</div><div><strong data-editable>确认属于当前任务</strong><p data-editable>必须对应目标网络文件盘，并且挂载信息和性能数据来自同一时间。</p></div></div>
+              <div class="logic-step"><div class="logic-id">3</div><div><strong data-editable>识别大量小文件特征</strong><p data-editable>每秒读取 ≥5000 次，且每次平均读取 &lt;16KB，只能判断为“可能存在小文件问题”。</p></div></div>
+              <div class="logic-step stop"><div class="logic-id">4</div><div><strong data-editable>文件数量空间只作参考</strong><p data-editable>使用率 ≥80% 会提示，但不能单独证明读取慢。</p></div></div>
+            </div>
+          </article>
+          <article class="rule-panel reveal d4">
+            <h3 data-editable>得到什么 <span>输出</span></h3>
+            <div class="output-box">
+              <div class="output-row"><span>确认问题</span><strong data-editable>哪些网络盘的找文件、开文件操作明显变慢。</strong></div>
+              <div class="output-row"><span>可能问题</span><strong data-editable>哪些磁盘呈现大量小文件读取特征。</strong></div>
+              <div class="output-row"><span>辅助背景</span><strong data-editable>哪些文件系统的文件数量空间使用较高。</strong></div>
+              <div class="output-row"><span>缺少证据</span><strong data-editable>还需要哪些文件调用、缓存对照等信息。</strong></div>
+            </div>
+            <div class="boundary-card">
+              <div class="label">最容易讲错的地方</div>
+              <p data-editable>每秒读取次数多、每次读取数据少，只能说明“像大量小文件”，不能直接证明找文件操作真的慢。</p>
+            </div>
+          </article>
+        </div>
+        <div class="threshold-strip reveal d5"><b>证据强弱</b><span data-editable>找文件等操作的延迟是直接证据；小块读取是可能线索；文件数量空间只是背景。</span></div>
+        <div class="page-no">11 / 14</div>
+      </div>
+    </section>
+
+    <!-- Slide 12 speaker note: R400 的严格性在于同一个 PID 必须同时满足路径相关和活跃 IO。 -->
+    <section class="slide" aria-label="R400 规则详解">
+      <div class="slide-inner">
+        <header class="topbar reveal"><span>规则详解 / 多进程争抢磁盘</span><span>12</span></header>
+        <div class="rule-detail-head">
+          <div class="section-kicker reveal d1">规则详解 05 / 06</div>
+          <div class="rule-title-line">
+            <h2 class="reveal d2" data-editable>R400：多个程序是否<span class="acid">争抢同一磁盘</span></h2>
+            <div class="rule-badge reveal d2">R400</div>
+          </div>
+          <p class="rule-purpose reveal d3" data-editable>多个程序都在读写还不够，还要证明它们同时使用同一块已经很忙的磁盘。</p>
+        </div>
+        <div class="rule-detail-grid">
+          <article class="rule-panel reveal d2">
+            <h3 data-editable>采集什么 <span>输入</span></h3>
+            <ul class="input-list">
+              <li data-editable>每个程序（PID）正在访问哪些文件和磁盘。</li>
+              <li data-editable>每个程序在当前时间内实际读写了多少数据。</li>
+              <li data-editable>R100 已经确认持续繁忙的磁盘。</li>
+              <li data-editable>程序和磁盘的身份信息，避免把旧进程或同名设备认错。</li>
+              <li data-editable>观察次数、共同时间段和目标数据路径。</li>
+            </ul>
+          </article>
+          <article class="rule-panel reveal d3">
+            <h3 data-editable>怎么判断 <span>判断</span></h3>
+            <div class="logic-stack">
+              <div class="logic-step"><div class="logic-id">1</div><div><strong data-editable>至少两个程序使用同一块磁盘</strong><p data-editable>先排除内存文件系统、系统目录等不是真实数据盘的路径。</p></div></div>
+              <div class="logic-step"><div class="logic-id">2</div><div><strong data-editable>每个程序都要有完整证据</strong><p data-editable>同一个程序必须既访问目标数据，又确实在读写，不能把两个程序的信息拼在一起。</p></div></div>
+              <div class="logic-step positive"><div class="logic-id">3</div><div><strong data-editable>这块磁盘本身必须已经很忙</strong><p data-editable>多个程序共享一块空闲磁盘，不算造成性能问题的争抢。</p></div></div>
+              <div class="logic-step"><div class="logic-id">4</div><div><strong data-editable>确认是同一时间发生</strong><p data-editable>至少观察 2 次，多个程序同时读写 ≥1 秒，并与磁盘繁忙时间重合。</p></div></div>
+            </div>
+          </article>
+          <article class="rule-panel reveal d4">
+            <h3 data-editable>得到什么 <span>输出</span></h3>
+            <div class="output-box">
+              <div class="output-row"><span>高可信</span><strong data-editable>哪些程序正在争抢哪一块繁忙磁盘。</strong></div>
+              <div class="output-row"><span>可能存在</span><strong data-editable>疑似争抢，但还有部分证据不完整。</strong></div>
+              <div class="output-row"><span>证据较弱</span><strong data-editable>只看到共同访问，没有证明磁盘繁忙或同时读写。</strong></div>
+              <div class="output-row"><span>缺少信息</span><strong data-editable>逐项说明哪一段证据还没有成立。</strong></div>
+            </div>
+            <div class="boundary-card">
+              <div class="label">防误报设计</div>
+              <p data-editable>共同访问程序库、日志和系统文件，默认不算训练数据争抢；只重点检查目标数据路径。</p>
+            </div>
+          </article>
+        </div>
+        <div class="threshold-strip reveal d5"><b>高可信条件</b><span data-editable>同一磁盘 + 每个程序都在真实读写 + 磁盘已经繁忙 + 至少同时持续 1 秒。</span></div>
+        <div class="page-no">12 / 14</div>
+      </div>
+    </section>
+
+    <!-- Slide 13 speaker note: R500 不是“看 NPU 指标”，而是把两条已认证的动态证据按目标和时间对齐。 -->
+    <section class="slide" aria-label="R500 规则详解">
+      <div class="slide-inner">
+        <header class="topbar reveal"><span>规则详解 / 是否影响 NPU</span><span>13</span></header>
+        <div class="rule-detail-head">
+          <div class="section-kicker reveal d1">规则详解 06 / 06</div>
+          <div class="rule-title-line">
+            <h2 class="reveal d2" data-editable>R500：服务器读写问题是否<span class="acid">影响 NPU</span></h2>
+            <div class="rule-badge reveal d2">R500</div>
+          </div>
+          <p class="rule-purpose reveal d3" data-editable>先确认目标训练任务确实存在存储问题，再判断这个问题发生时 NPU 是否也在等待。</p>
+        </div>
+        <div class="rule-detail-grid">
+          <article class="rule-panel reveal d2">
+            <h3 data-editable>采集什么 <span>输入</span></h3>
+            <ul class="input-list">
+              <li data-editable>R100—R400 已经确认的存储问题和发生时间。</li>
+              <li data-editable>目标训练进程、数据路径和对应的磁盘或网络文件盘。</li>
+              <li data-editable>NPU 性能记录中，设备有多少时间处于空闲。</li>
+              <li data-editable>NPU 空闲时间和服务器存储异常时间是否重合。</li>
+              <li data-editable>可选的前后对比实验，用来加强“存储影响 NPU”的判断。</li>
+            </ul>
+          </article>
+          <article class="rule-panel reveal d3">
+            <h3 data-editable>怎么判断 <span>判断</span></h3>
+            <div class="logic-stack">
+              <div class="logic-step"><div class="logic-id">1</div><div><strong data-editable>先确认服务器真的有存储问题</strong><p data-editable>只接受 R100—R400 已经确认的问题，只有“可能异常”不能继续推断。</p></div></div>
+              <div class="logic-step"><div class="logic-id">2</div><div><strong data-editable>确认属于同一个任务和时间段</strong><p data-editable>NPU 记录至少一半落在采集时间内，并与存储异常有共同时间段。</p></div></div>
+              <div class="logic-step positive"><div class="logic-id">3</div><div><strong data-editable>NPU 空闲比例 ≥10%</strong><p data-editable>存储异常和 NPU 空闲同时发生时，报告“存储问题可能影响 NPU”。</p></div></div>
+              <div class="logic-step stop"><div class="logic-id">4</div><div><strong data-editable>存储正常就转查其他方向</strong><p data-editable>继续检查 CPU 数据处理、任务调度、通信或算子计算问题。</p></div></div>
+            </div>
+          </article>
+          <article class="rule-panel reveal d4">
+            <h3 data-editable>得到什么 <span>输出</span></h3>
+            <div class="output-box">
+              <div class="output-row"><span>发现关联</span><strong data-editable>报告“存储问题可能导致 NPU 等待”。</strong></div>
+              <div class="output-row"><span>缺少信息</span><strong data-editable>列出缺少的 NPU 记录、任务身份或共同时间段。</strong></div>
+              <div class="output-row"><span>转查方向</span><strong data-editable>CPU 数据处理 / 调度 / 通信 / 算子计算</strong></div>
+              <div class="output-row"><span>结论边界</span><strong data-editable>当前最高只能说“可能影响”，不能直接证明因果。</strong></div>
+            </div>
+            <div class="boundary-card">
+              <div class="label">不能作为正式证据</div>
+              <p data-editable>只看一次 NPU 利用率低，或者只看一份算子摘要，都不能证明存储导致了 NPU 空闲。</p>
+            </div>
+          </article>
+        </div>
+        <div class="threshold-strip reveal d5"><b>关联条件</b><span data-editable>存储问题已确认 + 属于目标任务 + 时间真实重合 + NPU 空闲记录可信，缺一不可。</span></div>
+        <div class="page-no">13 / 14</div>
+      </div>
+    </section>
+
+    <!-- Slide 14 speaker note: 先给能力结论，再用底部话术收束；可直接照读。 -->
+    <section class="slide" aria-label="能力边界与讲解话术">
+      <div class="slide-inner">
+        <header class="topbar reveal"><span>CAPABILITY / HOW TO EXPLAIN</span><span>14</span></header>
+        <div class="final-head">
+          <div class="section-kicker reveal d1">最后怎么讲</div>
+          <h2 class="reveal d2" data-editable>它能自动分析并给建议，<span class="acid">执行权留给人</span></h2>
+        </div>
+        <div class="final-layout">
+          <div class="capabilities">
+            <article class="cap reveal d2"><strong data-editable>存储读取瓶颈</strong><p data-editable>分析本地盘吞吐、IOPS、等待和队列压力。</p></article>
+            <article class="cap reveal d2"><strong data-editable>NFS 网络存储</strong><p data-editable>分析 RTT、execute、重传、超时等当前窗口证据。</p></article>
+            <article class="cap reveal d3"><strong data-editable>远程文件访问</strong><p data-editable>分析小文件、元数据访问和 IO 粒度问题。</p></article>
+            <article class="cap reveal d3"><strong data-editable>IO 干扰</strong><p data-editable>判断多个任务或 worker 是否争抢同一存储后端。</p></article>
+          </div>
+          <aside class="boundary reveal d4">
+            <h3 data-editable>边界要主动说明</h3>
+            <ul>
+              <li data-editable>网络存储的深度自动分析目前主要支持 NFS。</li>
+              <li data-editable>Profiler 摘要只能提供线索，不能伪造正式 NPU 空闲证据。</li>
+              <li data-editable>自动给出建议，但系统变更由 Agent 或人工确认。</li>
+              <li data-editable>不执行无法安全回滚的 drop_caches。</li>
+            </ul>
+          </aside>
+        </div>
+        <div class="talk-track reveal d5">
+          <div class="label">30-SECOND TALK TRACK / 可直接复述</div>
+          <blockquote data-editable>这个 Skill 采用“Agent 编排、程序取证、确定性分析、Agent 解释”的架构。PID 或数据路径未知时，目标发现器先只读寻找候选，不明确就请用户确认；采集器再绑定目标和时间窗口，生成可复查的 IO Snapshot；分析器用固定规则判断本地存储、NFS、远程文件访问和 IO 干扰问题，最后由 Agent 给出带证据的结论与建议，固定渲染器同步生成离线 HTML。Host IO 压力和 NPU 传导分链判断，避免看到设备空闲就错误归因于存储。</blockquote>
+        </div>
+        <div class="page-no">14 / 14</div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<!-- Outside-stage navigation controls -->
+<nav class="deck-controls" aria-label="演示控制">
+  <button id="prevBtn" aria-label="上一页">←</button>
+  <span id="counter">1 / 14</span>
+  <div class="progress-track" aria-hidden="true"><div class="progress-bar" id="progressBar"></div></div>
+  <button id="nextBtn" aria-label="下一页">→</button>
+</nav>
+
+<!-- Inline editing controls: hover top-left or press E -->
+<div class="edit-hotzone" title="进入编辑模式"></div>
+<button class="edit-toggle" id="editToggle" title="编辑模式（E）">E</button>
+<div class="edit-toolbar" id="editToolbar">
+  <button id="saveEdits">保存文字</button>
+  <button id="downloadHtml">下载 HTML</button>
+</div>
+
+<script>
+/* ===========================================
+   SLIDE PRESENTATION CONTROLLER
+   Keyboard, wheel, touch, and fixed-stage scaling.
+   =========================================== */
+class SlidePresentation {
+  constructor() {
+    this.slides = [...document.querySelectorAll(".slide")];
+    this.currentSlide = 0;
+    this.stage = document.getElementById("deckStage");
+    this.wheelLocked = false;
+    this.touchStartX = 0;
+    this.setupStageScale();
+    this.setupNavigation();
+    const requestedSlide = Number(location.hash.slice(1));
+    const initialSlide = Number.isInteger(requestedSlide) &&
+      requestedSlide >= 1 &&
+      requestedSlide <= this.slides.length
+        ? requestedSlide - 1
+        : 0;
+    this.showSlide(initialSlide);
+  }
+
+  setupStageScale() {
+    const scale = () => {
+      const factor = Math.min(window.innerWidth / 1920, window.innerHeight / 1080);
+      const x = (window.innerWidth - 1920 * factor) / 2;
+      const y = (window.innerHeight - 1080 * factor) / 2;
+      this.stage.style.transform = `translate(${x}px, ${y}px) scale(${factor})`;
+    };
+    scale();
+    window.addEventListener("resize", scale);
+  }
+
+  setupNavigation() {
+    document.getElementById("prevBtn").addEventListener("click", () => this.previous());
+    document.getElementById("nextBtn").addEventListener("click", () => this.next());
+
+    document.addEventListener("keydown", event => {
+      if (event.target.getAttribute("contenteditable") === "true") return;
+      if (["ArrowRight", "ArrowDown", "PageDown", " "].includes(event.key)) {
+        event.preventDefault(); this.next();
+      }
+      if (["ArrowLeft", "ArrowUp", "PageUp"].includes(event.key)) {
+        event.preventDefault(); this.previous();
+      }
+      if (event.key === "Home") this.showSlide(0);
+      if (event.key === "End") this.showSlide(this.slides.length - 1);
+    });
+
+    window.addEventListener("wheel", event => {
+      if (this.wheelLocked || Math.abs(event.deltaY) < 20) return;
+      this.wheelLocked = true;
+      event.deltaY > 0 ? this.next() : this.previous();
+      setTimeout(() => { this.wheelLocked = false; }, 650);
+    }, { passive: true });
+
+    window.addEventListener("touchstart", event => {
+      this.touchStartX = event.changedTouches[0].screenX;
+    }, { passive: true });
+    window.addEventListener("touchend", event => {
+      const delta = event.changedTouches[0].screenX - this.touchStartX;
+      if (Math.abs(delta) > 55) delta < 0 ? this.next() : this.previous();
+    }, { passive: true });
+  }
+
+  showSlide(index) {
+    this.currentSlide = Math.max(0, Math.min(index, this.slides.length - 1));
+    this.slides.forEach((slide, position) => {
+      const selected = position === this.currentSlide;
+      slide.classList.toggle("active", selected);
+      slide.classList.toggle("visible", selected);
+    });
+    document.getElementById("counter").textContent = `${this.currentSlide + 1} / ${this.slides.length}`;
+    document.getElementById("progressBar").style.width = `${((this.currentSlide + 1) / this.slides.length) * 100}%`;
+    history.replaceState(null, "", `#${this.currentSlide + 1}`);
+  }
+
+  next() { this.showSlide(this.currentSlide + 1); }
+  previous() { this.showSlide(this.currentSlide - 1); }
+}
+
+/* ===========================================
+   INLINE TEXT EDITOR
+   E toggles editing; Ctrl/Cmd+S saves to localStorage.
+   =========================================== */
+class InlineEditor {
+  constructor() {
+    this.isActive = false;
+    this.elements = [...document.querySelectorAll("[data-editable]")];
+    this.storageKey = "mindstudio-storage-analysis-overview-edits-v7";
+    this.restore();
+  }
+
+  toggleEditMode() {
+    this.isActive = !this.isActive;
+    document.body.classList.toggle("editing", this.isActive);
+    document.getElementById("editToggle").classList.toggle("active", this.isActive);
+    document.getElementById("editToolbar").classList.toggle("active", this.isActive);
+    this.elements.forEach(element => element.setAttribute("contenteditable", String(this.isActive)));
+  }
+
+  save() {
+    const content = this.elements.map(element => element.innerHTML);
+    localStorage.setItem(this.storageKey, JSON.stringify(content));
+  }
+
+  restore() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(this.storageKey));
+      if (Array.isArray(saved)) saved.forEach((html, index) => {
+        if (this.elements[index] && typeof html === "string") this.elements[index].innerHTML = html;
+      });
+    } catch (_) { /* Ignore malformed local-only draft data. */ }
+  }
+
+  download() {
+    this.save();
+    const clone = document.documentElement.cloneNode(true);
+    clone.querySelectorAll("[contenteditable]").forEach(element => element.removeAttribute("contenteditable"));
+    const blob = new Blob(["<!doctype html>\n" + clone.outerHTML], { type: "text/html;charset=utf-8" });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = "mindstudio-storage-analysis-overview.html";
+    link.click();
+    URL.revokeObjectURL(link.href);
+  }
+}
+
+const presentation = new SlidePresentation();
+const editor = new InlineEditor();
+
+/* JS-driven hover behavior keeps the edit button reachable. */
+const hotzone = document.querySelector(".edit-hotzone");
+const editToggle = document.getElementById("editToggle");
+let hideTimeout = null;
+hotzone.addEventListener("mouseenter", () => {
+  clearTimeout(hideTimeout); editToggle.classList.add("show");
+});
+hotzone.addEventListener("mouseleave", () => {
+  hideTimeout = setTimeout(() => {
+    if (!editor.isActive) editToggle.classList.remove("show");
+  }, 400);
+});
+editToggle.addEventListener("mouseenter", () => clearTimeout(hideTimeout));
+editToggle.addEventListener("mouseleave", () => {
+  hideTimeout = setTimeout(() => {
+    if (!editor.isActive) editToggle.classList.remove("show");
+  }, 400);
+});
+editToggle.addEventListener("click", () => editor.toggleEditMode());
+hotzone.addEventListener("click", () => editor.toggleEditMode());
+document.getElementById("saveEdits").addEventListener("click", () => editor.save());
+document.getElementById("downloadHtml").addEventListener("click", () => editor.download());
+document.addEventListener("keydown", event => {
+  if ((event.key === "e" || event.key === "E") && event.target.getAttribute("contenteditable") !== "true") {
+    editor.toggleEditMode();
+  }
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
+    event.preventDefault(); editor.save();
+  }
+});
+
+</script>
+</body>
+</html>

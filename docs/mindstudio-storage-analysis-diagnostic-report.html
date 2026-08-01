@@ -1,0 +1,471 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="generator" content="mindstudio-storage-analysis/render_io_report.py">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:">
+  <title>存储与 NPU 供数诊断报告</title>
+  <style>
+    /* === THEME: OFFLINE TERMINAL REPORT === */
+    :root {
+      --bg: #07100d;
+      --surface: #0b1712;
+      --surface-2: #0e1d17;
+      --surface-3: #13251d;
+      --line: #234337;
+      --line-strong: #356652;
+      --ink: #edf8f1;
+      --muted: #9ab8aa;
+      --dim: #668577;
+      --mint: #61e0b2;
+      --acid: #c7ff33;
+      --cyan: #5dd8ff;
+      --yellow: #ffd166;
+      --orange: #ff9e64;
+      --red: #ff6b78;
+      --radius: 14px;
+      --shadow: 0 18px 60px rgba(0, 0, 0, .24);
+      --sans: "Noto Sans CJK SC", "Source Han Sans SC", "Microsoft YaHei", sans-serif;
+      --mono: "JetBrains Mono", "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+    }
+
+    /* === BASE AND PAGE ATMOSPHERE === */
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      min-width: 320px;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 82% 8%, rgba(97, 224, 178, .10), transparent 27rem),
+        radial-gradient(circle at 4% 36%, rgba(199, 255, 51, .05), transparent 24rem),
+        linear-gradient(rgba(97, 224, 178, .035) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(97, 224, 178, .035) 1px, transparent 1px),
+        var(--bg);
+      background-size: auto, auto, 52px 52px, 52px 52px, auto;
+      font-family: var(--sans);
+      line-height: 1.55;
+    }
+    a { color: inherit; }
+    code, .mono { font-family: var(--mono); }
+    .shell { width: min(1440px, calc(100% - 40px)); margin: 0 auto; }
+
+    /* === STICKY REPORT NAVIGATION === */
+    .report-nav {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      border-bottom: 1px solid rgba(53, 102, 82, .78);
+      background: rgba(7, 16, 13, .90);
+      backdrop-filter: blur(18px);
+    }
+    .nav-inner {
+      min-height: 58px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 24px;
+    }
+    .brand { display: flex; align-items: center; gap: 12px; font: 700 13px var(--mono); letter-spacing: .08em; color: var(--mint); }
+    .brand-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--acid); box-shadow: 0 0 18px rgba(199, 255, 51, .72); }
+    .nav-links { display: flex; align-items: center; gap: 8px; overflow-x: auto; scrollbar-width: none; }
+    .nav-links::-webkit-scrollbar { display: none; }
+    .nav-links a { flex: none; padding: 8px 11px; border: 1px solid transparent; border-radius: 8px; color: var(--muted); font-size: 13px; text-decoration: none; }
+    .nav-links a:hover, .nav-links a:focus-visible { color: var(--acid); border-color: var(--line); outline: none; }
+
+    /* === HERO AND DIAGNOSIS SNAPSHOT === */
+    .hero { padding: 76px 0 34px; }
+    .eyebrow { margin-bottom: 14px; color: var(--acid); font: 700 13px var(--mono); letter-spacing: .13em; text-transform: uppercase; }
+    h1 { max-width: 1050px; margin: 0; font-size: clamp(40px, 6vw, 82px); line-height: 1.06; letter-spacing: -.045em; }
+    .hero-summary { max-width: 1000px; margin: 24px 0 0; color: var(--muted); font-size: clamp(18px, 2vw, 25px); }
+    .hero-meta { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 28px; }
+    .meta-chip { padding: 8px 12px; border: 1px solid var(--line); border-radius: 999px; background: rgba(11, 23, 18, .72); color: var(--muted); font: 600 13px var(--mono); }
+    .meta-chip strong { color: var(--ink); }
+    .hero-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin-top: 42px; }
+    .metric-card { min-height: 132px; padding: 20px; border: 1px solid var(--line); border-radius: var(--radius); background: linear-gradient(145deg, rgba(14, 29, 23, .94), rgba(8, 18, 14, .92)); box-shadow: var(--shadow); }
+    .metric-label { color: var(--dim); font: 600 12px var(--mono); letter-spacing: .08em; }
+    .metric-value { margin-top: 13px; color: var(--ink); font-size: 29px; font-weight: 800; line-height: 1.15; word-break: break-word; }
+    .metric-foot { margin-top: 10px; color: var(--muted); font-size: 13px; }
+
+    /* === REPORT SECTIONS === */
+    .report-section { padding: 46px 0 10px; scroll-margin-top: 70px; }
+    .section-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; margin-bottom: 20px; }
+    .section-title-wrap { display: flex; gap: 14px; }
+    .section-icon { width: 42px; height: 42px; display: grid; place-items: center; flex: none; border: 1px solid var(--line-strong); border-radius: 11px; background: rgba(14, 29, 23, .9); color: var(--mint); }
+    .section-icon svg { width: 22px; height: 22px; }
+    h2 { margin: 0; font-size: clamp(27px, 3vw, 40px); line-height: 1.15; letter-spacing: -.025em; }
+    .section-subtitle { max-width: 900px; margin: 8px 0 0; color: var(--muted); font-size: 16px; }
+    .panel { border: 1px solid var(--line); border-radius: var(--radius); background: rgba(11, 23, 18, .92); box-shadow: var(--shadow); }
+    .panel-body { padding: 22px; }
+    .empty { padding: 28px; border: 1px dashed var(--line-strong); border-radius: var(--radius); color: var(--muted); background: rgba(8, 18, 14, .55); }
+
+    /* === PIPELINE AND ARTIFACT STATUS === */
+    .pipeline { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; }
+    .pipeline-card { position: relative; min-height: 150px; padding: 18px; border: 1px solid var(--line); border-radius: 12px; background: rgba(8, 18, 14, .86); }
+    .pipeline-card::after { content: "→"; position: absolute; top: 55px; right: -12px; z-index: 2; color: var(--acid); font: 700 18px var(--mono); }
+    .pipeline-card:last-child::after { display: none; }
+    .pipeline-step { color: var(--mint); font: 700 11px var(--mono); letter-spacing: .08em; }
+    .pipeline-card h3 { margin: 14px 0 8px; font: 700 15px/1.35 var(--mono); word-break: break-word; }
+    .pipeline-card p { margin: 0; color: var(--muted); font-size: 13px; }
+    .pipeline-state { display: inline-flex; margin-top: 12px; padding: 4px 8px; border-radius: 999px; font: 700 11px var(--mono); }
+
+    /* === AGENT INTERPRETATION === */
+    .trust-split { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(300px, .8fr); gap: 16px; }
+    .agent-summary { white-space: pre-wrap; color: var(--ink); font-size: 18px; }
+    .trust-card { padding: 20px; border: 1px solid rgba(255, 209, 102, .42); border-radius: var(--radius); background: rgba(50, 39, 12, .28); }
+    .trust-card strong { color: var(--yellow); }
+    .trust-card p { margin: 10px 0 0; color: var(--muted); font-size: 14px; }
+    .recommendation-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 16px; }
+    .recommendation { padding: 18px; border: 1px solid var(--line); border-left: 4px solid var(--mint); border-radius: 10px; background: rgba(8, 18, 14, .86); }
+    .recommendation.priority-high { border-left-color: var(--red); }
+    .recommendation.priority-medium { border-left-color: var(--orange); }
+    .recommendation.priority-low { border-left-color: var(--cyan); }
+    .recommendation h3 { margin: 10px 0 7px; font-size: 18px; }
+    .recommendation p { margin: 0; color: var(--muted); font-size: 14px; white-space: pre-wrap; }
+
+    /* === FINDINGS === */
+    .finding-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+    .finding-card { overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius); background: rgba(11, 23, 18, .92); }
+    .finding-card.severity-high { border-color: rgba(255, 107, 120, .55); }
+    .finding-card.severity-medium { border-color: rgba(255, 158, 100, .48); }
+    .finding-head { display: flex; align-items: center; justify-content: space-between; gap: 15px; padding: 18px 20px; border-bottom: 1px solid var(--line); background: rgba(14, 29, 23, .82); }
+    .rule-title { display: flex; align-items: center; gap: 12px; }
+    .rule-id { color: var(--acid); font: 800 18px var(--mono); }
+    .rule-name { font-weight: 750; }
+    .badge-row { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
+    .badge { display: inline-flex; align-items: center; padding: 4px 8px; border: 1px solid var(--line); border-radius: 999px; font: 700 11px var(--mono); }
+    .finding-body { padding: 20px; }
+    .finding-summary { margin: 0; font-size: 17px; }
+    .finding-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 16px; }
+    .mini-block { padding: 14px; border-radius: 9px; background: rgba(19, 37, 29, .66); }
+    .mini-block h4 { margin: 0 0 8px; color: var(--dim); font: 700 11px var(--mono); letter-spacing: .08em; }
+    .mini-block ul { margin: 0; padding-left: 18px; color: var(--muted); font-size: 13px; }
+    .mini-block li + li { margin-top: 5px; }
+    .tag-list { display: flex; flex-wrap: wrap; gap: 6px; }
+    .data-tag { padding: 4px 7px; border: 1px solid var(--line); border-radius: 6px; color: var(--muted); background: rgba(7, 16, 13, .65); font: 600 11px var(--mono); word-break: break-all; }
+
+    /* === TABLES AND DATA BARS === */
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; min-width: 760px; }
+    th, td { padding: 13px 14px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { color: var(--dim); background: rgba(19, 37, 29, .62); font: 700 11px var(--mono); letter-spacing: .06em; }
+    td { color: var(--muted); font-size: 13px; }
+    td strong { color: var(--ink); }
+    tbody tr:hover { background: rgba(97, 224, 178, .035); }
+    .bar-track { width: 120px; height: 7px; overflow: hidden; border-radius: 999px; background: #172b22; }
+    .bar-fill { height: 100%; width: var(--bar-width); max-width: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--mint), var(--acid)); }
+    .data-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+    .data-grid > * { min-width: 0; }
+    .data-grid .wide { grid-column: 1 / -1; }
+    .panel-title { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 16px 20px; border-bottom: 1px solid var(--line); }
+    .panel-title h3 { margin: 0; font-size: 18px; }
+    .panel-title span { color: var(--dim); font: 600 11px var(--mono); }
+
+    /* === DISCOVERY, QUALITY, AND TRACEABILITY === */
+    .candidate-list { display: grid; gap: 12px; }
+    .candidate { padding: 18px; border: 1px solid var(--line); border-radius: 11px; background: rgba(8, 18, 14, .72); }
+    .candidate-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+    .candidate h3 { margin: 0; font: 700 17px var(--mono); }
+    .candidate p { margin: 9px 0 0; color: var(--muted); font-size: 13px; }
+    .path-list { display: grid; gap: 7px; margin-top: 13px; }
+    .path-item { display: flex; justify-content: space-between; gap: 16px; padding: 9px 11px; border-radius: 7px; background: rgba(19, 37, 29, .62); color: var(--muted); font-size: 12px; }
+    .provider-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+    .provider { padding: 14px; border: 1px solid var(--line); border-radius: 9px; background: rgba(8, 18, 14, .66); }
+    .provider-name { font: 700 12px var(--mono); word-break: break-word; }
+    .provider-note { margin-top: 7px; color: var(--dim); font-size: 12px; }
+    .artifact-list { display: grid; gap: 9px; }
+    .artifact { display: grid; grid-template-columns: 160px minmax(180px, 1fr) 110px; gap: 14px; padding: 13px 15px; border: 1px solid var(--line); border-radius: 9px; background: rgba(8, 18, 14, .66); }
+    .artifact code { color: var(--muted); font-size: 11px; word-break: break-all; }
+
+    /* === STATUS COLORS === */
+    .state-ok, .status-ok, .severity-info, .confidence-high { color: var(--mint); border-color: rgba(97, 224, 178, .38); background: rgba(97, 224, 178, .09); }
+    .state-skipped, .status-unsupported, .status-empty, .confidence-none { color: var(--dim); border-color: var(--line); background: rgba(102, 133, 119, .08); }
+    .state-review, .status-partial, .severity-low, .confidence-medium { color: var(--yellow); border-color: rgba(255, 209, 102, .38); background: rgba(255, 209, 102, .08); }
+    .status-missing, .status-permission_denied, .status-command_failed, .status-parse_failed, .severity-high { color: var(--red); border-color: rgba(255, 107, 120, .40); background: rgba(255, 107, 120, .08); }
+    .severity-medium, .confidence-low { color: var(--orange); border-color: rgba(255, 158, 100, .40); background: rgba(255, 158, 100, .08); }
+
+    /* === FOOTER, RESPONSIVE, AND PRINT === */
+    footer { margin-top: 58px; padding: 24px 0 54px; border-top: 1px solid var(--line); color: var(--dim); font-size: 13px; }
+    @media (max-width: 1060px) {
+      .hero-grid, .provider-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .pipeline { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .pipeline-card:nth-child(3)::after { display: none; }
+      .finding-grid, .trust-split, .data-grid { grid-template-columns: 1fr; }
+      .data-grid .wide { grid-column: auto; }
+    }
+    @media (max-width: 680px) {
+      .shell { width: min(100% - 24px, 1440px); }
+      .nav-inner { align-items: flex-start; flex-direction: column; gap: 6px; padding: 10px 0; }
+      .nav-links { width: 100%; }
+      .hero { padding-top: 44px; }
+      .hero-grid, .provider-grid, .pipeline, .recommendation-grid, .finding-columns { grid-template-columns: 1fr; }
+      .pipeline-card::after { display: none; }
+      .artifact { grid-template-columns: 1fr; }
+      .section-heading, .candidate-head { flex-direction: column; }
+      .metric-value { font-size: 24px; }
+    }
+    @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+    @media print {
+      :root { --bg: #fff; --surface: #fff; --surface-2: #fff; --surface-3: #f5f8f6; --line: #cfd9d3; --line-strong: #aabdb3; --ink: #132019; --muted: #40564b; --dim: #61766b; }
+      body { background: #fff; color: var(--ink); }
+      .report-nav { display: none; }
+      .hero { padding-top: 24px; }
+      .panel, .metric-card, .finding-card { box-shadow: none; break-inside: avoid; }
+      .report-section { break-before: auto; }
+      a { text-decoration: none; }
+    }
+  </style>
+</head>
+<body>
+  <nav class="report-nav" aria-label="报告章节">
+    <div class="shell nav-inner">
+      <div class="brand"><span class="brand-dot"></span>MINDSTUDIO / IO REPORT</div>
+      <div class="nav-links">
+        <a href="#overview">概览</a>
+        <a href="#agent">Agent 总结</a>
+        <a href="#findings">规则结论</a>
+        <a href="#metrics">关键指标</a>
+        <a href="#quality">证据质量</a>
+      </div>
+    </div>
+  </nav>
+  <main class="shell">
+      <section class="hero" id="overview">
+        <div class="eyebrow">STORAGE / HOST IO / NPU FEEDING</div>
+        <h1>存储与 NPU 供数诊断报告</h1><p class="hero-summary">发现 2 个高优先级问题：R100; R400</p>
+        <div class="hero-meta"><span class="meta-chip">主机 <strong>ascend-training-node-01</strong></span><span class="meta-chip">窗口 <strong>2026-07-31T08:00:00+00:00 → 2026-07-31T08:00:30+00:00</strong></span><span class="meta-chip">Schema <strong>1.4</strong></span></div>
+        <div class="hero-grid">
+          <article class="metric-card"><div class="metric-label">目标进程 / PID</div><div class="metric-value mono">100</div><div class="metric-foot">数据路径：/data/train</div></article>
+          <article class="metric-card"><div class="metric-label">高优先级问题</div><div class="metric-value">2</div><div class="metric-foot">共 6 条规则结论</div></article>
+          <article class="metric-card"><div class="metric-label">动态采集窗口</div><div class="metric-value">30.0 秒</div><div class="metric-foot">必须与 workload 活跃时间一致</div></article>
+          <article class="metric-card"><div class="metric-label">成功数据源</div><div class="metric-value">3 / 8</div><div class="metric-foot">缺失与失败会降低结论置信度</div></article>
+        </div>
+      </section>
+    <section class="report-section" id="pipeline">
+      <div class="section-heading">
+        <div class="section-title-wrap">
+          <div class="section-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 19V9m6 10V5m6 14v-7m4 7H2"/><path d="m3 7 6-4 6 5 6-5"/></svg></div>
+          <div><h2>数据是怎样变成报告的</h2><p class="section-subtitle">每个程序只负责一件事；可选产物未提供时，页面会明确标记，不会伪装成正常。</p></div>
+        </div>
+      </div>
+      <div class="pipeline"><article class="pipeline-card">
+              <div class="pipeline-step">01 / DISCOVER</div>
+              <h3>discover_io_target.py</h3><p>寻找 PID 和数据路径</p>
+              <span class="pipeline-state state-ok">已纳入报告</span>
+            </article><article class="pipeline-card">
+              <div class="pipeline-step">02 / COLLECT</div>
+              <h3>collect_io_snapshot.py</h3><p>采集 Host IO 事实</p>
+              <span class="pipeline-state state-ok">已纳入报告</span>
+            </article><article class="pipeline-card">
+              <div class="pipeline-step">03 / ANALYZE</div>
+              <h3>analyze_io_snapshot.py</h3><p>执行 R000—R500</p>
+              <span class="pipeline-state state-ok">已纳入报告</span>
+            </article><article class="pipeline-card">
+              <div class="pipeline-step">04 / AUXILIARY</div>
+              <h3>summarize_msprof.py</h3><p>摘要 NPU 侧线索</p>
+              <span class="pipeline-state state-ok">已纳入报告</span>
+            </article><article class="pipeline-card">
+              <div class="pipeline-step">05 / AGENT</div>
+              <h3>总结与建议</h3><p>解释规则结果</p>
+              <span class="pipeline-state state-ok">已纳入报告</span>
+            </article><article class="pipeline-card">
+              <div class="pipeline-step">06 / REPORT</div>
+              <h3>render_io_report.py</h3><p>生成本 HTML</p>
+              <span class="pipeline-state state-ok">已纳入报告</span>
+            </article></div>
+    </section>
+    <section class="report-section" id="target-discovery">
+      <div class="section-heading">
+        <div class="section-title-wrap">
+          <div class="section-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg></div>
+          <div><h2>本次分析目标</h2><p class="section-subtitle">这里展示自动发现程序找到的进程与路径候选；候选分数只用于选采集目标，不代表 IO 异常。</p></div>
+        </div>
+      </div>
+      <div class="panel" style="margin-bottom:14px"><div class="panel-body">
+      <div class="badge-row" style="justify-content:flex-start"><span class="badge severity-info">候选足够明确</span><span class="badge confidence-high">高置信度</span></div>
+      <p style="margin:14px 0 0">推荐 PID：<strong class="mono">100</strong> · 推荐路径：<strong class="mono">/data/train</strong></p>
+      <div class="tag-list" style="margin-top:12px"><span class="data-tag">训练进程候选较明确</span><span class="data-tag">数据路径有明确的命令行和打开文件证据</span></div>
+    </div></div><div class="candidate-list"><article class="candidate"><div class="candidate-head"><div><h3>PID 100 · python</h3><p class="mono">python train.py --data-dir /data/train</p></div><span class="badge confidence-medium">进程得分 95</span></div><div class="tag-list" style="margin-top:12px"><span class="data-tag">启动命令包含训练特征 train</span><span class="data-tag">启动命令明确包含数据集参数</span></div><div class="path-list"><div class="path-item"><code>/data/train</code><span>得分 100 · ext4</span></div></div></article></div>
+    </section>
+    <section class="report-section" id="agent">
+      <div class="section-heading">
+        <div class="section-title-wrap">
+          <div class="section-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3a6 6 0 0 0-6 6v2a4 4 0 0 0-2 3.5A3.5 3.5 0 0 0 7.5 18H9l3 3 3-3h1.5a3.5 3.5 0 0 0 3.5-3.5A4 4 0 0 0 18 11V9a6 6 0 0 0-6-6Z"/><path d="M9 11h.01M15 11h.01M9 15c1.7 1.2 4.3 1.2 6 0"/></svg></div>
+          <div><h2>Agent 总结与建议</h2><p class="section-subtitle">自然语言解释与规则事实分开展示；系统变更仍受 Skill 的确认和回滚门禁约束。</p></div>
+        </div>
+      </div>
+
+      <div class="trust-split">
+        <div class="panel"><div class="panel-body agent-summary">本次窗口内，sda 出现持续 IO 压力，同时 PID 100 和 PID 101 都在活跃读取同一后端设备。当前可以确认 Host 侧存在本地存储压力和进程争抢，但没有正式 NPU 时间线，因此不能断言它已经导致 NPU 空闲。</div></div>
+        <aside class="trust-card"><strong>解释层，不是新证据</strong><p>这一部分由 Agent 根据 Findings 组织。确定性事实仍以 R000—R500 和证据字段为准。</p><div class="mini-block" style="margin-top:14px"><h4>AGENT 标注的限制</h4><ul><li>当前样例没有正式 profiler 时间线。</li><li>规则建议只用于辅助决策，不会自动修改服务器。</li></ul></div></aside>
+      </div>
+      <div class="recommendation-grid"><article class="recommendation priority-high">
+              <div class="badge-row" style="justify-content:flex-start">
+                <span class="badge severity-high">HIGH</span>
+                <span class="badge severity-medium">执行前必须确认</span><span class="data-tag">R100</span><span class="data-tag">R400</span>
+              </div>
+              <h3>先做单任务与多任务对照</h3><p>保持数据和 batch 设置不变，分别运行单实例和双实例，比较 step time、磁盘等待和队列。如果双实例明显恶化，可进一步确认 IO 干扰。</p>
+            </article><article class="recommendation priority-medium">
+              <div class="badge-row" style="justify-content:flex-start">
+                <span class="badge severity-medium">MEDIUM</span>
+                <span class="badge severity-info">只读或无需系统变更</span><span class="data-tag">R500</span>
+              </div>
+              <h3>补采同一窗口的 NPU 时间线</h3><p>在同一 workload 活跃窗口采集正式 profiler 时间线，用来判断存储压力是否和 NPU 等待真实重合。</p>
+            </article></div>
+    </section>
+    <section class="report-section" id="findings">
+      <div class="section-heading">
+        <div class="section-title-wrap">
+          <div class="section-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 3h14v18H5z"/><path d="M8 7h8M8 11h8M8 15h5"/><path d="m15 18 2 2 4-5"/></svg></div>
+          <div><h2>R000—R500 确定性结论</h2><p class="section-subtitle">相同的 Snapshot 应得到相同的规则结果。先看严重度与置信度，再看证据和缺失项。</p></div>
+        </div>
+      </div>
+      <div class="finding-grid"><article class="finding-card severity-info">
+              <header class="finding-head">
+                <div class="rule-title"><span class="rule-id">R000</span><span class="rule-name">证据是否完整</span></div>
+                <div class="badge-row"><span class="badge severity-info">信息</span><span class="badge confidence-high">高置信度</span></div>
+              </header>
+              <div class="finding-body">
+                <p class="finding-summary">缺失数据源 4 个：block_devices, df, memory, nfs；部分/空数据源 1 个：mounts_provider: empty。相关根因桶置信度降低。</p>
+                <div class="finding-columns">
+                  <div class="mini-block"><h4>证据字段</h4><div class="tag-list"><span class="data-tag">availability.missing</span><span class="data-tag">availability.partial</span><span class="data-tag">availability.errors</span></div></div>
+                  <div class="mini-block"><h4>缺失证据</h4><ul><li>没有列出缺失证据</li></ul></div>
+                  <div class="mini-block" style="grid-column:1 / -1"><h4>规则建议的下一步检查</h4><ul><li>没有额外检查建议</li></ul></div>
+                </div>
+              </div>
+            </article><article class="finding-card severity-high">
+              <header class="finding-head">
+                <div class="rule-title"><span class="rule-id">R100</span><span class="rule-name">本地存储是否承压</span></div>
+                <div class="badge-row"><span class="badge severity-high">高优先级</span><span class="badge confidence-high">高置信度</span></div>
+              </header>
+              <div class="finding-body">
+                <p class="finding-summary">检测到 1 个设备持续 IO 饱和（bandwidth 型，窗口持续高 util + 队列积压）：sda util_mean=99.0%</p>
+                <div class="finding-columns">
+                  <div class="mini-block"><h4>证据字段</h4><div class="tag-list"><span class="data-tag">iostat.disks</span></div></div>
+                  <div class="mini-block"><h4>缺失证据</h4><ul><li>没有列出缺失证据</li></ul></div>
+                  <div class="mini-block" style="grid-column:1 / -1"><h4>规则建议的下一步检查</h4><ul><li>对照设备规格带宽/IOPS，确认是否接近上限</li><li>做本地缓存/预取对照实验，观察 util 是否下降</li></ul></div>
+                </div>
+              </div>
+            </article><article class="finding-card severity-info">
+              <header class="finding-head">
+                <div class="rule-title"><span class="rule-id">R200</span><span class="rule-name">NFS 是否异常</span></div>
+                <div class="badge-row"><span class="badge severity-info">信息</span><span class="badge confidence-none">尚无置信度</span></div>
+              </header>
+              <div class="finding-body">
+                <p class="finding-summary">挂载列表采集为空，无法确认当前 workload 未使用网络存储。</p>
+                <div class="finding-columns">
+                  <div class="mini-block"><h4>证据字段</h4><div class="tag-list"><span class="data-tag">mounts_provider.status</span></div></div>
+                  <div class="mini-block"><h4>缺失证据</h4><ul><li>非空且与 Snapshot 同窗的 mounts_provider/mounts 列表</li></ul></div>
+                  <div class="mini-block" style="grid-column:1 / -1"><h4>规则建议的下一步检查</h4><ul><li>采集 /proc/self/mountstats 的 per-mount RTT/execute/retrans（NFS）</li><li>做本地盘 vs 网络挂载的同负载对照实验</li></ul></div>
+                </div>
+              </div>
+            </article><article class="finding-card severity-info">
+              <header class="finding-head">
+                <div class="rule-title"><span class="rule-id">R300</span><span class="rule-name">远程文件与小文件访问</span></div>
+                <div class="badge-row"><span class="badge severity-info">信息</span><span class="badge confidence-low">低置信度</span></div>
+              </header>
+              <div class="finding-body">
+                <p class="finding-summary">缺少远程文件访问/元数据开销的直接证据（元数据 op 延迟、syscall 频率、cache 命中）。</p>
+                <div class="finding-columns">
+                  <div class="mini-block"><h4>证据字段</h4><div class="tag-list"><span class="data-tag">暂无直接证据字段</span></div></div>
+                  <div class="mini-block"><h4>缺失证据</h4><ul><li>nfs.mount_metrics 的 GETATTR/LOOKUP/READDIR 窗内延迟</li><li>openat/stat/getdents syscall 频率或延迟</li><li>page cache 命中率或第二次访问延迟对照</li></ul></div>
+                  <div class="mini-block" style="grid-column:1 / -1"><h4>规则建议的下一步检查</h4><ul><li>统计数据集文件数量与平均文件大小</li><li>第二次访问是否变快（判断 cache 命中）</li><li>strace 抽样 openat/stat/getdents 频率（需确认，开销较高）</li></ul></div>
+                </div>
+              </div>
+            </article><article class="finding-card severity-high">
+              <header class="finding-head">
+                <div class="rule-title"><span class="rule-id">R400</span><span class="rule-name">多个进程是否争抢 IO</span></div>
+                <div class="badge-row"><span class="badge severity-high">高优先级</span><span class="badge confidence-high">高置信度</span></div>
+              </header>
+              <div class="finding-body">
+                <p class="finding-summary">检测到 1 个设备被多个进程同时、活跃地争抢数据 IO（每 PID 均含同窗映射+数据路径+活跃 IO 且设备饱和）：sda&lt;-[100, 101]</p>
+                <div class="finding-columns">
+                  <div class="mini-block"><h4>证据字段</h4><div class="tag-list"><span class="data-tag">process_io_map.mappings</span><span class="data-tag">pidstat.processes</span><span class="data-tag">R100.saturated_devices</span></div></div>
+                  <div class="mini-block"><h4>缺失证据</h4><ul><li>没有列出缺失证据</li></ul></div>
+                  <div class="mini-block" style="grid-column:1 / -1"><h4>规则建议的下一步检查</h4><ul><li>提供 --pid 或 --path，建立 rank/worker → PID → 设备映射</li><li>做单卡 vs 多卡对照，观察加卡后是否变慢</li><li>每 rank 用独立 shard，观察争抢是否消失</li></ul></div>
+                </div>
+              </div>
+            </article><article class="finding-card severity-info">
+              <header class="finding-head">
+                <div class="rule-title"><span class="rule-id">R500</span><span class="rule-name">存储问题是否影响 NPU</span></div>
+                <div class="badge-row"><span class="badge severity-info">信息</span><span class="badge confidence-none">尚无置信度</span></div>
+              </header>
+              <div class="finding-body">
+                <p class="finding-summary">Host IO 压力链成立（根因：R100, R400），但缺少 profiler 数据，无法验证设备侧传导链，置信度降低。</p>
+                <div class="finding-columns">
+                  <div class="mini-block"><h4>证据字段</h4><div class="tag-list"><span class="data-tag">暂无直接证据字段</span></div></div>
+                  <div class="mini-block"><h4>缺失证据</h4><ul><li>profile.device_free_percent</li><li>profile.dataloader_wait</li><li>profile.step_idle_ratio</li><li>profile.conduction_evidence</li></ul></div>
+                  <div class="mini-block" style="grid-column:1 / -1"><h4>规则建议的下一步检查</h4><ul><li>采集 profiler 的 device Free/GPU idle 比例与 step 空泡段</li><li>做对照实验：本地缓存/降低 IO 并发，观察空泡是否同步下降</li></ul></div>
+                </div>
+              </div>
+            </article></div>
+    </section>
+    <section class="report-section" id="metrics">
+      <div class="section-heading">
+        <div class="section-title-wrap">
+          <div class="section-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 12 17 7M7 16h10"/></svg></div>
+          <div><h2>服务器关键指标</h2><p class="section-subtitle">把 Snapshot 中最常用的本地盘、NFS 和进程 IO 指标转换成表格与数据条。</p></div>
+        </div>
+      </div>
+      <div class="data-grid"><div class="panel wide"><div class="panel-title"><h3>本地磁盘</h3><span>IOSTAT / R100</span></div><div class="table-wrap"><table>
+      <thead><tr><th>设备</th><th>忙碌程度</th><th>读取 / 写入 MiB/s</th><th>总 IOPS</th><th>等待</th><th>队列</th><th>样本</th></tr></thead><tbody><tr>
+              <td><strong class="mono">sda</strong><br>ssd</td>
+              <td><strong>99.0%</strong><div class="bar-track"><div class="bar-fill" style="--bar-width:99.00%"></div></div></td>
+              <td>200.00 / 0.00</td>
+              <td>200.0</td>
+              <td>30.00 ms</td>
+              <td>4.00</td>
+              <td>5</td>
+            </tr></tbody>
+    </table></div></div><div class="panel"><div class="panel-title"><h3>NFS 网络存储</h3><span>MOUNTSTATS / R200—R300</span></div><div class="table-wrap"><table>
+      <thead><tr><th>挂载</th><th>类型</th><th>操作数</th><th>RTT</th><th>完成耗时</th><th>重传</th><th>严重超时</th></tr></thead><tbody><tr><td colspan="7">本次没有可展示的 NFS 窗口指标。</td></tr></tbody>
+    </table></div></div><div class="panel"><div class="panel-title"><h3>进程 IO</h3><span>PIDSTAT / 5 REPORTS</span></div><div class="table-wrap"><table>
+      <thead><tr><th>PID</th><th>程序</th><th>读取</th><th>写入</th><th>活跃样本</th></tr></thead><tbody><tr>
+              <td><strong class="mono">100</strong></td>
+              <td>python train.py</td>
+              <td>2,048.0 KiB/s</td>
+              <td>0.0 KiB/s</td>
+              <td>5 / 5</td>
+            </tr><tr>
+              <td><strong class="mono">101</strong></td>
+              <td>pt_data_worker</td>
+              <td>2,048.0 KiB/s</td>
+              <td>0.0 KiB/s</td>
+              <td>5 / 5</td>
+            </tr></tbody>
+    </table></div></div></div>
+    </section>
+    <section class="report-section" id="npu-context">
+      <div class="section-heading">
+        <div class="section-title-wrap">
+          <div class="section-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 12 17 7M7 16h10"/></svg></div>
+          <div><h2>NPU 侧辅助线索</h2><p class="section-subtitle">summarize_msprof.py 只提供侧面线索；它的输出不能直接替代 R500 所需的正式设备时间线。</p></div>
+        </div>
+      </div>
+      <div class="data-grid">
+      <div class="metric-card"><div class="metric-label">TASK GAP PROXY / 非正式空闲证据</div><div class="metric-value">12.50%</div><div class="metric-foot">设备 0 · 120 个任务</div></div>
+      <div class="mini-block"><h4>使用边界</h4><ul><li>op_summary 是汇总数据，不包含设备时间线</li><li>导出任务之间的间隔不等于 NPU 空闲时间</li><li>不能把逐任务 cycle ratio 直接合成为整个任务的 MTE2 比例</li></ul></div>
+      <div class="panel wide"><div class="panel-title"><h3>MTE2 侧面指标</h3><span>不能单独证明 Host IO 导致 NPU 空闲</span></div><div class="table-wrap"><table><thead><tr><th>列</th><th>样本</th><th>最小</th><th>平均</th><th>最大</th></tr></thead><tbody><tr><td class="mono">MTE2 Ratio</td><td>120</td><td>0.0300</td><td>0.1200</td><td>0.3100</td></tr></tbody></table></div></div>
+    </div>
+    </section>
+    <section class="report-section" id="quality">
+      <div class="section-heading">
+        <div class="section-title-wrap">
+          <div class="section-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m12 3 8 4v5c0 5-3.4 8-8 9-4.6-1-8-4-8-9V7l8-4Z"/><path d="m8.5 12 2.2 2.2 4.8-5"/></svg></div>
+          <div><h2>证据质量与产物追溯</h2><p class="section-subtitle">没有采到不等于没有问题。这里展示每个 provider 的真实状态，以及输入文件的校验摘要。</p></div>
+        </div>
+      </div>
+      <div class="provider-grid"><article class="provider"><div class="provider-name">mounts_provider</div><div style="margin-top:9px"><span class="badge status-empty">结果为空</span></div><div class="provider-note">mounts</div></article><article class="provider"><div class="provider-name">block_devices</div><div style="margin-top:9px"><span class="badge status-missing">缺失</span></div><div class="provider-note">diskstats</div></article><article class="provider"><div class="provider-name">iostat</div><div style="margin-top:9px"><span class="badge status-ok">已采集</span></div><div class="provider-note">iostat</div></article><article class="provider"><div class="provider-name">pidstat</div><div style="margin-top:9px"><span class="badge status-ok">已采集</span></div><div class="provider-note">pidstat</div></article><article class="provider"><div class="provider-name">process_io_map</div><div style="margin-top:9px"><span class="badge status-ok">已采集</span></div><div class="provider-note">process_io_map</div></article><article class="provider"><div class="provider-name">memory</div><div style="margin-top:9px"><span class="badge status-missing">缺失</span></div><div class="provider-note">meminfo</div></article><article class="provider"><div class="provider-name">df</div><div style="margin-top:9px"><span class="badge status-missing">缺失</span></div><div class="provider-note">df</div></article><article class="provider"><div class="provider-name">nfs</div><div style="margin-top:9px"><span class="badge status-missing">缺失</span></div><div class="provider-note">mountstats</div></article></div>
+      <div class="data-grid" style="margin-top:14px">
+        <div class="mini-block"><h4>完全缺失</h4><ul><li>block_devices</li><li>df</li><li>memory</li><li>nfs</li></ul></div>
+        <div class="mini-block"><h4>部分可用 / 不支持</h4><ul><li>mounts_provider: empty</li></ul></div>
+        <div class="mini-block wide"><h4>采集错误</h4><ul><li>无</li></ul></div>
+        <div class="panel wide"><div class="panel-title"><h3>输入产物追溯</h3><span>文件名 / 大小 / SHA-256</span></div><div class="panel-body artifact-list"><div class="artifact"><strong>IO Snapshot</strong><code>report-snapshot.json<br>sha256: 579e554e7c58d68fee18ecf9daf724d30a059df93f859e9b3285eabe866815f4</code><span>3.4 KiB</span></div><div class="artifact"><strong>规则 Findings</strong><code>msagent-report-findings.json<br>sha256: 661f64697bdc26da19a80287e74d0e4dd70d2b9ea7cfc835e9d08b1f26de4533</code><span>6.5 KiB</span></div><div class="artifact"><strong>目标候选</strong><code>report-targets.json<br>sha256: 72277211e406990a9512606cfb7f009698950c234119bc54d6ccdd7fdc199916</code><span>1.2 KiB</span></div><div class="artifact"><strong>msprof 辅助摘要</strong><code>report-msprof.json<br>sha256: 72635a9e8cfa8d3e4a1f278c8e787b504fdcb168da61158db3df87345a6471fd</code><span>0.9 KiB</span></div><div class="artifact"><strong>Agent 总结</strong><code>report-agent.json<br>sha256: e500dbe0c4db6fe221a5899738250e015db0618b6ba3e954dffc6346d9da6200</code><span>1.1 KiB</span></div></div></div>
+      </div>
+    </section></main>
+  <footer>
+    <div class="shell">生成时间：2026-07-31T08:58:31.557692+00:00 · 本文件完全自包含，可离线打开。报告可能包含主机名、PID 和数据路径，对外分享前请确认脱敏范围。</div>
+  </footer>
+</body>
+</html>

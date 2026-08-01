@@ -1,0 +1,39 @@
+{
+  "schema_version": "1.0",
+  "status": "ok",
+  "recommendation": {
+    "pid": 100,
+    "path": "/data/train",
+    "confidence": "high",
+    "requires_confirmation": false,
+    "reasons": [
+      "训练进程候选较明确",
+      "数据路径有明确的命令行和打开文件证据"
+    ],
+    "preview_command": "python3 scripts/collect_io_snapshot.py --duration 30 --pid 100 --path /data/train --out io_snapshot.json"
+  },
+  "process_candidates": [
+    {
+      "pid": 100,
+      "ppid": 1,
+      "score": 95,
+      "reasons": ["启动命令包含训练特征 train", "启动命令明确包含数据集参数"],
+      "command": "python",
+      "cmdline": "python train.py --data-dir /data/train",
+      "cwd": "/workspace/model",
+      "path_candidates": [
+        {
+          "path": "/data/train",
+          "role": "dataset",
+          "score": 100,
+          "reasons": ["启动命令通过 --data-dir 明确指定"],
+          "sources": ["cmdline_explicit_option", "open_files"],
+          "sample_files": ["/data/train/shard-0.bin"],
+          "mount": {"mount_point": "/data", "fstype": "ext4", "source": "/dev/sda"}
+        }
+      ],
+      "warnings": []
+    }
+  ],
+  "warnings": []
+}

@@ -1,6 +1,6 @@
 ---
 name: mindstudio-storage-analysis
-description: "Diagnose storage and Host IO bottlenecks on Ascend NPU training or inference nodes. Use for slow DataLoader/dataset/checkpoint reads, suspected data-starvation idle gaps, iostat/await abnormalities, NFS RTT/execute/retrans issues, small-file metadata overhead, or rank/worker IO contention. Do not use when the established primary issue is CPU decode with idle disks, allreduce communication, operator-internal mte2, or Host launch/scheduling while data loading is normal; route those to the named specialist skill. Uses deterministic same-window evidence and safe, reversible optimization previews."
+description: "Diagnose storage and Host IO bottlenecks on Ascend NPU training or inference nodes, discover unknown workload PID/data paths, and produce terminal and offline HTML reports. Use for slow DataLoader/dataset/checkpoint reads, data-starvation idle gaps, iostat/await abnormalities, NFS RTT/execute/retrans issues, small-file overhead, rank/worker IO contention, single-device workloads that become slow with multiple ranks specifically during data loading, or requests to remount, drop caches, or change block-device readahead that require the safety gate. Do not use when the established primary issue is CPU decode with idle disks (mindstudio-cpu-binding), allreduce communication (ascend-communication-analysis), operator-internal mte2 (ascend-computation-analysis), or Host launch/scheduling while data loading is normal (ascend-schedule-analysis). Uses bounded read-only discovery, deterministic same-window evidence, and reversible optimization previews."
 ---
 
 # MindStudio Storage Analysis
@@ -76,11 +76,13 @@ Multi-rank, DataLoader, or NPU-idle wording alone is not proof of a storage issu
 ## Workflow
 
 1. Classify the scenario: DataLoader/dataset reads, checkpoint loading, NFS/remote access, small files, rank/worker contention, or suspected device starvation.
-2. Collect a read-only IO Snapshot for the affected workload window. Pass `--pid` for bounded R400 PID-to-device mapping; add `--path` to bind the affected data scope. A path alone never triggers a host-wide `/proc` scan.
-3. Run the deterministic analyzer. Do not replace analyzer output with invented thresholds.
-4. Inspect R100-R400 as the Host IO chain.
-5. Inspect R500 separately. Require profiler-side idle plus confirmed Host IO before attributing device idle to storage.
-6. Report confidence, evidence fields, missing evidence, safe recommendations, rollback, and before/after validation.
+2. Resolve the target PID and data/checkpoint path. Reuse explicit values from the user. If either is unknown, run the bounded read-only target discoverer before asking the user to locate it manually.
+3. Read `recommendation` and the ranked candidates. When `requires_confirmation=true`, present the top candidates with their reasons and ask one concise confirmation question; never silently choose between similar candidates. Target discovery never starts collection.
+4. Collect a read-only IO Snapshot for the affected workload window. Pass `--pid` for bounded R400 PID-to-device mapping; add `--path` to bind the affected data scope. A path alone never triggers a host-wide `/proc` scan.
+5. Run the deterministic analyzer. Do not replace analyzer output with invented thresholds.
+6. Inspect R100-R400 as the Host IO chain, then inspect R500 separately. Require profiler-side idle plus confirmed Host IO before attributing device idle to storage.
+7. Report confidence, evidence fields, missing evidence, safe recommendations, rollback, and before/after validation in the terminal.
+8. When the filesystem is writable, create `agent_report.json`, run the deterministic HTML renderer, and return the path to `io_report.html` as an additional artifact. The HTML report does not replace the terminal answer.
 
 ## Prerequisites
 
@@ -102,7 +104,26 @@ python3 -m pip install -r requirements.txt
 
 Treat `iostat` and `pidstat` from `sysstat` as optional but strongly preferred. The collector falls back to a two-endpoint `/proc/diskstats` delta when they are unavailable. That fallback can identify a candidate window but cannot certify either pressure or health above medium confidence.
 
-## Collect and analyze
+## Discover, collect, and analyze
+
+Discover the target when the PID or data path is unknown:
+
+```bash
+python3 scripts/discover_io_target.py -o target_candidates.json
+python3 scripts/discover_io_target.py --process-pattern torchrun --path-hint /data -o target_candidates.json
+python3 scripts/discover_io_target.py --pid 12345 -o target_candidates.json
+```
+
+`--process-pattern` is a case-insensitive plain-text hint, not a regular expression. `--path-hint` must be an absolute path from information the user supplied; do not invent a path. The discoverer is bounded by process, file-descriptor, and time limits. It reads process command lines, working-directory links, open-file links, and mount metadata from `/proc`; it does not read `/proc/<pid>/environ`, dataset contents, configuration contents, or checkpoint contents.
+
+Use the output as follows:
+
+- `process_candidates`: ranked candidate workload processes, with evidence for each score.
+- `process_candidates[].path_candidates`: ranked data/checkpoint path candidates for each process, with command-line, open-file, working-directory, and mount evidence.
+- `recommendation.preview_command`: the exact read-only collector command to run when a process is sufficiently clear. Execute it only when `requires_confirmation=false`; otherwise show candidates and confirm the target first.
+- `status=partial` means the bounded scan hit a permission, count, or time limit. Report that limitation; do not reinterpret missing candidates as proof that no workload exists.
+
+An explicit user PID or exact path hint takes priority. Without explicit values, a process must score at least 50 and lead the next candidate by at least 15 points; a path must score at least 70 and lead by at least 15. Otherwise the Agent must ask for confirmation. A working directory alone is weak evidence and never proves it is the dataset path.
 
 Collect a snapshot:
 
@@ -182,6 +203,28 @@ python3 scripts/summarize_msprof.py /path/to/msprof-output --device 0 -o op_summ
 
 `op_summary` 不是设备 timeline。摘要器只输出 `op_summary_task_gap_proxy_percent` 和逐列 MTE2 ratio 统计等明确标注的 proxy；它不会输出可认证 R500 的 `device_free_percent`、聚合 `mte2_ratio`、`profile_window` 或 `conduction_evidence`，其结果不能直接作为 `--profile` 输入。
 
+## Generate the HTML report
+
+After explaining the deterministic findings, write the same plain-language summary and recommendations to `agent_report.json` using the contract in `references/html_report.md`. Then generate one self-contained report:
+
+For this explanation step, extract only `rule_id`, `severity`, `confidence`, `summary`, `missing_evidence`, and the small device-topology fields needed to interpret a finding. Do not page through the full Snapshot or repeatedly reread large JSON artifacts. When a logical device and one of its `backing_devices` both appear in findings, describe them as layers of the same storage path; do not count them as independent disks or independent root causes.
+
+```bash
+python3 scripts/render_io_report.py \
+  --snapshot io_snapshot.json \
+  --findings findings.json \
+  --targets target_candidates.json \
+  --msprof op_summary_diagnostics.json \
+  --agent-report agent_report.json \
+  --output io_report.html
+```
+
+`--targets` and `--msprof` are optional; omit them when those earlier steps were not run. `--agent-report` is also optional for deterministic-only use, but include it during an Agent-led diagnosis so the HTML contains the user-facing summary, limitations, and recommendations.
+
+Do not hand-write or edit report HTML. The renderer must receive the original artifacts, escapes Agent-controlled text, and only presents existing evidence; it does not rerun rules or execute recommendations. A text-only model can use this flow because it produces structured JSON and invokes a fixed renderer. Image understanding and screenshot inspection are not runtime requirements.
+
+Return both the concise terminal diagnosis and the absolute HTML path. Warn before external sharing that the report may contain hostnames, PIDs, command summaries, and data paths.
+
 ## Interpret rules
 
 - R000: report missing, unsupported, failed, stale, or malformed evidence.
@@ -236,9 +279,13 @@ python3 evals/run_npu_runtime_eval.py --elements 1048576 --iterations 100 --repo
 - `references/io_snapshot_schema.md`: snapshot schema and provider contract.
 - `references/collection_guide.md`: collection protocol and command guidance.
 - `references/failure_handbook.md`: root-cause evidence and remediation mapping.
+- `references/html_report.md`: HTML input contract, Agent report schema, output content, and text-only-model flow.
+- `scripts/discover_io_target.py`: bounded read-only workload PID and data-path discovery; produces ranked candidates, not a diagnosis.
 - `scripts/collect_io_snapshot.py`: read-only collector.
 - `scripts/analyze_io_snapshot.py`: deterministic analyzer.
 - `scripts/summarize_msprof.py`: non-certifying `msprof op_summary` diagnostic summarizer.
+- `scripts/render_io_report.py`: deterministic, offline HTML report renderer.
+- `assets/io_report_template.html`: self-contained report template used only by the renderer.
 - `evals/cases.yaml` and `evals/run_eval.py`: deterministic behavior cases and runner.
 - `evals/run_live_eval.py`: read-only Linux, provider, NPU, NFS, and R500 environment validation.
 - `evals/run_npu_runtime_eval.py`: explicit, bounded ACLNN real-device smoke; operator-invoked only.

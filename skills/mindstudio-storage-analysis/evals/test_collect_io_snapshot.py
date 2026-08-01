@@ -756,6 +756,38 @@ sda 1 10
         self.assertEqual(aggregated["util_sample_count"], 2)
         self.assertEqual(aggregated["util_percent"], 95.0)
 
+    def test_iostat_clamps_small_util_rounding_overshoot(self):
+        aggregated = c._aggregate_iostat_samples(
+            [
+                {"util_percent": 100.1, "avgqu_sz": 2.0, "r_per_s": 100.0},
+                {"util_percent": 100.0, "avgqu_sz": 2.0, "r_per_s": 100.0},
+            ]
+        )
+        self.assertEqual(aggregated["util_percent"], 100.0)
+        self.assertEqual(aggregated["util_max"], 100.0)
+
+    def test_iostat_drops_isolated_impossible_util_in_long_window(self):
+        samples = [
+            {"util_percent": 0.2, "avgqu_sz": 0.0} for _ in range(199)
+        ] + [{"util_percent": 488.5, "avgqu_sz": 0.0}]
+        aggregated = c._aggregate_iostat_samples(samples)
+        self.assertEqual(aggregated["util_invalid_sample_count"], 1)
+        self.assertEqual(aggregated["util_sample_count"], 199)
+        self.assertEqual(aggregated["util_max"], 0.2)
+        self.assertEqual(aggregated["avgqu_sz_with_util_sample_count"], 199)
+
+    def test_iostat_preserves_frequent_invalid_util_for_analyzer_rejection(self):
+        aggregated = c._aggregate_iostat_samples(
+            [
+                {"util_percent": 10.0},
+                {"util_percent": 10.0},
+                {"util_percent": 10.0},
+                {"util_percent": 488.5},
+            ]
+        )
+        self.assertNotIn("util_invalid_sample_count", aggregated)
+        self.assertEqual(aggregated["util_max"], 488.5)
+
     def test_sparse_iostat_supporting_fields_record_sample_counts(self):
         aggregated = c._aggregate_iostat_samples(
             [

@@ -145,6 +145,18 @@ rootcause_cases:
     must_validation_errors: ["nfs: invalid or outside"]
     rubric: "零重叠 provider 不得成为 high 置信度当前窗口证据"
 
+  - id: rc-r200-cifs-handoff
+    fixture_file: "fixtures/rc-r200-cifs-handoff.json"
+    description: "识别 CIFS 挂载，但没有 CIFS 专用性能指标"
+    fixture: "mounts 含 cifs；NFS provider 不适用"
+    expected_rule: R200
+    expected_confidence: low
+    expected_severity: medium
+    must_conclude: ["不能确认网络存储瓶颈"]
+    must_evidence: ["mounts.fstype"]
+    forbidden: ["性能异常"]
+    rubric: "非 NFS 网络存储只能识别并转交专用工具，不得伪造性能结论"
+
   # --- R300 元数据/小文件 ---
   - id: rc-r300-small-file
     fixture_file: "fixtures/rc-r300-small-file.json"
@@ -293,6 +305,16 @@ missing_data_cases:
     must_have_rules: [R000]
     must_not_have_positive_rules: [R200]
     rubric: "nfs provider 标 unsupported，不输出'正常'，R200 不命中"
+
+  - id: miss-process-map-permission
+    fixture_file: "fixtures/miss-process-map-permission.json"
+    description: "目标进程 /proc/fd 因权限不足无法读取"
+    fixture: "process_io_map.status=permission_denied"
+    expected_rule: none
+    must_not_have_positive_rules: [R400]
+    must_missing_evidence: ["process_io_map"]
+    allowed_validation_errors: ["process_io_map: permission_denied"]
+    rubric: "权限不足必须降级为证据缺口，不得把未观察到映射当作没有 IO 干扰"
 
   - id: miss-huge-metric
     fixture_file: "fixtures/miss-huge-metric.json"

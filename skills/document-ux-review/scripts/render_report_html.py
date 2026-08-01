@@ -262,7 +262,9 @@ def render_simple_markdown(text: str) -> str:
             continue
         if all(re.match(r"\d+\.\s+", line.strip()) for line in lines):
             items = "".join(
-                f"<li>{inline_format(re.sub(r'^\d+\.\s+', '', line.strip()))}</li>"
+                "<li>{}</li>".format(
+                    inline_format(re.sub(r"^\d+\.\s+", "", line.strip()))
+                )
                 for line in lines
             )
             rendered.append(f"<ol>{items}</ol>")

@@ -69,6 +69,7 @@
 | `memory` | ProviderResult | /proc/meminfo provider |
 | `df` | ProviderResult | df（空间+inode）provider |
 | `nfs` | ProviderResult | NFS provider |
+| `glusterfs` | ProviderResult | GlusterFS FUSE provider; target mount identity and target process-tree IO delta |
 | `readahead` | dict[str,int] | `/dev/<dev>` → readahead（512B sector） |
 | `scheduler` | dict[str,str] | `/dev/<dev>` → IO 调度器 |
 | `availability` | Availability | 数据可用性汇总 |
@@ -139,6 +140,7 @@
 | `df` | `{filesystems: [{filesystem, size, used, avail, use_percent, mounted_on, inodes?, iuse_percent?}]}` |
 | `memory` | `{memtotal, memavailable, cached, buffers, dirty, ...}`（/proc/meminfo 小写键） |
 | `nfs` | `{mount_metrics: [{mount_point, source, fstype, windowing, ops, transmissions, retrans, retrans_ratio, major_timeouts, sum_rtt_ms, sum_execute_ms, avg_rtt_ms, avg_execute_ms, metadata_ops, avg_metadata_rtt_ms, avg_metadata_execute_ms, data_ops, data_transmissions, data_retrans, data_retrans_ratio, avg_data_rtt_ms, avg_data_execute_ms, bytes_read_delta, bytes_write_delta}], client_calls_delta?, client_retrans_delta?, nfsiostat_raw?}`（**窗内两次采样差值**；解析真实 `per-op statistics` 段，保留全量/元数据/数据三类 per-op 子集） |
+| `glusterfs` | `{mount_metrics: [{mount_point, source, fstype: "fuse.glusterfs", windowing: "delta", target_scoped, process_io: {rchar, read_bytes, syscr, stable_pid_count, avg_rchar_per_syscall}, client_latency_available: false}], target_scope, client_latency_unavailable_reason}`。`process_io` 是稳定目标进程树的 `/proc/<pid>/io` 差值，不是 per-mount RTT、元数据延迟或重试计数；它只能支持活动/小读取候选，不能单独产生 R200/R300 high。 |
 | `process_io_map` | `{mappings: [{pid, boot_id, pid_starttime_ticks, role, path, mount_point, source, fstype, canonical_device, major_minor, backing_devices, device_resolution, path_relevant, first_seen, last_seen, observation_count}], observation_samples, pid_count, pid_tree: [{pid, boot_id, pid_starttime_ticks, role, parent_pid?}], partial}`；仅由 `--pid` 采集，`--path` 仅收窄范围；`descendant` 必须携带能沿链回到显式目标 PID 的直接 `parent_pid`，否则 analyzer 不把它纳入目标作用域。进程树最多 256 项，每 PID 最多保留 256 条 FD 映射。指定 path 时在最多 1 秒扫描预算内优先保留相关 FD；数量或时间截断均写入 `partial`。`observation_samples` 是正 JSON 整数，`observation_count` 是不大于它的非负 JSON 整数。 |
 
 **NFS metric 身份绑定契约**：`nfs.parsed.mount_metrics` 的每条指标必须携带 `source` + `mount_point` + `fstype`（collector 从当前 mount 的 device/fstype 填充）。analyzer 按 `(source, mount_point, fstype)` 三元组与当前 `mounts` 强绑定后才允许 R200/R300 的 high 结论——`source` 缺失只做路径弱匹配，不得 high；`nfs`/`nfs4` 视为兼容身份。这避免同路径不同 source（挂载替换/namespace 混入）的旧 metric 被拼接为因果链。

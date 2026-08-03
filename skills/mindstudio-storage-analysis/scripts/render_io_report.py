@@ -9,6 +9,7 @@ import html
 import json
 import math
 import os
+import re
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -30,13 +31,14 @@ _PROVIDERS = (
     "process_io_map",
     "memory",
     "df",
+    "glusterfs",
     "nfs",
 )
 
 _RULE_NAMES = {
     "R000": "证据是否完整",
     "R100": "本地存储是否承压",
-    "R200": "NFS 是否异常",
+    "R200": "网络存储是否异常",
     "R300": "远程文件与小文件访问",
     "R400": "多个进程是否争抢 IO",
     "R500": "存储问题是否影响 NPU",
@@ -339,14 +341,46 @@ def _render_pipeline(
     return '<div class="pipeline">' + "".join(cards) + "</div>"
 
 
+def _structure_agent_summary(summary: str) -> dict[str, Any]:
+    """Split the recommended Chinese summary shape without changing its wording."""
+    result: dict[str, Any] = {
+        "context": "",
+        "conclusion": summary,
+        "evidence": [],
+        "synthesis": "",
+    }
+    conclusion_match = re.search(r"结论[：:]\s*", summary)
+    evidence_match = re.search(r"证据[：:]\s*", summary)
+    if not conclusion_match or not evidence_match or evidence_match.start() <= conclusion_match.end():
+        return result
+
+    result["context"] = summary[: conclusion_match.start()].strip()
+    result["conclusion"] = summary[
+        conclusion_match.end() : evidence_match.start()
+    ].strip()
+    evidence_text = summary[evidence_match.end() :].strip()
+    numbered = re.split(r"(?:^|[；;]\s*)\d+[)）]\s*", evidence_text)
+    evidence = [item.strip(" ；;") for item in numbered if item.strip(" ；;")]
+    if evidence:
+        last = evidence[-1]
+        synthesis_match = re.search(r"(?:因此|综合判断[：:])", last)
+        if synthesis_match and synthesis_match.start() > 0:
+            evidence[-1] = last[: synthesis_match.start()].strip(" ；;")
+            result["synthesis"] = last[synthesis_match.start() :].strip()
+        result["evidence"] = [item for item in evidence if item]
+    return result
+
+
 def _render_agent(agent: dict[str, Any] | None) -> str:
     if agent is None:
         return '<div class="empty">本次没有提供 <code>agent_report.json</code>。页面仍完整展示确定性规则结论；Agent 可在分析后补充自然语言总结与建议并重新生成。</div>'
-    summary = agent.get("summary") or "Agent 未填写总结。"
+    summary = str(agent.get("summary") or "Agent 未填写总结。")
+    structured = _structure_agent_summary(summary)
     limitations = agent.get("limitations") or []
     limit_html = _bullet_list(limitations, "Agent 未补充额外限制")
     recommendations = []
-    for item in agent.get("recommendations", []):
+    priority_labels = {"high": "P0", "medium": "P1", "low": "P2", "info": "参考"}
+    for index, item in enumerate(agent.get("recommendations", []), start=1):
         rule_ids = item.get("source_rule_ids") or []
         tags = _tags(rule_ids, "未绑定规则")
         confirmation = (
@@ -356,23 +390,51 @@ def _render_agent(agent: dict[str, Any] | None) -> str:
         )
         recommendations.append(
             f"""<article class="recommendation priority-{_h(item['priority'])}">
-              <div class="badge-row" style="justify-content:flex-start">
-                <span class="badge severity-{_h(item['priority'])}">{_h(item['priority'].upper())}</span>
-                {confirmation}{tags}
+              <div class="recommendation-index"><span>{index:02d}</span><strong>{_h(priority_labels[item['priority']])}</strong></div>
+              <div class="recommendation-content">
+                <h3>{_h(item['title'])}</h3><p>{_h(item['detail'])}</p>
+                <div class="badge-row recommendation-meta">
+                  {confirmation}{tags}
+                </div>
               </div>
-              <h3>{_h(item['title'])}</h3><p>{_h(item['detail'])}</p>
             </article>"""
         )
     recommendation_html = (
-        '<div class="recommendation-grid">' + "".join(recommendations) + "</div>"
+        '<div class="recommendation-list">' + "".join(recommendations) + "</div>"
         if recommendations
         else '<div class="empty" style="margin-top:16px">Agent 没有补充额外建议；可直接查看每条规则自带的下一步检查。</div>'
     )
+    context_html = (
+        f'<p class="agent-context">{_h(structured["context"])}</p>'
+        if structured["context"]
+        else ""
+    )
+    evidence_html = ""
+    if structured["evidence"]:
+        evidence_html = (
+            '<div class="agent-evidence"><h4>判断依据</h4><ol>'
+            + "".join(f'<li>{_h(item)}</li>' for item in structured["evidence"])
+            + "</ol></div>"
+        )
+    synthesis_html = (
+        f'<div class="agent-synthesis"><strong>综合判断</strong><p>{_h(structured["synthesis"])}</p></div>'
+        if structured["synthesis"]
+        else ""
+    )
     return f"""
-      <div class="trust-split">
-        <div class="panel"><div class="panel-body agent-summary">{_h(summary)}</div></div>
-        <aside class="trust-card"><strong>解释层，不是新证据</strong><p>这一部分由 Agent 根据 Findings 组织。确定性事实仍以 R000—R500 和证据字段为准。</p><div class="mini-block" style="margin-top:14px"><h4>AGENT 标注的限制</h4>{limit_html}</div></aside>
+      <div class="agent-focus">
+        <article class="agent-reading">
+          <div class="agent-kicker">核心结论</div>
+          <h3>{_h(structured['conclusion'])}</h3>
+          {context_html}{evidence_html}{synthesis_html}
+        </article>
+        <aside class="agent-boundaries">
+          <div class="boundary-label">证据边界</div>
+          <p>这一部分由 Agent 根据 Findings 组织，确定性事实以 R000—R500 为准。</p>
+          <h4>当前限制</h4>{limit_html}
+        </aside>
       </div>
+      <div class="recommendation-heading"><div><span>下一步</span><h3>建议与验证动作</h3></div><p>按优先级阅读，涉及采集或系统变化的动作仍需确认。</p></div>
       {recommendation_html}"""
 
 
@@ -464,6 +526,39 @@ def _render_nfs_table(snapshot: dict[str, Any]) -> str:
     </table></div></div>"""
 
 
+def _render_glusterfs_table(snapshot: dict[str, Any]) -> str:
+    parsed = _dict(_dict(snapshot.get("glusterfs")).get("parsed"))
+    rows = []
+    for metric_value in _list(parsed.get("mount_metrics"))[:_MAX_TABLE_ROWS]:
+        metric = _dict(metric_value)
+        process_io = _dict(metric.get("process_io"))
+        rchar = _number(process_io.get("rchar"))
+        read_bytes = _number(process_io.get("read_bytes"))
+        syscr = _number(process_io.get("syscr"))
+        avg_read = _number(process_io.get("avg_rchar_per_syscall"))
+        if avg_read is None and rchar is not None and syscr and syscr > 0:
+            avg_read = rchar / syscr
+        rows.append(
+            f"""<tr>
+              <td><strong>{_h(metric.get('mount_point'))}</strong><br><span class="mono">{_h(metric.get('source'))}</span></td>
+              <td>{'是' if metric.get('target_scoped') is True else '否'}</td>
+              <td>{_h(process_io.get('stable_pid_count'))}</td>
+              <td>{_fmt((rchar or 0) / (1024 * 1024), 2, ' MiB')}</td>
+              <td>{_fmt((read_bytes or 0) / (1024 * 1024), 2, ' MiB')}</td>
+              <td>{_fmt(syscr, 0)}</td>
+              <td>{_fmt(avg_read, 1, ' B')}</td>
+              <td>{'可用' if metric.get('client_latency_available') is True else '未提供'}</td>
+            </tr>"""
+        )
+    body = (
+        "".join(rows)
+        or '<tr><td colspan="8">本次没有可展示的 GlusterFS 目标活动指标。</td></tr>'
+    )
+    return f"""<div class="panel wide"><div class="panel-title"><h3>GlusterFS FUSE 主网络存储</h3><span>目标进程树活动 / R200—R300</span></div><div class="table-wrap"><table>
+      <thead><tr><th>挂载</th><th>目标作用域</th><th>稳定 PID</th><th>逻辑读取</th><th>块层读取</th><th>读调用</th><th>平均每调用</th><th>客户端延迟</th></tr></thead><tbody>{body}</tbody>
+    </table></div><div class="panel-body"><p class="muted">进程 IO 只证明目标活动与小读取候选，不等同于 Gluster client/brick 延迟。</p></div></div>"""
+
+
 def _render_process_table(snapshot: dict[str, Any]) -> str:
     parsed = _dict(_dict(snapshot.get("pidstat")).get("parsed"))
     reports = parsed.get("reports")
@@ -514,36 +609,55 @@ def _render_targets(targets: dict[str, Any] | None) -> str:
         return '<div class="empty">目标由用户直接提供，或本次没有保存 target_candidates.json。</div>'
     recommendation = _dict(targets.get("recommendation"))
     confirmation = bool(recommendation.get("requires_confirmation", True))
-    state = "仍需用户确认" if confirmation else "候选足够明确"
-    header = f"""<div class="panel" style="margin-bottom:14px"><div class="panel-body">
-      <div class="badge-row" style="justify-content:flex-start"><span class="badge {'severity-medium' if confirmation else 'severity-info'}">{state}</span><span class="badge confidence-{_h(str(recommendation.get('confidence') or 'none'))}">{_h(_CONFIDENCE_LABELS.get(str(recommendation.get('confidence')), recommendation.get('confidence')))}</span></div>
-      <p style="margin:14px 0 0">推荐 PID：<strong class="mono">{_h(recommendation.get('pid'))}</strong> · 推荐路径：<strong class="mono">{_h(recommendation.get('path'))}</strong></p>
-      <div class="tag-list" style="margin-top:12px">{_tags(recommendation.get('reasons'), '没有推荐原因')}</div>
-    </div></div>"""
-    candidates = []
-    for process_value in _list(targets.get("process_candidates"))[:10]:
-        process = _dict(process_value)
-        paths = []
-        for path_value in _list(process.get("path_candidates"))[:3]:
-            path = _dict(path_value)
-            mount = _dict(path.get("mount"))
-            mount_text = mount.get("fstype") or path.get("role") or "未知类型"
-            paths.append(
-                f'<div class="path-item"><code>{_h(path.get("path"))}</code><span>得分 {_h(path.get("score"))} · {_h(mount_text)}</span></div>'
-            )
-        candidates.append(
-            f"""<article class="candidate"><div class="candidate-head"><div><h3>PID {_h(process.get('pid'))} · {_h(process.get('command'))}</h3><p class="mono">{_h(process.get('cmdline'), limit=1200)}</p></div><span class="badge confidence-medium">进程得分 {_h(process.get('score'))}</span></div><div class="tag-list" style="margin-top:12px">{_tags(process.get('reasons'), '没有入选原因')}</div><div class="path-list">{''.join(paths) or '<div class="path-item">没有可信路径候选</div>'}</div></article>"""
-        )
-    return header + (
-        '<div class="candidate-list">' + "".join(candidates) + "</div>"
-        if candidates
-        else '<div class="empty">没有发现训练进程候选。</div>'
+    confidence = str(recommendation.get("confidence") or "none")
+    confidence_label = _CONFIDENCE_LABELS.get(confidence, confidence)
+    reasons = _tags(recommendation.get("reasons"), "没有推荐原因")
+    if confirmation:
+        return f"""<div class="panel"><div class="panel-body">
+          <div class="badge-row" style="justify-content:flex-start"><span class="badge severity-medium">等待用户确认训练目标</span><span class="badge confidence-{_h(confidence)}">{_h(confidence_label)}</span></div>
+          <p style="margin:14px 0 0">发现了得分接近或路径不明确的候选。采集前应由 Agent 在交互中请用户选择；最终报告不展开候选进程和分数。</p>
+          <div class="tag-list" style="margin-top:12px">{reasons}</div>
+        </div></div>"""
+
+    pid = recommendation.get("pid")
+    path = recommendation.get("path")
+    selected = next(
+        (
+            _dict(item)
+            for item in _list(targets.get("process_candidates"))
+            if _dict(item).get("pid") == pid
+        ),
+        {},
     )
+    selected_path = next(
+        (
+            _dict(item)
+            for item in _list(selected.get("path_candidates"))
+            if _dict(item).get("path") == path
+        ),
+        {},
+    )
+    mount = _dict(selected_path.get("mount"))
+    filesystem = mount.get("fstype") or "未知"
+    program = selected.get("command") or "未知程序"
+    cmdline = selected.get("cmdline")
+    command_html = (
+        f'<p class="mono" style="margin:12px 0 0">{_h(cmdline, limit=1200)}</p>'
+        if cmdline
+        else ""
+    )
+    return f"""<div class="panel"><div class="panel-body">
+      <div class="badge-row" style="justify-content:flex-start"><span class="badge severity-info">已确定分析目标</span><span class="badge confidence-{_h(confidence)}">{_h(confidence_label)}</span></div>
+      <h3 style="margin:14px 0 0">{_h(program)} · PID <span class="mono">{_h(pid)}</span></h3>
+      <p style="margin:10px 0 0">数据集路径：<strong class="mono">{_h(path)}</strong> · 文件系统：<strong>{_h(filesystem)}</strong></p>
+      {command_html}
+    </div></div>"""
 
 
 def _render_quality(snapshot: dict[str, Any], artifacts: list[dict[str, Any]]) -> str:
     provider_cards = []
-    for name in _PROVIDERS:
+    provider_names = _provider_names(snapshot)
+    for name in provider_names:
         provider = _dict(snapshot.get(name))
         status = str(provider.get("status") or "unknown")
         note = provider.get("error") or provider.get("stderr") or provider.get("source") or ""
@@ -564,6 +678,19 @@ def _render_quality(snapshot: dict[str, Any], artifacts: list[dict[str, Any]]) -
         <div class="mini-block wide"><h4>采集错误</h4>{_bullet_list(availability.get('errors'), '无')}</div>
         <div class="panel wide"><div class="panel-title"><h3>输入产物追溯</h3><span>文件名 / 大小 / SHA-256</span></div><div class="panel-body artifact-list">{''.join(artifact_rows)}</div></div>
       </div>"""
+
+
+def _provider_names(snapshot: dict[str, Any]) -> tuple[str, ...]:
+    schema_parts = str(snapshot.get("schema_version", "")).split(".")
+    glusterfs_contract = (
+        len(schema_parts) == 2
+        and schema_parts[0] == "1"
+        and schema_parts[1].isdigit()
+        and int(schema_parts[1]) >= 5
+    )
+    if "glusterfs" in snapshot or glusterfs_contract:
+        return _PROVIDERS
+    return tuple(name for name in _PROVIDERS if name != "glusterfs")
 
 
 def render_report(
@@ -587,8 +714,9 @@ def render_report(
         for item in finding_items
         if item.get("severity") == "high" and item.get("confidence") in {"high", "medium"}
     )
+    provider_names = _provider_names(snapshot)
     provider_ok = sum(
-        1 for name in _PROVIDERS if _dict(snapshot.get(name)).get("status") == "ok"
+        1 for name in provider_names if _dict(snapshot.get(name)).get("status") == "ok"
     )
     generated_at = datetime.now(timezone.utc).isoformat()
     summary = findings.get("summary") or "规则分析没有提供总摘要。"
@@ -602,31 +730,24 @@ def render_report(
           <article class="metric-card"><div class="metric-label">目标进程 / PID</div><div class="metric-value mono">{_h(target.get('pid'))}</div><div class="metric-foot">数据路径：{_h(target.get('path'))}</div></article>
           <article class="metric-card"><div class="metric-label">高优先级问题</div><div class="metric-value">{high_count}</div><div class="metric-foot">共 {len(finding_items)} 条规则结论</div></article>
           <article class="metric-card"><div class="metric-label">动态采集窗口</div><div class="metric-value">{_fmt(duration, 1, ' 秒')}</div><div class="metric-foot">必须与 workload 活跃时间一致</div></article>
-          <article class="metric-card"><div class="metric-label">成功数据源</div><div class="metric-value">{provider_ok} / {len(_PROVIDERS)}</div><div class="metric-foot">缺失与失败会降低结论置信度</div></article>
+          <article class="metric-card"><div class="metric-label">成功数据源</div><div class="metric-value">{provider_ok} / {len(provider_names)}</div><div class="metric-foot">缺失与失败会降低结论置信度</div></article>
         </div>
       </section>"""
 
     sections = [
         _section(
-            "pipeline",
-            "数据是怎样变成报告的",
-            "每个程序只负责一件事；可选产物未提供时，页面会明确标记，不会伪装成正常。",
-            "overview",
-            _render_pipeline(targets, msprof, agent),
+            "agent",
+            "Agent 总结与建议",
+            "先看核心结论，再核对判断依据、证据边界和下一步动作。",
+            "agent",
+            _render_agent(agent),
         ),
         _section(
             "target-discovery",
             "本次分析目标",
-            "这里展示自动发现程序找到的进程与路径候选；候选分数只用于选采集目标，不代表 IO 异常。",
+            "这里只展示最终选中的训练程序、数据集路径和必要运行信息；候选详情保留在机器可读产物中。",
             "target",
             _render_targets(targets),
-        ),
-        _section(
-            "agent",
-            "Agent 总结与建议",
-            "自然语言解释与规则事实分开展示；系统变更仍受 Skill 的确认和回滚门禁约束。",
-            "agent",
-            _render_agent(agent),
         ),
         _section(
             "findings",
@@ -638,9 +759,9 @@ def render_report(
         _section(
             "metrics",
             "服务器关键指标",
-            "把 Snapshot 中最常用的本地盘、NFS 和进程 IO 指标转换成表格与数据条。",
+            "把 Snapshot 中最常用的本地盘、GlusterFS、辅助 NFS 和进程 IO 指标转换成表格与数据条。",
             "metrics",
-            f'<div class="data-grid">{_render_disk_table(snapshot)}{_render_nfs_table(snapshot)}{_render_process_table(snapshot)}</div>',
+            f'<div class="data-grid">{_render_disk_table(snapshot)}{_render_glusterfs_table(snapshot) if "glusterfs" in provider_names else ""}{_render_nfs_table(snapshot)}{_render_process_table(snapshot)}</div>',
         ),
         _section(
             "npu-context",
@@ -655,6 +776,13 @@ def render_report(
             "没有采到不等于没有问题。这里展示每个 provider 的真实状态，以及输入文件的校验摘要。",
             "quality",
             _render_quality(snapshot, artifacts),
+        ),
+        _section(
+            "pipeline",
+            "数据是怎样变成报告的",
+            "每个程序只负责一件事；可选产物未提供时，页面会明确标记，不会伪装成正常。",
+            "overview",
+            _render_pipeline(targets, msprof, agent),
         ),
     ]
     report_body = hero + "".join(sections) + "</main>"

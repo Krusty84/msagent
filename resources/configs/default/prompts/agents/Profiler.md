@@ -7,7 +7,7 @@
 1. **数据驱动**：仅基于真实 Profiling 数据下结论，禁止编造指标、瓶颈、收益或原因
 2. **证据闭环**：每条关键结论必须附证据，证据不足时写"待验证：<缺失数据>"
 3. **工具优先**：需要数据时必须调用工具，禁止空谈。处理 ascend_pt 数据优先调用 msprof-mcp MCP 工具；仅当其无法读取时，才可退化为文件读取并说明失败原因
-4. **路径规范**：用户未提供明确性能数据路径时，必须先向用户索取，禁止使用 ls/glob/递归搜索；如果用户路径下没有 ascend_pt 或找不到路径，立即中断并让用户确认
+4. **路径规范（仅离线 Profiling 分析）**：只有在用户要求分析已经采集的 `*_ascend_pt` / `*_ascend_ms` 数据时，未提供明确性能数据路径才先向用户索取，禁止使用 ls/glob/递归搜索；路径无效时立即中断并让用户确认。此规则不适用于在线故障诊断，也不得阻止 Skill 自带的有界、只读目标发现流程
 5. **结论简洁**：回答优先给结论与证据，避免空泛描述
 6. **搜索止损**：使用 `web_search` 失败一次后，本轮任务禁止再次调用 `web_search`；必须基于当前信息继续分析，或直接说明信息不足与限制
 
@@ -24,6 +24,7 @@
 | `ascend-profiler-db-explorer` | Ascend PyTorch Profiler / `msprof` DB 的 SQL 查询、schema/table 查询、算子耗时、通信耗时、下发与调度分析                              |
 | `document-ux-review` | 按仓库 README、安装文档或 quick start 实操走查，评估文档可用性与新手上手体验                                                              |
 | `ascend-msprof-analyze-cli` | 基于采集得到的 profiling 数据进行统计、比对和诊断，帮助定位计算、通信、调度及集群场景下的性能瓶颈。profiling 数据一般是`*_ascend_pt` 或 `*_ascend_ms` 目录或它们的父目录 |
+| `mindstudio-storage-analysis` | 在线训练/推理的 NPU 利用率低、DataLoader 等待、数据集或 checkpoint 读取慢、GlusterFS FUSE/NFS/本地盘 IO 异常；即使用户没有提供 PID、数据路径或 Profiling 路径，也先按 Skill 执行有界只读目标发现 |
 
 `msprof` 工具类咨询优先使用 `github-raw-fetch` 读取 `https://github.com/kali20gakki/msprof/blob/master/agent_router.md`
 
@@ -52,6 +53,10 @@
 - 若首选方案受阻，优先尝试低风险替代路径并说明原因
 
 ## Profiling 数据分析流程
+
+### 在线存储诊断分流
+
+当用户描述正在运行的 workload 出现 NPU 利用率低，并要求判断是否由存储导致时，先调用 `mindstudio-storage-analysis`。没有 PID、数据路径或 `ascend_pt` 不是中断条件：必须先运行该 Skill 的有界只读目标发现器，按其 `requires_confirmation` 决定自动继续或向用户确认。R100-R400 Host IO 诊断不依赖 Profiling 数据；Profiling 仅用于可选的 R500 设备侧传导验证，不得在目标发现和 Host IO 采集前索取。
 
 ### 步骤 1：判断数据类型
 

@@ -59,7 +59,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # --- 契约常量 ------------------------------------------------------------
 
-SCHEMA_VERSION = "1.4"  # major.minor；minor 只增可选字段，major 变更需分析器显式适配
+SCHEMA_VERSION = "1.5"  # major.minor；minor 只增可选字段，major 变更需分析器显式适配
 SUPPORTED_MAJOR = 1
 
 # Provider 状态：失败语义细分类，绝不只用布尔 available
@@ -211,6 +211,9 @@ class IoSnapshot(BaseModel):
     )
     df: ProviderResult = Field(default_factory=lambda: ProviderResult(source="df"))
     nfs: ProviderResult = Field(default_factory=lambda: ProviderResult(source="nfs"))
+    glusterfs: ProviderResult = Field(
+        default_factory=lambda: ProviderResult(source="glusterfs")
+    )
     readahead: dict[str, int] = Field(default_factory=dict)
     scheduler: dict[str, str] = Field(default_factory=dict)
     availability: Availability = Field(default_factory=Availability)
@@ -2526,6 +2529,225 @@ def collect_nfs(duration: float, pid: int | None = None) -> ProviderResult:
     )
 
 
+_PROC_IO_COUNTERS = (
+    "rchar",
+    "wchar",
+    "syscr",
+    "syscw",
+    "read_bytes",
+    "write_bytes",
+    "cancelled_write_bytes",
+)
+
+
+def _is_glusterfs_fuse(fstype: Any) -> bool:
+    """Return whether a mount is the supported GlusterFS FUSE client type."""
+    return str(fstype or "").lower() == "fuse.glusterfs"
+
+
+def _path_under_mount_collector(path: str, mount_point: str) -> bool:
+    """Boundary-safe path-to-mount check for target-scoped GlusterFS evidence."""
+    normalized_path = os.path.normpath(path)
+    normalized_mount = os.path.normpath(mount_point)
+    return normalized_path == normalized_mount or normalized_path.startswith(
+        normalized_mount.rstrip("/") + "/"
+    )
+
+
+def _read_proc_io_counters(pid: int) -> tuple[dict[str, int] | None, str]:
+    """Read the kernel's per-process IO counters without reading process environment/data."""
+    content, error, status = _read_file(f"/proc/{pid}/io")
+    if status != 0:
+        return None, error or f"/proc/{pid}/io status {status}"
+    counters: dict[str, int] = {}
+    for line in content.splitlines():
+        key, separator, value = line.partition(":")
+        if not separator or key not in _PROC_IO_COUNTERS:
+            continue
+        try:
+            parsed = int(value.strip())
+        except ValueError:
+            continue
+        if parsed >= 0:
+            counters[key] = parsed
+    return counters, ""
+
+
+def _sample_process_io_tree(pid: int | None) -> tuple[dict[int, dict[str, Any]], list[str]]:
+    """Sample one target process tree endpoint with stable PID identities."""
+    if pid is None:
+        return {}, []
+    if not os.path.isdir(f"/proc/{pid}"):
+        return {}, [f"pid {pid} is no longer visible in /proc"]
+    tree, truncated = _process_tree(pid)
+    errors: list[str] = []
+    if truncated:
+        errors.append(
+            f"process tree reached {_MAX_PROCESS_TREE_PIDS} PID limit; GlusterFS IO coverage is partial"
+        )
+    samples: dict[int, dict[str, Any]] = {}
+    for entry in tree:
+        process_id = entry.get("pid")
+        if not isinstance(process_id, int) or process_id <= 0:
+            continue
+        starttime = _pid_starttime_ticks(process_id)
+        counters, error = _read_proc_io_counters(process_id)
+        if counters is None:
+            errors.append(f"pid {process_id}: {error}")
+            continue
+        samples[process_id] = {
+            "pid_starttime_ticks": starttime,
+            "role": entry.get("role", "unknown"),
+            "counters": counters,
+        }
+    return samples, errors
+
+
+def _delta_process_io_tree(
+    before: dict[int, dict[str, Any]], after: dict[int, dict[str, Any]]
+) -> dict[str, Any]:
+    """Return deltas only for process identities stable across both endpoints."""
+    totals = {key: 0 for key in _PROC_IO_COUNTERS}
+    sampled_pids: list[int] = []
+    identity_changed: list[int] = []
+    for process_id, first in before.items():
+        second = after.get(process_id)
+        if not isinstance(second, dict):
+            continue
+        if first.get("pid_starttime_ticks") != second.get("pid_starttime_ticks"):
+            identity_changed.append(process_id)
+            continue
+        first_counters = first.get("counters") or {}
+        second_counters = second.get("counters") or {}
+        sampled_pids.append(process_id)
+        for key in _PROC_IO_COUNTERS:
+            try:
+                delta = int(second_counters.get(key, 0)) - int(first_counters.get(key, 0))
+            except (TypeError, ValueError):
+                continue
+            totals[key] += max(0, delta)
+    syscr = totals["syscr"]
+    totals.update(
+        {
+            "pids_sampled": sorted(sampled_pids),
+            "stable_pid_count": len(sampled_pids),
+            "identity_changed_pids": sorted(identity_changed),
+            "avg_rchar_per_syscall": round(totals["rchar"] / syscr, 3) if syscr else None,
+        }
+    )
+    return totals
+
+
+def collect_glusterfs(
+    duration: float, pid: int | None = None, path: str | None = None
+) -> ProviderResult:
+    """Collect target-scoped GlusterFS FUSE identity and process IO activity.
+
+    Ordinary ``fuse.glusterfs`` mounts do not expose NFS-style per-mount RTT or
+    metadata-latency counters to this runtime. Record only target mount identity
+    and stable target-process read/syscall deltas. Those deltas are activity or
+    small-read candidate evidence, not transport-latency evidence.
+    """
+    if pid is None and path is None:
+        return ProviderResult(
+            source="glusterfs",
+            status=STATUS_EMPTY,
+            error="target PID or path is required for target-scoped GlusterFS evidence",
+        )
+    started = _now_iso()
+    mounts_pr = collect_mounts(pid)
+    if mounts_pr.status not in (STATUS_OK, STATUS_EMPTY):
+        return ProviderResult(
+            source="glusterfs",
+            status=mounts_pr.status,
+            started_at=started,
+            ended_at=_now_iso(),
+            error=f"mount discovery failed: {mounts_pr.error or mounts_pr.status}",
+        )
+    all_mounts = mounts_pr.parsed if isinstance(mounts_pr.parsed, list) else []
+    gluster_mounts = [
+        mount
+        for mount in all_mounts
+        if isinstance(mount, dict) and _is_glusterfs_fuse(mount.get("fstype"))
+    ]
+    if not gluster_mounts:
+        return ProviderResult(
+            source="glusterfs",
+            status=STATUS_UNSUPPORTED,
+            started_at=started,
+            ended_at=_now_iso(),
+            error="no fuse.glusterfs mount found",
+        )
+
+    target_mounts = gluster_mounts
+    scope = "all_current_glusterfs_mounts"
+    if path:
+        matches = [
+            mount
+            for mount in gluster_mounts
+            if _path_under_mount_collector(path, str(mount.get("mount_point") or ""))
+        ]
+        if matches:
+            longest = max(
+                len(os.path.normpath(str(mount.get("mount_point") or "")))
+                for mount in matches
+            )
+            target_mounts = [
+                mount
+                for mount in matches
+                if len(os.path.normpath(str(mount.get("mount_point") or ""))) == longest
+            ]
+            scope = "target_path_glusterfs"
+        else:
+            target_mounts = []
+            scope = "target_path_non_glusterfs"
+
+    evidence_started = _now_iso()
+    first, first_errors = _sample_process_io_tree(pid)
+    time.sleep(max(0.1, duration))
+    second, second_errors = _sample_process_io_tree(pid)
+    evidence_ended = _now_iso()
+    process_io = _delta_process_io_tree(first, second) if pid is not None else None
+
+    metrics = [
+        {
+            "mount_point": mount.get("mount_point"),
+            "source": mount.get("device"),
+            "fstype": mount.get("fstype"),
+            "windowing": "delta",
+            "target_scoped": scope == "target_path_glusterfs",
+            "scope": scope,
+            "process_io": process_io,
+            "client_latency_available": False,
+        }
+        for mount in target_mounts
+    ]
+    errors = [*first_errors, *second_errors]
+    return ProviderResult(
+        source="glusterfs",
+        status=STATUS_OK if target_mounts else STATUS_EMPTY,
+        started_at=evidence_started,
+        ended_at=evidence_ended,
+        parsed={
+            "mount_metrics": metrics,
+            "target_pid": pid,
+            "target_path": path,
+            "target_scope": scope,
+            "client_latency_available": False,
+            "client_latency_unavailable_reason": (
+                "fuse.glusterfs does not expose NFS-style per-mount RTT/execute/retrans "
+                "counters in this runtime; supply Gluster client/brick statistics for transport attribution"
+            ),
+            "process_io_note": (
+                "process_io is a stable target-process-tree delta and is not a per-mount "
+                "or per-file latency metric"
+            ),
+            "partial": errors,
+        },
+        error="; ".join(errors),
+    )
+
+
 # per-op 段起始标记：内核实际输出 "per-op statistics"（无冒号），部分文档/旧版用 "per-op:"。
 # 内核会输出多种 per-op 段标记，解析器必须全部兼容。
 _PEROP_SECTION_MARKERS = ("per-op", "per-op:")
@@ -2945,12 +3167,13 @@ def collect(duration: float, pid: int | None, path: str | None) -> IoSnapshot:
 
     # 并发采集动态指标（同窗）
     dynamic: dict[str, Any] = {}
-    with ThreadPoolExecutor(max_workers=6) as ex:
+    with ThreadPoolExecutor(max_workers=7) as ex:
         futures = {
             ex.submit(collect_block_devices, duration): "block",
             ex.submit(collect_iostat, duration): "iostat",
             ex.submit(collect_pidstat, duration): "pidstat",
             ex.submit(collect_nfs, duration, pid): "nfs",
+            ex.submit(collect_glusterfs, duration, pid, path): "glusterfs",
             ex.submit(collect_process_io_map, pid, path, duration): "pmap",
             ex.submit(collect_mounts, pid): "mounts",
         }
@@ -2964,6 +3187,7 @@ def collect(duration: float, pid: int | None, path: str | None) -> IoSnapshot:
                     "iostat": "iostat",
                     "pidstat": "pidstat",
                     "nfs": "nfs",
+                    "glusterfs": "glusterfs",
                     "pmap": "process_io_map",
                     "mounts": "mounts",
                 }[key]
@@ -2982,15 +3206,14 @@ def collect(duration: float, pid: int | None, path: str | None) -> IoSnapshot:
 
     # 静态/快速采集（顺序，开销小）。单个 provider 的实现异常也必须隔离。
     def _safe_provider(source: str, func, *args) -> ProviderResult:
-        started_at = _now_iso()
         try:
             result = func(*args)
         except Exception as exc:  # noqa: BLE001
             return ProviderResult(
                 source=source,
                 status=STATUS_CMD_FAILED,
-                started_at=started_at,
-                ended_at=_now_iso(),
+                started_at=window_end,
+                ended_at=window_end,
                 error=f"collector crashed: {type(exc).__name__}: {exc}",
             )
         if isinstance(result, ProviderResult):
@@ -2998,8 +3221,8 @@ def collect(duration: float, pid: int | None, path: str | None) -> IoSnapshot:
         return ProviderResult(
             source=source,
             status=STATUS_CMD_FAILED,
-            started_at=started_at,
-            ended_at=_now_iso(),
+            started_at=window_end,
+            ended_at=window_end,
             error="collector returned an invalid result",
         )
 
@@ -3037,6 +3260,9 @@ def collect(duration: float, pid: int | None, path: str | None) -> IoSnapshot:
     iostat_pr = dynamic.get("iostat", ProviderResult(source="iostat"))
     pidstat_pr = dynamic.get("pidstat", ProviderResult(source="pidstat"))
     nfs_pr = dynamic.get("nfs", ProviderResult(source="nfs"))
+    glusterfs_pr = dynamic.get(
+        "glusterfs", ProviderResult(source="glusterfs")
+    )
     pmap_pr = dynamic.get("pmap", ProviderResult(source="process_io_map"))
     mounts_pr = dynamic.get("mounts")
     if not isinstance(mounts_pr, ProviderResult):
@@ -3056,6 +3282,7 @@ def collect(duration: float, pid: int | None, path: str | None) -> IoSnapshot:
         "memory": mem_pr,
         "df": df_pr,
         "nfs": nfs_pr,
+        "glusterfs": glusterfs_pr,
         "mounts": mounts_pr,
     }
     for name, pr in all_providers.items():
@@ -3119,6 +3346,9 @@ def collect(duration: float, pid: int | None, path: str | None) -> IoSnapshot:
         nfs=nfs_pr
         if isinstance(nfs_pr, ProviderResult)
         else ProviderResult(source="nfs", status=STATUS_CMD_FAILED),
+        glusterfs=glusterfs_pr
+        if isinstance(glusterfs_pr, ProviderResult)
+        else ProviderResult(source="glusterfs", status=STATUS_CMD_FAILED),
         readahead=readahead,
         scheduler=scheduler,
         availability=availability,

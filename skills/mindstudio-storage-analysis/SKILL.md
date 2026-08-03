@@ -1,6 +1,6 @@
 ---
 name: mindstudio-storage-analysis
-description: "Diagnose storage and Host IO bottlenecks on Ascend NPU training or inference nodes, discover unknown workload PID/data paths, and produce terminal and offline HTML reports. Use for slow DataLoader/dataset/checkpoint reads, data-starvation idle gaps, iostat/await abnormalities, NFS RTT/execute/retrans issues, small-file overhead, rank/worker IO contention, single-device workloads that become slow with multiple ranks specifically during data loading, or requests to remount, drop caches, or change block-device readahead that require the safety gate. Do not use when the established primary issue is CPU decode with idle disks (mindstudio-cpu-binding), allreduce communication (ascend-communication-analysis), operator-internal mte2 (ascend-computation-analysis), or Host launch/scheduling while data loading is normal (ascend-schedule-analysis). Uses bounded read-only discovery, deterministic same-window evidence, and reversible optimization previews."
+description: "Diagnose storage and Host IO bottlenecks on Ascend NPU workloads, discover unknown workload PID/data paths, and produce terminal and HTML reports. Use when an active workload has low NPU utilization and the user asks whether storage is responsible, even without a PID, data path, or profiler path. Also use for slow DataLoader/dataset/checkpoint reads, data-starvation idle gaps, iostat/await abnormalities, GlusterFS FUSE or NFS issues, small-file overhead, rank/worker IO contention, or storage-tuning requests that require the safety gate. Do not use when evidence already establishes CPU decode with idle disks, allreduce communication, operator-internal mte2, or Host scheduling while data loading is normal. Uses bounded read-only discovery and deterministic same-window evidence."
 ---
 
 # MindStudio Storage Analysis
@@ -16,8 +16,9 @@ Only conclude from observed evidence. Identify missing evidence explicitly, cap 
 - Bind dynamic evidence to the target PID/path and a valid collection window.
 - Prefer the deterministic collector and analyzer over ad hoc threshold reasoning.
 - Treat provider failures as partial evidence, never as a healthy result.
+- For a live low-utilization diagnosis, run bounded target discovery before asking for a PID, data path, or profiler path. R100-R400 collection does not require `ascend_pt`/`ascend_ms`; profiler data is optional R500 evidence and must not block Host IO diagnosis.
 
-Cover local disk throughput, IOPS, queue and await pressure; NFS latency and retransmission; remote metadata and small-file overhead; multi-process IO interference; and Host-IO-to-device-idle triage. Automated network-storage confirmation is currently NFS-only; other network filesystems are identified and handed off without an R200/R300 high conclusion.
+Cover local disk throughput, IOPS, queue and await pressure; GlusterFS FUSE activity and small-read candidates; NFS latency and retransmission; remote metadata and small-file overhead; multi-process IO interference; and Host-IO-to-device-idle triage. GlusterFS FUSE is the primary network-storage path: the collector binds the target path and target process tree in the same window. Its process counters are candidate evidence only, so client/brick latency and retry data are still required for a high-confidence transport conclusion. NFS remains a supported auxiliary path with mountstats RTT/execute/retrans evidence.
 
 ### Non-negotiable safety gate
 
@@ -56,8 +57,9 @@ readahead 首答
 
 Respect these boundaries:
 
-- Automatic network-storage performance confirmation currently covers NFS only and requires current-window mountstats RTT, execute latency, retransmission, or major-timeout evidence; mount type or low throughput alone never confirms a bottleneck.
-- Lustre, CIFS, GPFS, BeeGFS, Ceph, and FUSE mounts are identified and routed to provider-specific manual evidence collection unless dedicated metrics are supplied.
+- GlusterFS FUSE is treated as the primary network storage. A target-scoped same-window process-tree read/syscall delta can establish active use and a small-read candidate, but it is not per-mount RTT or metadata latency and cannot by itself confirm a network bottleneck.
+- NFS performance confirmation remains available from current-window mountstats RTT, execute latency, retransmission, or major-timeout evidence; mount type or low throughput alone never confirms a bottleneck.
+- Lustre, CIFS, GPFS, BeeGFS, Ceph, and non-Gluster FUSE mounts are identified and routed to provider-specific manual evidence collection unless dedicated metrics are supplied.
 - High `mte2_ratio` is not Host storage evidence. If Host IO is healthy and `mte2_ratio` is high, hand off to computation analysis.
 - Treat `npu-smi` as hardware-health and coarse-utilization evidence only. Do not use an idle `npu-smi` sample as R500 conduction evidence.
 - On non-Ascend GPU smoke tests, use Host IO rules normally and treat same-window GPU idle/profiler overlap as analogous conduction evidence. Never use Ascend-only `mte2_ratio` outside Ascend profiler contexts.
@@ -71,12 +73,12 @@ Do not start storage collection when the user has already identified a different
 - A profiler-only report concerns an operator's internal `mte2_ratio`, without a Host-IO symptom: hand off to `ascend-computation-analysis`.
 - The symptom is dispatch or launch latency / Host Bound with data loading unaffected: hand off to `ascend-schedule-analysis`.
 
-Multi-rank, DataLoader, or NPU-idle wording alone is not proof of a storage issue. If the primary cause is ambiguous, ask for the missing evidence and avoid claiming a storage root cause; run the collector only when a storage symptom remains plausible.
+Multi-rank, DataLoader, or NPU-idle wording alone is not proof of a storage issue, but an active low-utilization workload plus a request to check storage is sufficient to run bounded target discovery and read-only Host IO collection. Do not claim a storage root cause until the evidence supports it. Ask for target confirmation only when the discoverer returns `requires_confirmation=true`; missing profiler data alone is never a reason to ask before R100-R400 collection.
 
 ## Workflow
 
-1. Classify the scenario: DataLoader/dataset reads, checkpoint loading, NFS/remote access, small files, rank/worker contention, or suspected device starvation.
-2. Resolve the target PID and data/checkpoint path. Reuse explicit values from the user. If either is unknown, run the bounded read-only target discoverer before asking the user to locate it manually.
+1. Classify the scenario: DataLoader/dataset reads, checkpoint loading, GlusterFS FUSE/NFS/remote access, small files, rank/worker contention, or suspected device starvation. For a live low-NPU-utilization request, continue even when the user supplied only the symptom.
+2. Resolve the target PID and data/checkpoint path. Reuse explicit values from the user. If either is unknown, the first diagnostic action must be the bounded read-only target discoverer, before dependency checks, profiler-path requests, or other filesystem searches. The discoverer uses only the Python standard library.
 3. Read `recommendation` and the ranked candidates. When `requires_confirmation=true`, present the top candidates with their reasons and ask one concise confirmation question; never silently choose between similar candidates. Target discovery never starts collection.
 4. Collect a read-only IO Snapshot for the affected workload window. Pass `--pid` for bounded R400 PID-to-device mapping; add `--path` to bind the affected data scope. A path alone never triggers a host-wide `/proc` scan.
 5. Run the deterministic analyzer. Do not replace analyzer output with invented thresholds.
@@ -90,13 +92,13 @@ All relative commands below assume the current directory is the Skill root: the 
 containing this `SKILL.md`. Resolve that directory from the loaded Skill location and `cd` to
 it before running `scripts/...` or `evals/...`; do not assume the repository root is the cwd.
 
-Use Python 3.10 or newer. Verify dependencies before running the collector or evals:
+Target discovery has no third-party Python dependency and must run first when PID or path is unknown. Before running the collector, analyzer, renderer, or evals, use Python 3.10 or newer and verify dependencies:
 
 ```bash
 python3 -c "import pydantic, yaml; print(pydantic.__version__)"
 ```
 
-If dependencies are missing, obtain user approval before modifying the Python environment, then install the declared versions:
+If the first Python executable lacks dependencies, check the Python environment that runs msAgent before proposing installation (for example the interpreter in the active msAgent launcher's shebang or virtual environment). Use an existing compatible interpreter when found. Only if no compatible existing interpreter is available, obtain user approval before modifying a Python environment, then install the declared versions:
 
 ```bash
 python3 -m pip install -r requirements.txt
@@ -190,7 +192,7 @@ Use this profile-summary shape only after reading profiler output from the same 
 
 - `device_free_percent` must come from an actual profiler timeline or DB idle/wait view, not gaps reconstructed from `op_summary`. Dynamic metrics require a valid `profile_window.start/end`; at least half of the profiler window must overlap `Snapshot.window`.
 - Any high positive conclusion, high-confidence handoff, or storage-priority downgrade requires `profile_window.scope="matched_workload_device_timeline"` and metric-specific `provenance`. `device_free_percent` accepts a profiler timeline `device_idle_interval_ratio` or profiler database `database_device_free_metric`; `mte2_ratio` accepts only a profiler database `workload_total_cycle_ratio`. Each provenance entry must include a non-empty artifact ID, non-negative device ID, exact metric name, and extraction method. Missing, arbitrary, `op_summary`, or exported-task-gap provenance is non-certifying and caps the cross-chain conclusion below high.
-- A future trusted R500 artifact verifier must require an explicit `Snapshot.target.pid` or `target.path` with a repeated, identity-bound block-device mapping or current NFS mount identity. The profile window must overlap at least one target-scoped, confirmed R100-R400 `evidence_interval` for at least 1 second and 50% of the shorter interval. A null target or broad top-level Snapshot window is not a substitute.
+- A future trusted R500 artifact verifier must require an explicit `Snapshot.target.pid` or `target.path` with a repeated, identity-bound block-device mapping or current target-scoped GlusterFS/NFS mount identity. The profile window must overlap at least one target-scoped, confirmed R100-R400 `evidence_interval` for at least 1 second and 50% of the shorter interval. A null target or broad top-level Snapshot window is not a substitute.
 - Apply the same-window requirement to negative cross-chain conclusions too: do not hand off high-confidence MTE2/device-idle findings or downgrade a confirmed storage issue using a disjoint profile window.
 - `mte2_ratio` is computation-side context only. Do not aggregate per-operator cycle ratios into a workload ratio without their compatible total-cycle denominators.
 `io_npu_overlap_observed` and `controlled_experiment` supplied only in profile JSON are non-certifying context: artifact identifiers and intervals are not proof that the underlying timeline or experiment artifacts were verified. They may support a medium-confidence candidate but cannot produce R500 high until this Skill has a trusted external artifact verifier. A bare boolean, null target, or bare result is invalid. Omit unverifiable fields instead of guessing.
@@ -206,6 +208,8 @@ python3 scripts/summarize_msprof.py /path/to/msprof-output --device 0 -o op_summ
 ## Generate the HTML report
 
 After explaining the deterministic findings, write the same plain-language summary and recommendations to `agent_report.json` using the contract in `references/html_report.md`. Then generate one self-contained report:
+
+Keep the Agent summary scannable: use the `分析范围 / 结论 / 编号证据 / 综合判断` structure from the report contract, keep the conclusion to one or two sentences, and put actions in structured recommendation entries rather than the summary paragraph.
 
 For this explanation step, extract only `rule_id`, `severity`, `confidence`, `summary`, `missing_evidence`, and the small device-topology fields needed to interpret a finding. Do not page through the full Snapshot or repeatedly reread large JSON artifacts. When a logical device and one of its `backing_devices` both appear in findings, describe them as layers of the same storage path; do not count them as independent disks or independent root causes.
 
@@ -229,8 +233,8 @@ Return both the concise terminal diagnosis and the absolute HTML path. Warn befo
 
 - R000: report missing, unsupported, failed, stale, or malformed evidence.
 - R100: report local device throughput, IOPS, await, queue, or sustained pressure. High positive or negative conclusions require an actual evidence window of at least 10 seconds and at least three samples covering util plus the supporting queue/await field; shorter or sparse evidence is capped at medium. A two-endpoint `diskstats` delta remains medium even when its window is longer than 10 seconds.
-- R200: confirm NFS performance only from current-window mountstats RTT/execute/retransmission or major-timeout evidence; low throughput alone is context, not pressure proof. Identify other network filesystems and hand off.
-- R300: confirm remote metadata pressure from NFS metadata operation latency; treat small IO as a candidate signal only.
+- R200: prioritize target-scoped GlusterFS FUSE discovery and process-tree activity. Do not call activity a transport bottleneck without Gluster client/brick latency, error, or retry evidence. NFS remains confirmable from current-window mountstats RTT/execute/retransmission or major-timeout evidence.
+- R300: use target-scoped GlusterFS small-read syscalls and local small IO as candidates only; confirm remote metadata pressure only from Gluster client/brick metadata latency or NFS metadata operation latency.
 - R400: require same-device mapping, data-relevant paths, each PID active in more than half of at least three pidstat reports, R100 device pressure, `observation_count>=2` for each PID's mapping, stable `boot_id` + PID starttime identity, and a real common interval across those mappings, R100, pidstat, and process-map evidence for high confidence. Mount and backing-device identity must be freshly observed at both process-map endpoints.
 - R500: require target-scoped confirmed Host IO plus device-side idle. With the current JSON-only profile contract, cap at medium; do not infer a high-confidence conduction chain from self-declared overlap or experiment evidence.
 
@@ -287,5 +291,5 @@ python3 evals/run_npu_runtime_eval.py --elements 1048576 --iterations 100 --repo
 - `scripts/render_io_report.py`: deterministic, offline HTML report renderer.
 - `assets/io_report_template.html`: self-contained report template used only by the renderer.
 - `evals/cases.yaml` and `evals/run_eval.py`: deterministic behavior cases and runner.
-- `evals/run_live_eval.py`: read-only Linux, provider, NPU, NFS, and R500 environment validation.
+- `evals/run_live_eval.py`: read-only Linux, provider, NPU, primary GlusterFS, auxiliary NFS, and R500 environment validation.
 - `evals/run_npu_runtime_eval.py`: explicit, bounded ACLNN real-device smoke; operator-invoked only.

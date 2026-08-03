@@ -124,6 +124,7 @@ _PROVIDER_NAMES = (
     "iostat",
     "pidstat",
     "nfs",
+    "glusterfs",
     "df",
     "process_io_map",
     "memory",
@@ -370,6 +371,7 @@ _MIN_SAMPLES_HIGH = 3  # 声称"持续饱和"所需最少采样数（iostat 路�
 _BANDWIDTH_KBPS_HEURISTIC = 100 * 1024  # ≈100 MB/s
 _IOPS_HEURISTIC = 10000.0
 _IOPS_HIGH = 5000.0  # 小 IO IOPS 参考（R300 small-IO 候选用）
+_GLUSTER_SMALL_READ_SYSCALLS_PER_SECOND = 500.0
 
 
 def _await_threshold(device_type: str | None) -> float:
@@ -930,6 +932,234 @@ def _bind_nfs_metrics(
     return strong, weak, unmatched
 
 
+def _is_glusterfs_mount(item: Any) -> bool:
+    return isinstance(item, dict) and str(item.get("fstype") or "").lower() == "fuse.glusterfs"
+
+
+def _gluster_identity(item: dict, source_key: str = "device") -> tuple[str, str, str]:
+    return (
+        str(item.get(source_key) or "").strip(),
+        _canonicalize_path(str(item.get("mount_point") or "")),
+        str(item.get("fstype") or "").lower(),
+    )
+
+
+def _required_gluster_mounts(
+    snapshot: dict, gluster_mounts: list[dict]
+) -> tuple[list[dict], str]:
+    """Bind GlusterFS evidence to an explicit target path or target PID tree."""
+    target = snapshot.get("target") or {}
+    target_path = target.get("path") if isinstance(target, dict) else None
+    if isinstance(target_path, str) and target_path:
+        matches = [
+            mount
+            for mount in gluster_mounts
+            if _path_under_mount(target_path, str(mount.get("mount_point") or ""))
+        ]
+        if not matches:
+            return [], "target_path_non_glusterfs"
+        longest = max(
+            len(_canonicalize_path(str(mount.get("mount_point") or "")))
+            for mount in matches
+        )
+        return (
+            [
+                mount
+                for mount in matches
+                if len(_canonicalize_path(str(mount.get("mount_point") or ""))) == longest
+            ],
+            "target_path_glusterfs",
+        )
+
+    target_pid = target.get("pid") if isinstance(target, dict) else None
+    if isinstance(target_pid, int) and not isinstance(target_pid, bool) and target_pid > 0:
+        process_map = _provider(snapshot, "process_io_map")
+        parsed = _parsed(process_map) if _status(process_map) == "ok" else None
+        if not isinstance(parsed, dict):
+            return [], "target_process_io_map_unresolved"
+        allowed_pids = _target_pid_scope(snapshot)
+        if not allowed_pids:
+            return [], "target_process_io_map_unresolved"
+        current = {_gluster_identity(mount): mount for mount in gluster_mounts}
+        selected: dict[tuple[str, str, str], dict] = {}
+        for mapping in parsed.get("mappings", []) or []:
+            if not isinstance(mapping, dict) or mapping.get("pid") not in allowed_pids:
+                continue
+            if not _is_glusterfs_mount(mapping):
+                continue
+            identity = _gluster_identity(mapping, source_key="source")
+            if identity in current:
+                selected[identity] = current[identity]
+        if selected:
+            return list(selected.values()), "target_process_io_map_glusterfs"
+        return [], "target_process_io_map_unresolved"
+
+    return gluster_mounts, "all_current_glusterfs_mounts"
+
+
+def _bind_gluster_metrics(
+    metrics: list[dict], mounts: list[dict]
+) -> tuple[list[dict], list[dict]]:
+    required = {_gluster_identity(mount) for mount in mounts}
+    matched: list[dict] = []
+    unmatched: list[dict] = []
+    for metric in metrics:
+        if not isinstance(metric, dict):
+            continue
+        identity = _gluster_identity(metric, source_key="source")
+        if identity in required:
+            matched.append(metric)
+        else:
+            unmatched.append(metric)
+    return matched, unmatched
+
+
+def _gluster_activity(metric: dict, duration: float) -> dict[str, Any] | None:
+    process_io = metric.get("process_io")
+    if not isinstance(process_io, dict):
+        return None
+    try:
+        rchar = max(0.0, float(process_io.get("rchar") or 0))
+        read_bytes = max(0.0, float(process_io.get("read_bytes") or 0))
+        syscr = max(0.0, float(process_io.get("syscr") or 0))
+        stable_pids = max(0, int(process_io.get("stable_pid_count") or 0))
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if rchar <= 0 and read_bytes <= 0 and syscr <= 0:
+        return None
+    seconds = max(0.001, duration)
+    return {
+        "mount_point": metric.get("mount_point"),
+        "source": metric.get("source"),
+        "stable_pid_count": stable_pids,
+        "rchar_delta": round(rchar, 3),
+        "read_bytes_delta": round(read_bytes, 3),
+        "read_syscalls_delta": round(syscr, 3),
+        "read_syscalls_per_second": round(syscr / seconds, 3),
+        "avg_rchar_per_syscall": round(rchar / syscr, 3) if syscr else None,
+        "scope_note": "target process-tree counters; not per-mount latency",
+    }
+
+
+def _analyze_gluster_r200(snapshot: dict, net_mounts: list[dict]) -> dict | None:
+    """First-class GlusterFS FUSE branch; NFS remains an auxiliary branch."""
+    gluster_mounts = [mount for mount in net_mounts if _is_glusterfs_mount(mount)]
+    if not gluster_mounts:
+        return None
+    required, scope = _required_gluster_mounts(snapshot, gluster_mounts)
+    if scope == "target_path_non_glusterfs":
+        return None
+
+    finding = _finding(
+        "R200",
+        "info",
+        "none",
+        "",
+        next_checks=[
+            "采集同窗口 GlusterFS client/brick 延迟、错误与重试统计",
+            "做本地盘与 GlusterFS 的同模型、同 batch、同 worker 对照实验",
+        ],
+        network_storage_primary="fuse.glusterfs",
+        glusterfs_metric_required_scope=scope,
+        performance_confirmed=False,
+        performance_window_evaluated=False,
+        activity_window_evaluated=False,
+        client_performance_evaluated=False,
+    )
+    finding["evidence_fields"] = ["mounts.fstype"]
+    finding["network_mounts"] = [
+        {
+            "device": mount.get("device"),
+            "mount_point": mount.get("mount_point"),
+            "fstype": mount.get("fstype"),
+        }
+        for mount in net_mounts
+    ]
+    finding["glusterfs_required_mounts"] = [
+        {
+            "source": mount.get("device"),
+            "mount_point": mount.get("mount_point"),
+            "fstype": mount.get("fstype"),
+        }
+        for mount in required
+    ]
+    if scope.endswith("_unresolved"):
+        finding.update(
+            confidence="none",
+            summary=(
+                "检测到 GlusterFS FUSE 网络存储，但显式目标 PID 无法绑定到当前挂载，"
+                "不能把全机网络存储活动归因给目标 workload。"
+            ),
+            missing_evidence=["目标 PID/进程树到 GlusterFS 挂载的同窗路径映射"],
+            performance_window_evaluated=False,
+            evidence_window_valid=False,
+        )
+        return finding
+
+    gluster_pr = _provider(snapshot, "glusterfs")
+    parsed = _parsed(gluster_pr) if _status(gluster_pr) == "ok" else None
+    metrics = parsed.get("mount_metrics", []) if isinstance(parsed, dict) else []
+    matched, unmatched = _bind_gluster_metrics(metrics or [], required)
+    windowed = [metric for metric in matched if metric.get("windowing") == "delta"]
+    interval = _provider_interval(snapshot, "glusterfs")
+    interval_valid = intervals_overlap_or_are_adjacent(
+        _provider_interval(snapshot, "mounts_provider"), interval
+    )
+    duration = 0.0
+    if interval is not None:
+        duration = max(0.0, float(interval[1]) - float(interval[0]))
+    activities = [
+        activity
+        for metric in windowed
+        if (activity := _gluster_activity(metric, duration)) is not None
+    ]
+    # /proc process-tree deltas establish target activity only. They do not
+    # evaluate Gluster client/brick latency, retries, or network performance.
+    finding["activity_window_evaluated"] = bool(windowed) and interval_valid
+    finding["performance_window_evaluated"] = False
+    finding["evidence_window_valid"] = interval_valid
+    if interval_valid and interval is not None:
+        finding["evidence_interval"] = list(interval)
+    if activities:
+        finding.update(
+            severity="medium",
+            confidence="medium" if interval_valid else "low",
+            summary=(
+                f"目标数据路径位于 GlusterFS FUSE 主网络存储，窗口内检测到 "
+                f"{len(activities)} 个目标挂载对应的进程树读取活动；"
+                "但缺少 Gluster 客户端/brick 延迟与重试指标，当前只能确认活动和候选压力，"
+                "不能确认网络传输瓶颈。"
+            ),
+            glusterfs_activity=activities,
+            missing_evidence=[
+                "同窗口 GlusterFS client/brick 操作延迟、错误和重试统计",
+                "本地盘与 GlusterFS 的受控吞吐/数据等待对照",
+            ],
+        )
+        finding["evidence_fields"].append("glusterfs.mount_metrics.process_io")
+    else:
+        finding.update(
+            severity="info",
+            confidence="low",
+            summary=(
+                "目标数据路径位于 GlusterFS FUSE 主网络存储，但当前窗口缺少可绑定的"
+                "目标进程读取活动或客户端性能指标，不能确认网络存储瓶颈。"
+            ),
+            missing_evidence=[
+                "glusterfs.mount_metrics 的目标进程树同窗读取增量",
+                "同窗口 GlusterFS client/brick 操作延迟、错误和重试统计",
+            ],
+        )
+    if unmatched:
+        finding.setdefault("handoff_notes", []).append(
+            f"{len(unmatched)} 个 GlusterFS metric 与当前目标挂载身份不匹配，已忽略。"
+        )
+    finding.setdefault("handoff_notes", []).append(
+        "进程 /proc/<pid>/io 是活动线索，不是 per-mount RTT 或元数据延迟，不能单独升级为 high。"
+    )
+    return finding
+
+
 def analyze_r200(snapshot: dict) -> dict:
     """R200 网络存储 / 挂载延迟。
 
@@ -937,10 +1167,9 @@ def analyze_r200(snapshot: dict) -> dict:
             (b) 确认瓶颈（必须有 RTT/execute/retrans/major-timeout 性能证据）。
     仅 (a) 成立而 (b) 缺证据时，confidence=low 并列入 missing_evidence。
 
-    覆盖范围：自动性能确认**仅 NFS**（依赖
-    /proc/self/mountstats per-op 指标）。CIFS/Lustre/GPFS/BeeGFS/Ceph/FUSE 仅
-    "识别 + 人工指导"，不自动判瓶颈——这些文件系统需各自专用 provider
-    （cifsiostat、lctl get_param、mmrepquota 等），当前未实现，标注 handoff。
+    覆盖范围：GlusterFS FUSE 是首选网络存储路径，支持目标挂载与目标进程树
+    活动的同窗绑定；NFS 保留 mountstats RTT/execute/retrans 的高置信确认。
+    CIFS/Lustre/GPFS/BeeGFS/Ceph 继续识别并转交专用 provider。
     """
     finding = _finding(
         "R200",
@@ -1010,7 +1239,11 @@ def analyze_r200(snapshot: dict) -> dict:
             ]
         return finding
 
-    # 区分 NFS（可自动确认）与非 NFS 网络存储（仅识别 + 人工指导）
+    gluster_finding = _analyze_gluster_r200(snapshot, net_mounts)
+    if gluster_finding is not None:
+        return gluster_finding
+
+    # GlusterFS 目标已在上方优先处理；这里保留 NFS 与其他辅助网络存储路径。
     nfs_mounts = [m for m in net_mounts if _norm_fstype_group(m.get("fstype")) == "nfs"]
     non_nfs_mounts = [m for m in net_mounts if m not in nfs_mounts]
 
@@ -1272,13 +1505,63 @@ def analyze_r200(snapshot: dict) -> dict:
     return finding
 
 
+def _gluster_small_read_candidates(snapshot: dict) -> list[dict[str, Any]]:
+    """Return target-scoped small-read candidates without claiming metadata latency."""
+    gluster_pr = _provider(snapshot, "glusterfs")
+    parsed = _parsed(gluster_pr) if _status(gluster_pr) == "ok" else None
+    if not isinstance(parsed, dict):
+        return []
+    current_mounts = [
+        mount
+        for mount in (snapshot.get("mounts") or [])
+        if _is_glusterfs_mount(mount)
+    ]
+    required, scope = _required_gluster_mounts(snapshot, current_mounts)
+    if not required or scope.endswith("_unresolved") or scope.endswith("_non_glusterfs"):
+        return []
+    metrics = parsed.get("mount_metrics") or []
+    matched, _unmatched = _bind_gluster_metrics(metrics, required)
+    interval = _provider_interval(snapshot, "glusterfs")
+    if not intervals_overlap_or_are_adjacent(
+        _provider_interval(snapshot, "mounts_provider"), interval
+    ):
+        return []
+    if interval is None:
+        return []
+    duration = max(0.001, float(interval[1]) - float(interval[0]))
+    candidates: list[dict[str, Any]] = []
+    for metric in matched:
+        if metric.get("windowing") != "delta":
+            continue
+        activity = _gluster_activity(metric, duration)
+        if activity is None:
+            continue
+        syscall_rate = _f(activity.get("read_syscalls_per_second"))
+        average_size = _f(activity.get("avg_rchar_per_syscall"))
+        if (
+            syscall_rate >= _GLUSTER_SMALL_READ_SYSCALLS_PER_SECOND
+            and 0 < average_size < 16 * 1024
+        ):
+            candidates.append(
+                {
+                    "mount_point": activity.get("mount_point"),
+                    "source": activity.get("source"),
+                    "read_syscalls_per_second": round(syscall_rate, 3),
+                    "avg_rchar_per_syscall": round(average_size, 3),
+                    "evidence_scope": "target process tree; not per-mount metadata latency",
+                }
+            )
+    return candidates
+
+
 def analyze_r300(snapshot: dict) -> dict:
     """R300 远程文件访问 / 元数据 / 小文件开销。
 
     证据强度：
       - **强（可确认）**：NFS mountstats 中元数据 op（GETATTR/LOOKUP/READDIR/...）
         窗内平均 RTT/execute 偏高——直接反映 open/stat/lookup 的远程访问耗时。
-      - 中（候选）：iostat 或 diskstats delta 小 IO 特征（高 IOPS + 低平均 IO 大小）。
+      - 中（候选）：目标 GlusterFS 进程树的小读取 syscall，或 iostat/diskstats
+        delta 小 IO 特征（高 IOPS + 低平均 IO 大小）。
       - 背景（不单独产生根因）：df inode 使用率（容量信号，非延迟证据）。
     """
     finding = _finding(
@@ -1363,7 +1646,8 @@ def analyze_r300(snapshot: dict) -> dict:
                     }
                 )
 
-    # 中证据：设备级小 IO 特征
+    # 中证据：目标 GlusterFS 进程树与设备级小 IO 特征
+    gluster_small_reads = _gluster_small_read_candidates(snapshot)
     disks, disk_source = _collect_disks(snapshot)
     small_io_disks = []
     for d in disks:
@@ -1397,6 +1681,10 @@ def analyze_r300(snapshot: dict) -> dict:
     finding["evidence_fields"] = []
     if meta_slow:
         finding["evidence_fields"].append("nfs.mount_metrics（元数据 op 延迟）")
+    if gluster_small_reads:
+        finding["evidence_fields"].append(
+            "glusterfs.mount_metrics.process_io（目标进程树小读取候选）"
+        )
     if small_io_disks:
         finding["evidence_fields"].append(f"{disk_source}.disks（小 IO 特征）")
     if high_inode:
@@ -1433,6 +1721,14 @@ def analyze_r300(snapshot: dict) -> dict:
             f"{len(small_io_disks)} 个设备呈现小文件特征（高 IOPS、低平均 IO 大小）"
         )
         finding["small_io_devices"] = small_io_disks
+    if gluster_small_reads:
+        if finding["confidence"] == "none":
+            finding["confidence"] = "medium"
+            finding["severity"] = "medium"
+        parts.append(
+            f"{len(gluster_small_reads)} 个 GlusterFS 目标挂载呈现高频小读取候选"
+        )
+        finding["glusterfs_small_read_candidates"] = gluster_small_reads
     if high_inode:
         # inode 仅作背景信息输出，不改变 confidence（容量信号非延迟证据）。
         finding["high_inode_fs"] = high_inode
@@ -1442,7 +1738,7 @@ def analyze_r300(snapshot: dict) -> dict:
         # 小 IO 与 inode 都只是候选/背景信号，不能替代元数据延迟或 syscall
         # 观测。始终指出将候选升级为已确认根因还缺什么。
         finding["missing_evidence"] = [
-            "nfs.mount_metrics 的 GETATTR/LOOKUP/READDIR 窗内延迟",
+            "GlusterFS client/brick 元数据操作延迟，或 NFS mountstats 的 GETATTR/LOOKUP/READDIR 窗内延迟",
             "openat/stat/getdents syscall 频率或延迟",
             "page cache 命中率或第二次访问延迟对照",
         ]
@@ -2623,8 +2919,9 @@ def normalize_and_validate(snapshot: dict) -> tuple[dict, list[str]]:
                                     "<= sample_count <= parsed.reports"
                                 )
                             el["pid"] = pid
-            # nfs mount_metrics 必须是 dict 列表（nfs 不走 elem_fields，单独校验容器）
-            if name == "nfs":
+            # Network-provider mount_metrics must be a list. Deep values are
+            # interpreted conservatively by each provider-specific rule.
+            if name in {"nfs", "glusterfs"}:
                 mm = parsed.get("mount_metrics")
                 if mm is not None and not isinstance(mm, list):
                     raise ValueError("mount_metrics not list")
@@ -2639,6 +2936,7 @@ def normalize_and_validate(snapshot: dict) -> tuple[dict, list[str]]:
 
     _check_provider("iostat", _NUMERIC_FIELDS["iostat_disks"], None, None)
     _check_provider("nfs", None, _NUMERIC_FIELDS["nfs_metric"], "mount_metrics")
+    _check_provider("glusterfs", None, None, None)
     # collector 从 `df -iP` 解析的 iuse_percent 形如 "92%"（带 %），
     # 会在下方 _strict_float 校验中被拒 → df 误判 parse_failed、inode 证据静默丢失。
     # 在校验前规范化：剥离 trailing "%" 并转 float。

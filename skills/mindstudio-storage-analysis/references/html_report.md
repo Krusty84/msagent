@@ -17,7 +17,7 @@ Agent 报告格式：
 
 ```json
 {
-  "summary": "用通俗语言概括结论、证据边界和当前不能证明的事情。",
+  "summary": "分析范围：<对象与窗口>。结论：<一句到两句核心结论>。证据：1) <证据一>；2) <证据二>。综合判断：<当前能证明和不能证明的事情>。",
   "recommendations": [
     {
       "priority": "high",
@@ -35,10 +35,11 @@ Agent 报告格式：
 - `source_rule_ids` 只接受 R000-R500，用于说明建议依据，不允许 Agent 伪造新规则。
 - `requires_confirmation=true` 表示建议涉及 workload 或系统变更，仍须遵守 `SKILL.md` 的安全门禁。
 - 所有 Agent 文本按纯文本转义，不执行 Markdown、HTML 或 JavaScript。
+- `summary` 使用“分析范围 / 结论 / 编号证据 / 综合判断”的紧凑结构，不写无法扫描的长段落。渲染器只按这些标记分段，不改写 Agent 原文；旧格式仍以单段结论兼容展示。
 
 ## 输出内容
 
-报告包含：目标与时间窗口、产物流水线、Agent 总结、R000-R500 结论、本地磁盘表格、NFS 表格、进程 IO 表格、目标发现候选、msprof 辅助线索、provider 状态和输入文件 SHA-256。
+报告包含：目标与时间窗口、产物流水线、Agent 总结、R000-R500 结论、本地磁盘表格、GlusterFS FUSE 主网络存储活动表、辅助 NFS 表格、进程 IO 表格、最终训练目标摘要、msprof 辅助线索、provider 状态和输入文件 SHA-256。最终 HTML 只展示已选程序、PID、数据集路径、文件系统和必要命令摘要，不展开其他候选或候选分数；完整候选仍保留在 `target_candidates.json`，需要确认时由 Agent 在交互中展示。GlusterFS 表中的进程树计数只表示活动与小读取候选，不表示 client/brick 延迟。
 
 HTML 不使用外部字体、图片、JavaScript 或前端框架，可离线打开和浏览器打印。它可能包含主机名、PID、命令摘要和数据路径，对外分享前需要人工确认脱敏范围。
 

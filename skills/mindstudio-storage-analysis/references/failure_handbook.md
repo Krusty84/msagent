@@ -89,13 +89,14 @@
 
 ## R200 网络存储 / 挂载延迟
 
-> **两层判定（重要）**：当前 analyzer 的自动确认仅支持 NFS。本规则区分 (a) 仅"识别为网络挂载"（只说明类型，不构成瓶颈）和 (b) "确认 NFS 存储瓶颈"（必须有同窗 mountstats RTT/execute/retrans/major-timeout 性能证据）。其他网络文件系统只识别并转交人工采集；低吞吐本身没有需求量或基线，不能证明压力。
+> **两层判定（重要）**：GlusterFS FUSE 是当前主网络存储路径。analyzer 先绑定目标路径/目标进程树，再用同窗 `/proc/<pid>/io` 读取活动和小读取特征形成候选；这些不是 Gluster 传输 RTT 或元数据延迟，不能单独确认瓶颈。NFS 保留高置信确认：必须有同窗 mountstats RTT/execute/retrans/major-timeout 性能证据。低吞吐本身没有需求量或基线，不能证明压力。
 
 ### 触发信号
 
 - 识别层：`/proc/mounts` 显示 fstype 为 `nfs` / `nfs4` / `cifs` / `lustre` / `gpfs` / `beegfs` / `fuse.*`。
 - 确认层（性能证据，缺一不可判瓶颈）：
-  - NFS：`/proc/self/mountstats` 中 per-mount 的 RTT / execute 偏高、重传率达到阈值或出现与同窗请求 delta 一致的 major timeout（非负整数且不大于 `ops`）。`nfsiostat` 可用于人工交叉核验，但当前 analyzer 不解析其吞吐来确认 R200。
+- NFS：`/proc/self/mountstats` 中 per-mount 的 RTT / execute 偏高、重传率达到阈值或出现与同窗请求 delta 一致的 major timeout（非负整数且不大于 `ops`）。`nfsiostat` 可用于人工交叉核验，但当前 analyzer 不解析其吞吐来确认 R200。
+- GlusterFS FUSE：目标路径位于 `fuse.glusterfs` 且目标进程树同窗有读字节/读 syscall 增量时，确认 workload 正在使用主网络存储；若要确认传输或元数据瓶颈，补充 Gluster client/brick 的操作延迟、错误、重试统计，或做本地盘对照。
   - Lustre：`lctl get_param osc.*.stats` 显示高 `read`/`write` 延迟，OST 利用率高。这是人工交接证据，当前 analyzer 不会据此自动确认 R200。
   - 首次访问慢、缓存预热后明显变快（强网络存储特征，配合 RTT 证据使用）。
   - 挂载选项含 `hard` + 没有合理超时，导致偶发卡死。
@@ -109,7 +110,7 @@
 
 ### 常见误判
 
-- FUSE 挂载（如对象存储挂载）慢，误以为是本地盘问题 → 必须看 fstype。
+- GlusterFS FUSE 挂载慢，误以为是本地盘问题 → 必须看 fstype，并先绑定目标路径和进程树。
 - 网络抖动导致的偶发慢，误判为常态 → 需要重传计数与多次采样判断持续性。
 - 仅识别为 NFS 挂载就断言是网络存储瓶颈 → 必须有 RTT/execute/retrans 性能证据（见两层判定）。
 

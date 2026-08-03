@@ -106,6 +106,9 @@ findmnt
 ### 1.5 网络存储专用（按需）
 
 ```bash
+# GlusterFS FUSE（主网络存储）：确认目标路径挂载身份；collector 同窗读取目标进程树 /proc/<pid>/io 差值
+findmnt -n -T /data/train -o TARGET,SOURCE,FSTYPE
+
 # NFS：每挂载点的 RPC 延迟
 nfsiostat 1 5
 
@@ -204,7 +207,7 @@ IO 传导链证据来自 Ascend profiler 数据，不在此采集：
 - `mte2_ratio` 只作计算侧上下文，范围为 0~1；不同算子的 cycle ratio 没有兼容 total-cycle 分母时不得按 Task Duration 聚合。
 - 动态 profile 必须带 `profile_window.start/end`，并且至少 50% 的 profiler 窗口与 Snapshot.window 重叠；缺失或陈旧时 analyzer 丢弃动态指标。
 - high 正向、high 负向或存储优先级降级要求 scope 精确为 `matched_workload_device_timeline`，并为对应指标提供完整 `provenance`。允许的 source/extraction 组合见下方 live 验收说明；缺失、任意 scope 或 `op_summary` task-gap 来源只作非认证候选。
-- 当前 JSON-only profile 契约下 R500 正向结论封顶 medium。未来接入可信 profiler artifact verifier 时，R500 high 还必须要求显式 `Snapshot.target.pid/path` 已由重复观测、进程身份和 sysfs 设备映射（或当前 NFS 挂载身份）认证；profile window 与至少一个目标作用域内已确认 R100~R400 finding 的 `evidence_interval` 至少重叠 1 秒，且公共交集不少于较短区间的 50%。空 target 和顶层 Snapshot.window 都不能替代该绑定。
+- 当前 JSON-only profile 契约下 R500 正向结论封顶 medium。未来接入可信 profiler artifact verifier 时，R500 high 还必须要求显式 `Snapshot.target.pid/path` 已由重复观测、进程身份和 sysfs 设备映射（或当前目标作用域内 GlusterFS/NFS 挂载身份）认证；profile window 与至少一个目标作用域内已确认 R100~R400 finding 的 `evidence_interval` 至少重叠 1 秒，且公共交集不少于较短区间的 50%。空 target 和顶层 Snapshot.window 都不能替代该绑定。
 - 负向跨链结论同样必须同窗：不同窗的 MTE2/device Free 不能用于高置信转交；
   低 device Free 只能说明未观察到明显设备空泡，不能推断设备忙的具体原因。
 - `io_npu_overlap_observed=true` 必须同时提供 `overlap_provenance`。其中 artifact/device 必须匹配 `provenance.device_free_percent`，`host_rule_ids` 必须对应目标作用域内已确认 Host finding，Host/device interval 必须分别包含在 finding/profile 的证据窗内并有足量交集，非空 `target` 必须与 Snapshot 的 `{pid,path}` 精确一致。裸 boolean 或 `{pid:null,path:null}` 不认证。
@@ -289,6 +292,7 @@ python3 evals/run_npu_runtime_eval.py --elements 1048576 --iterations 100 --repo
 - `process_io_map.parsed.mappings`：PID → path → mount → device 映射（R400 所需，必须提供 `--pid`；`--path` 用于收窄数据范围，单独提供 path 会返回 `status=unsupported` 而不会扫描全机 `/proc`）。进程树最多 256 项；后代项记录直接 `parent_pid`，analyzer 只将能沿父链回到显式目标 PID 的强身份后代纳入目标作用域；无父链的旧快照后代不参与归因。每个 PID 最多保留 256 条 FD 映射。指定 `--path` 时，collector 在最多 1 秒的 FD 扫描预算内优先保留数据相关路径；达到数量或时间预算都会在 `partial` 标明覆盖不完整，不能据此作 high。`observation_samples` 必须是正 JSON 整数；每条 mapping 的 `observation_count` 必须是非负 JSON 整数且不得超过它。每条 mapping 的 `boot_id`/`pid_starttime_ticks` 用于排除数值 PID 复用，`first_seen`/`last_seen`/`observation_count` 和顶层 `observation_samples` 用于证明多个 PID 确实同时映射该设备；同一进程和映射未实际观测两次或映射区间错开时不得 high。mountinfo 和 sysfs backing topology 只在单次观测内复用，窗口末次观测会重新读取；FD 提供 `mnt_id` 时必须精确匹配，不得退化为路径前缀认证。
 - `df.parsed.filesystems`：空间与 inode 合并（`df -hP` + `df -iP`）。
 - `nfs.parsed.mount_metrics`：`/proc/self/mountstats` per-op 统计的**窗内两次采样差值**（`windowing`/`avg_rtt_ms`/`avg_execute_ms`/`retrans`/`ops`，R200 性能证据）；无 NFS 挂载时 `status=unsupported`。单次累计值不反映本次 workload，差值才可作性能证据。`major_timeouts` 只有在同一 delta 中与非负整数 `ops`/`transmissions`/`retrans` 一致且不大于 `ops` 时才可确认瓶颈。
+- `glusterfs.parsed.mount_metrics`：目标 `fuse.glusterfs` 挂载身份与稳定目标进程树的 `/proc/<pid>/io` 同窗差值。`rchar/read_bytes/syscr` 只能证明进程活动并形成小读取候选；这些计数不是 per-mount RTT/元数据延迟。没有 Gluster client/brick 延迟、错误、重试数据时，R200/R300 不得 high。
 - `readahead`：单位为 512B sector（`blockdev --getra` 原始输出）。readahead 与 scheduler 为窗口外的静态上下文采集，所有块设备共用最多 5 秒探测预算；超时或未处理设备写入 `availability.partial`，不延长动态证据窗口。
 - `availability`：`missing`（数据源缺失）/`partial`（unsupported/empty）/`errors`（permission/command_failed/parse_failed）三类汇总。
 - `schema_version`：major.minor。minor 只增可选字段；analyzer 遇到未知 major 拒绝确定性分析。

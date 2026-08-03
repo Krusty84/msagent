@@ -146,9 +146,8 @@ async def test_get_tool_returns_builtin_web_search_metadata() -> None:
     payload = json.loads(result)
 
     assert payload["name"] == "web_search"
-    assert payload["description"] == "Search the web and return compact results with source URLs."
-    assert "query" in payload["parameters"]["properties"]
-    assert "allowed_domains" in payload["parameters"]["properties"]
+    assert payload["description"] == web_search.description
+    assert set(payload["parameters"]["properties"]) == {"query"}
 
 
 @pytest.mark.asyncio

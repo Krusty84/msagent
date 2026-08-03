@@ -816,10 +816,10 @@ msagent web --no-ui
 
 现有代表测试：
 
-- `tests/test_config_registry.py`
-- `tests/test_config_versions.py`
-- `tests/test_legacy_defaults.py`
-- `tests/test_provider_constraints.py`
+- `tests/ut/configs/test_config_registry.py`
+- `tests/ut/configs/test_config_versions.py`
+- `tests/ut/cli/bootstrap/test_legacy_defaults.py`
+- `tests/ut/configs/test_provider_constraints.py`
 
 #### 3.2 运行时装配测试
 
@@ -842,9 +842,9 @@ msagent web --no-ui
 
 现有代表测试：
 
-- `tests/test_agent_factory_runtime.py`
-- `tests/test_initializer_runtime_context.py`
-- `tests/test_checkpointer_factory.py`
+- `tests/ut/agents/test_agent_factory_runtime.py`
+- `tests/ut/cli/bootstrap/test_initializer_runtime_context.py`
+- `tests/ut/cli/bootstrap/test_checkpointer_factory.py`
 
 #### 3.3 Tool / Skill / MCP 协同测试
 
@@ -859,11 +859,11 @@ msagent web --no-ui
 
 现有代表测试：
 
-- `tests/test_mcp_client.py`
-- `tests/test_mcp_factory_and_memory.py`
-- `tests/test_catalog_interfaces.py`
-- `tests/test_skills_handler.py`
-- `tests/test_skill_script_guidance.py`
+- `tests/ut/mcp/test_mcp_client.py`
+- `tests/ut/mcp/test_mcp_factory_and_memory.py`
+- `tests/ut/tools/catalog/test_catalog_interfaces.py`
+- `tests/ut/cli/handlers/test_skills_handler.py`
+- `tests/ut/agents/test_skill_script_guidance.py`
 
 #### 3.4 CLI/TUI 交互测试
 
@@ -878,13 +878,13 @@ msagent web --no-ui
 
 现有代表测试：
 
-- `tests/test_commands.py`
-- `tests/test_completer_router.py`
-- `tests/test_reference_completer.py`
-- `tests/test_renderer_welcome.py`
-- `tests/test_bottom_toolbar.py`
-- `tests/test_interrupt_handler.py`
-- `tests/test_threads_handler.py`
+- `tests/ut/cli/dispatchers/test_commands.py`
+- `tests/ut/cli/completers/test_completer_router.py`
+- `tests/ut/cli/completers/test_reference_completer.py`
+- `tests/ut/cli/ui/test_renderer_welcome.py`
+- `tests/ut/cli/ui/test_bottom_toolbar.py`
+- `tests/ut/cli/handlers/test_interrupt_handler.py`
+- `tests/ut/cli/handlers/test_threads_handler.py`
 
 #### 3.5 长会话与压缩测试
 
@@ -899,10 +899,10 @@ msagent web --no-ui
 
 现有代表测试：
 
-- `tests/test_compression_handler.py`
-- `tests/test_tool_result_eviction_middleware.py`
-- `tests/test_token_cost_extraction.py`
-- `tests/test_timeout_controls.py`
+- `tests/ut/cli/handlers/test_compression_handler.py`
+- `tests/ut/middlewares/test_tool_result_eviction_middleware.py`
+- `tests/ut/middlewares/test_token_cost_extraction.py`
+- `tests/ut/configs/test_timeout_controls.py`
 
 #### 3.6 Web 模式与导出测试
 
@@ -917,9 +917,9 @@ msagent web --no-ui
 
 现有代表测试：
 
-- `tests/test_web_runtime.py`
-- `tests/test_web_launcher.py`
-- `tests/test_web_search_tool.py`
+- `tests/ut/web/test_web_runtime.py`
+- `tests/ut/web/test_web_launcher.py`
+- `tests/ut/tools/test_web_search_tool.py`
 
 #### 3.7 端到端测试
 

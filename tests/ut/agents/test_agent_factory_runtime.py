@@ -140,7 +140,7 @@ async def test_agent_factory_create_uses_explicit_working_dir_for_backends(
         llm_config=SimpleNamespace(),
     )
 
-    assert graph._agent_backend.default.root_dir == str(tmp_path.resolve())
+    assert graph._agent_backend.root_dir == str(tmp_path.resolve())
 
 
 @pytest.mark.asyncio
@@ -573,7 +573,7 @@ async def test_agent_factory_adds_tool_result_eviction_middleware_when_output_li
     assert any(item.__class__.__name__ == "ToolResultEvictionMiddleware" for item in middleware)
 
 
-def test_build_composite_backend_persists_conversation_history_under_workdir(
+def test_build_agent_backend_persists_conversation_history_under_workdir(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
@@ -596,14 +596,18 @@ def test_build_composite_backend_persists_conversation_history_under_workdir(
     monkeypatch.setattr(factory_module, "FilesystemBackend", _DummyFilesystemBackend)
     monkeypatch.setattr(factory_module, "CompositeBackend", _DummyCompositeBackend)
 
-    backend = AgentFactory._build_composite_backend(tmp_path)
+    backend = AgentFactory._build_agent_backend(
+        tmp_path,
+        enable_large_results=False,
+        enable_conversation_history=True,
+    )
     conversation_history_backend = backend.routes["/conversation_history/"]
 
     assert conversation_history_backend.root_dir == (tmp_path / factory_module.CONFIG_CONVERSATION_HISTORY_DIR)
     assert conversation_history_backend.virtual_mode is True
 
 
-def test_build_composite_backend_inherits_parent_environment(
+def test_build_agent_backend_inherits_parent_environment(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
@@ -628,7 +632,11 @@ def test_build_composite_backend_inherits_parent_environment(
     monkeypatch.setattr(factory_module, "FilesystemBackend", _DummyFilesystemBackend)
     monkeypatch.setattr(factory_module, "CompositeBackend", _DummyCompositeBackend)
 
-    AgentFactory._build_composite_backend(tmp_path)
+    AgentFactory._build_agent_backend(
+        tmp_path,
+        enable_large_results=False,
+        enable_conversation_history=False,
+    )
 
     assert captured["root_dir"] == str(tmp_path)
     assert captured["inherit_env"] is True
@@ -825,6 +833,7 @@ async def _return_false(_api_key: str) -> bool:
     return False
 
 
+@pytest.mark.asyncio
 async def test_agent_factory_passes_resolved_subagents_to_create_deep_agent(
     monkeypatch,
 ) -> None:

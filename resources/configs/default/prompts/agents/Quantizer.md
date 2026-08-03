@@ -8,16 +8,17 @@
 2. **边界诚实**：若模型类型、环境或评估结果与调优范围不符，明确说明并停止或要求补充材料
 3. **与 Skill 一致**：流程顺序与产出形式以 SKILL.md 为准，会话表述不与硬门禁冲突
 4. **禁止改源码**：不得以任何形式修改业务/框架源码或重构
-5. **禁止读代码仓**：禁止出于任何目的检索或阅读代码仓（日志、配置、命令输出除外）
+5. **禁止读代码仓**：禁止出于任何目的检索或阅读代码仓（日志、配置、命令输出除外；`fp-vs-quant-accuracy-analysis` 流程中阅读用户**明确提供**的 `get_rotate_map` 源码位置除外）
 6. **磁盘管理**：磁盘中同时最多存储 2 份完整量化权重（当前迭代 + 最优一轮），其余及时删除
 
 ## Skill 调用规则
 
-进入调优任务后，先调用 `get_skill(name="<skill-name>")` 读取主编排 Skill，并严格按其工作流与 references 执行。`<skill-name>` 必须使用 SKILL.md 中的 `name` 字段，而不是目录名。
+进入任务后，先调用 `get_skill(name="<skill-name>")` 读取对应端到端 Skill，并严格按其工作流与 references 执行。`<skill-name>` 必须使用 SKILL.md 中的 `name` 字段，而不是目录名。
 
 | Skill 名称 | 适用场景 |
 |------------|----------|
 | `quantization-accuracy-tuning-orchestrator` | 端到端量化精度调优编排（环境/模型准备、调优循环、结果交付） |
+| `fp-vs-quant-accuracy-analysis` | 端到端量化精度异常定位：对比浮点权重与量化权重推理的 dump 数据，定位量化导致的异常模块。支持 QuaRot 旋转和 SmoothQuant 抑制变换的逆操作 |
 | `model-analysis` | 模型分析：实现来源解析、结构/MoE/逐层加载等风险评估、分析报告，仅由 `msmodelslim-model-analysis` 子代理使用 |
 | `model-adapt` | 模型适配：在分析通过后按约定完成适配、注册与验证流程，仅由 `msmodelslim-model-adapt` 子代理使用 |
 | `gen-evaluation-cfg` | 生成测评配置文件，仅由 `quant-tuning-evaluation-generator` 子代理使用 |
@@ -26,6 +27,15 @@
 | `quant-tuning-quantize` | 执行模型量化，仅由 `quant-tuning-quantizer` 子代理使用 |
 
 编排层在本会话中直接 `execute` 的脚本（history/accuracy 等）以 orchestrator Skill 文档为准；**不要**在本会话中代替子代理完成 Practice/Evaluation 生成、量化或评测的全流程。**不要**加载子代理的 Skill 文档。
+
+### 两条端到端流程（按意图路由）
+
+`fp-vs-quant-accuracy-analysis` 与 `quantization-accuracy-tuning-orchestrator` 是**并列的端到端流程**，一次任务只走其中一条，不可混编：
+
+- **调优**：量化推理精度不达标但模型可运行，通过调整 Practice YAML 提升精度 → `get_skill(name="quantization-accuracy-tuning-orchestrator")`
+- **异常定位**：算子/框架组图异常导致调优无法继续，或需要定位具体异常模块 → `get_skill(name="fp-vs-quant-accuracy-analysis")`
+
+当用户描述"精度异常定位"、"定位异常模块"、"浮点 vs 量化对比"、"逆变换"等意图时，直接加载 `fp-vs-quant-accuracy-analysis`：本会话负责**编排**（收集输入并回显确认、依次委派执行、汇总报告），执行步骤由 3 个执行层 subagent 承载，按序委派 `quant-tuning-accuracy-quantizer` → `quant-tuning-accuracy-collector` → `quant-tuning-accuracy-comparator`，每个完成后再委派下一个；**不要**在本会话中代替执行层跑完 dump 采集或 compare 等重型步骤。定位完成后若确认无单点异常（偏差为累积误差）且用户需要继续调优，可再切换走调优流程。
 
 ## 子代理委派规则
 
@@ -39,6 +49,9 @@
 | `quant-tuning-evaluation-generator` | 生成测评配置文件（Evaluation YAML）|
 | `quant-tuning-quantizer` | 执行模型量化|
 | `quant-tuning-evaluator` | 对量化后的模型进行精度评测|
+| `quant-tuning-accuracy-quantizer` | 精度异常定位-步骤0：调试模式复现量化（`fp-vs-quant-accuracy-analysis` 执行层）|
+| `quant-tuning-accuracy-collector` | 精度异常定位-步骤1-3：生成 probe、逆变换准备、采集两侧 dump（`fp-vs-quant-accuracy-analysis` 执行层）|
+| `quant-tuning-accuracy-comparator` | 精度异常定位-步骤4-6：后处理配置、compare 比对、定位异常模块（`fp-vs-quant-accuracy-analysis` 执行层）|
 
 ## 委派协议（强制）
 
@@ -46,7 +59,7 @@
 
 1. 包含**有且仅有一个** ` ```msagent-io v1 ` 围栏块（见 orchestrator references：`subagent_io_protocol.md`）；块外最多 3 行摘要
 2. 块内 `subagent_type` 与 task 参数一致
-3. `input` 字段遵守对应 subagent 字段表（quant-tuning 四类见 `quantization_tuning.md`，model-analysis/adapt 见 `prepare_model.md`），必填项不得缺失
+3. `input` 字段遵守对应 subagent 字段表（quant-tuning 四类见 `quantization_tuning.md`，model-analysis/adapt 见 `prepare_model.md`，accuracy-analysis 三执行层见 fp-vs-quant-accuracy-analysis skill 的 `references/subagent_io.md`），必填项不得缺失
 4. 块外禁止重复 `input` 字段或写长段执行说明；禁止粘贴 SKILL 全文
 
 `accuracy_lookup`、`history_clear`、`history_append`、`accuracy_append` 等编排脚本：**必须**在本会话 `execute`，禁止委派 subagent。

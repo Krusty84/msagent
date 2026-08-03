@@ -21,6 +21,7 @@
 from __future__ import annotations
 
 import logging
+import json
 import string
 import os
 import tempfile
@@ -66,6 +67,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_SYSTEM_PROMPT_DUMP_PATH_ENV = "MSAGENT_SYSTEM_PROMPT_DUMP_PATH"
 _TAVILY_SERVER_KEYWORDS = ("tavily",)
 _TAVILY_API_KEY_ENV = "TAVILY_API_KEY"
 _TAVILY_VALIDATE_URL = "https://api.tavily.com/usage"
@@ -189,12 +191,33 @@ class _SystemMessageMiddleware(AgentMiddleware[Any, Any, Any]):
         return rendered_item
 
     @staticmethod
+    def _dump_system_message_if_needed(content: Any) -> None:
+        dump_path = os.getenv(_SYSTEM_PROMPT_DUMP_PATH_ENV, "").strip()
+        if not dump_path:
+            return
+
+        try:
+            target = Path(dump_path).expanduser()
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if isinstance(content, str):
+                payload = content
+            else:
+                payload = json.dumps(content, ensure_ascii=False, indent=2, default=str)
+            target.write_text(payload, encoding="utf-8")
+        except Exception:
+            logger.warning("Failed to dump system prompt to %s", dump_path, exc_info=True)
+
+    @staticmethod
     def _render_request_system_message(request):
         system_message = getattr(request, "system_message", None)
         runtime = getattr(request, "runtime", None)
         context = getattr(runtime, "context", None) if runtime is not None else None
         template_vars = getattr(context, "template_vars", None) if context is not None else None
-        if system_message is None or not template_vars:
+        if system_message is None:
+            return request
+
+        if not template_vars:
+            _SystemMessageMiddleware._dump_system_message_if_needed(system_message.content)
             return request
 
         rendered_content = _SystemMessageMiddleware._safe_render_templates(
@@ -202,8 +225,10 @@ class _SystemMessageMiddleware(AgentMiddleware[Any, Any, Any]):
             template_vars,
         )
         if rendered_content == system_message.content:
+            _SystemMessageMiddleware._dump_system_message_if_needed(system_message.content)
             return request
 
+        _SystemMessageMiddleware._dump_system_message_if_needed(rendered_content)
         return request.override(system_message=system_message.model_copy(update={"content": rendered_content}))
 
     def wrap_model_call(self, request, handler):

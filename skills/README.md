@@ -74,6 +74,7 @@ description: 技能的详细描述，说明它做什么，以及什么时候使�
 | `msmodelslim-model-adapt` | 模型适配 | `帮我做这个模型的适配实现` |
 | `msmodelslim-adapter-verification` | 适配器验证 | `验证这个适配器是否可用` |
 | `gen-evaluation-cfg` | 生成评测配置 | `生成一份评测 YAML` |
+| `fp-vs-quant-accuracy-analysis` | 对比浮点 vs 量化推理 dump，定位量化精度异常模块（支持 QuaRot / SmoothQuant 逆变换） | `量化后精度异常，帮我定位到具体模块` |
 
 ### 2.4 算子 Skills
 

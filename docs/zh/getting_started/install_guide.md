@@ -46,9 +46,20 @@
 
 ### 3.3 源码安装
 
-源码安装支持脚本构建安装和手动构建安装方式。脚本构建安装为工具提供的源码构建脚本可一键执行生成安装包；手动构建安装则需要安装uv依赖，通过命令行构建。
+源码安装支持使用仓库根目录的 `build.py` 统一构建，也支持手动执行 `uv` 构建命令。
 
-#### 3.3.1 方式一：脚本构建安装
+#### 3.3.1 环境准备
+
+源码编译统一使用 MindStudio 标准构建环境。
+
+- 日常开发或使用已发布镜像，请参考《[MindStudio工具开发环境安装指导](https://gitcode.com/Ascend/msot/blob/master/docs/zh/common/dev_env_setup.md)》。
+- 需要从基础操作系统复现环境、执行源码构建验证或单元测试验证时，必须参考《[MindStudio统一构建镜像制作指南](https://gitcode.com/Ascend/msot/blob/master/docs/zh/common/docker_image_build_guide.md)》，从openEuler基础镜像现场构建环境镜像。
+
+本文档后续的源码编译和单元测试命令，均在上述指定镜像容器或现场构建的环境镜像的容器中执行，CANN 软件包版本、GCC 版本和 Python 版本以统一镜像制作指南为准，本仓库不重复维护。
+
+镜像构建完成后，必须使用统一镜像制作指南第 7 章给出的 `ctr_in.py` 命令，在交互式终端中启动并进入容器。不得使用普通 `docker run` 创建容器，也不得使用 `docker exec <容器名> bash -c '<命令>'` 替代交互式环境；否则可能跳过 Python、GCC 和 CANN 环境初始化。
+
+#### 3.3.2 方式一：使用构建脚本
 
 1. 克隆本仓库。
 
@@ -56,25 +67,20 @@
    git clone https://gitcode.com/Ascend/msagent.git
    ```
 
-2. 执行编译打包。
+2. 安装 `uv` 并执行编译打包。
 
    ```shell
    cd msagent
-   bash scripts/build_whl.sh
+   pip install uv
+   python3 build.py
    ```
 
-   适用场景：
-
-   - Linux / macOS
-   - Windows + Git Bash
-   - Windows + WSL
-
-   编译完成后在`dist`目录下生成 whl 包，名称格式为`mindstudio_agent-{version}-py3-none-any`。其中`version`为版本号。
+   构建脚本会同步锁定的构建依赖，调用底层 wheel 构建脚本，并将 `dist/` 中生成的 whl 归档到 `artifacts/`。产物名称格式为 `mindstudio_agent-{version}-py3-none-any.whl`，其中 `{version}` 默认取自 `version.info`。
 
 3. 安装whl包。
 
    ```shell
-   pip install dist/mindstudio_agent-{version}-py3-none-any.whl
+   pip install artifacts/mindstudio_agent-{version}-py3-none-any.whl
    ```
 
    安装完成后，若显示如下信息，则说明软件安装成功。
@@ -83,7 +89,16 @@
    Successfully installed mindstudio-agent-{version}
    ```
 
-#### 3.3.2 方式二：手动构建安装
+   如已完成依赖同步，可使用 `python3 build.py local` 跳过同步。需要指定构建版本或传递底层构建脚本支持的环境变量时，可使用：
+
+   ```shell
+   python3 build.py --version 26.1.0
+   python3 build.py --extra VERIFY_WHEEL_INSTALL=1
+   ```
+
+   `VERIFY_WHEEL_INSTALL=1` 会在临时虚拟环境中安装刚构建的 wheel，并验证入口模块和内置资源。
+
+#### 3.3.3 方式二：手动构建安装
 
 1. 克隆本仓库。
 
@@ -108,7 +123,7 @@
 
    编译完成后在`dist`目录下生成whl包，名称格式为`mindstudio_agent-{version}-py3-none-any`。其中`version`为版本号。
 
-4. 安装whl包
+4. 安装whl包。
 
    ```shell
    pip install dist/mindstudio_agent-{version}-py3-none-any.whl
@@ -120,7 +135,28 @@
    Successfully installed mindstudio-agent-{version}
    ```
 
-## 4. 升级与卸载
+#### 3.3.4 执行单元测试（可选）
+
+此步骤非安装必需。如需验证代码基本功能，可在仓库根目录执行：
+
+```shell
+python3 build.py test
+```
+
+该命令会同步测试依赖，并运行 `tests/ut` 和 `tests/skills` 下的用例。已完成依赖同步时，可执行 `python3 build.py test local`。
+
+## 4. 验证安装
+
+安装完成后，执行以下命令验证工具是否可用：
+
+```shell
+msagent --version
+msagent --help
+```
+
+命令能够输出版本信息和帮助信息，表示安装成功。若提示命令不存在，请确认当前终端使用的是安装 `mindstudio-agent` 的 Python 环境。
+
+## 5. 升级与卸载
 
 `msagent` 会在当前工作目录下生成 `.msagent/` 本地目录，用于保存缓存、会话历史、日志和运行时配置等内容。
 
@@ -133,7 +169,7 @@
 
 ```shell
 rm -rf .msagent
-pip install mindstudio-agent
+pip install -U mindstudio-agent
 ```
 
 从 **26.1.0-alpha.2** 起，Web UI 依赖 `langgraph-cli[inmem]` 已改为可选 extra `[web]`。`pip install -U` 升级时**不会自动卸载**旧版已安装的 web 相关包；若不再使用 Web UI，可手动执行：

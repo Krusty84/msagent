@@ -1,0 +1,17 @@
+version: __APP_VERSION__
+name: quant-tuning-accuracy-quantizer
+description: Reproduce quantization in debug mode for accuracy anomaly location
+prompt:
+  - prompts/subagents/quant-tuning-accuracy-quantizer.md
+llm: default
+tools:
+  patterns:
+    - impl:*:*
+    - internal:*:*
+    - mcp:*:*
+  use_catalog: false
+  output_max_tokens: 10000
+skills:
+  patterns:
+    - default:fp-vs-quant-accuracy-analysis
+  use_catalog: false

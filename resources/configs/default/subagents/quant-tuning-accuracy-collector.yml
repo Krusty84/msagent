@@ -1,0 +1,17 @@
+version: __APP_VERSION__
+name: quant-tuning-accuracy-collector
+description: Generate probe config, prepare inverse transforms, collect fp vs quant dumps
+prompt:
+  - prompts/subagents/quant-tuning-accuracy-collector.md
+llm: default
+tools:
+  patterns:
+    - impl:*:*
+    - internal:*:*
+    - mcp:*:*
+  use_catalog: false
+  output_max_tokens: 10000
+skills:
+  patterns:
+    - default:fp-vs-quant-accuracy-analysis
+  use_catalog: false

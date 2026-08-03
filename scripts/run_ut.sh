@@ -14,5 +14,5 @@ if ! command -v uv >/dev/null 2>&1; then
 fi
 
 cd "${REPO_ROOT}"
-echo "[run_ut] Running unit and Skill tests..."
-uv run pytest -q "${TEST_TARGETS[@]}" "$@"
+echo "[run_ut] Running unit and Skill tests with a 1-second per-test timeout..."
+uv run --with pytest-timeout pytest -q "${TEST_TARGETS[@]}" "$@" --timeout=1

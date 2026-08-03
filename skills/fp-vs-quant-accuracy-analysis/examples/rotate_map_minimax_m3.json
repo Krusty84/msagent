@@ -1,0 +1,23 @@
+{
+    "_description": "MiniMax-M3 的旋转作用范围参考（验收用例示例，非 skill 通用逻辑）",
+    "_source": "来自 msmodelslim 的 get_rotate_map，详见 references/rotate_map_minimax_m3.md",
+    "_usage": "作为 gen_postprocess_config.py --rotate-map 参数的输入示例",
+    "_format": "按空间归属分类：right_input/right_output/left_output",
+    "right_input": [
+        "q_proj",
+        "k_proj",
+        "v_proj",
+        "gate_proj",
+        "up_proj",
+        "gate",
+        "lm_head"
+    ],
+    "right_output": [
+        "embed_tokens"
+    ],
+    "left_output": [
+        "o_proj",
+        "down_proj",
+        "merge_linear_2"
+    ]
+}

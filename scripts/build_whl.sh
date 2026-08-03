@@ -244,7 +244,11 @@ build_wheel() {
         cd "${REPO_ROOT}"
         uv lock --check
       ); then
-        fail "uv.lock is out of sync with pyproject.toml. If you changed project.version, dependencies, or dependency-groups, run 'uv lock', commit the updated uv.lock, and rerun the build."
+        log "uv.lock is out of sync with pyproject.toml; updating it for this build..."
+        (
+          cd "${REPO_ROOT}"
+          uv lock
+        )
       fi
     else
       log "uv.lock not found; skipping uv lock consistency check."

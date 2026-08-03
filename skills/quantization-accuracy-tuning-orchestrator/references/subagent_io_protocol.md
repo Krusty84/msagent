@@ -16,6 +16,9 @@
 | `quant-tuning-practice-generator` | 生成 Practice 配置 | [quantization_tuning.md](./quantization_tuning.md) |
 | `quant-tuning-quantizer` | 执行量化 | [quantization_tuning.md](./quantization_tuning.md) |
 | `quant-tuning-evaluator` | 执行精度评测 | [quantization_tuning.md](./quantization_tuning.md) |
+| `quant-tuning-accuracy-quantizer` | 精度异常定位-复现量化 | [fp-vs-quant-accuracy-analysis/references/subagent_io.md](../../../fp-vs-quant-accuracy-analysis/references/subagent_io.md) |
+| `quant-tuning-accuracy-collector` | 精度异常定位-dump 采集 | [fp-vs-quant-accuracy-analysis/references/subagent_io.md](../../../fp-vs-quant-accuracy-analysis/references/subagent_io.md) |
+| `quant-tuning-accuracy-comparator` | 精度异常定位-对比分析 | [fp-vs-quant-accuracy-analysis/references/subagent_io.md](../../../fp-vs-quant-accuracy-analysis/references/subagent_io.md) |
 
 ## 职责边界
 

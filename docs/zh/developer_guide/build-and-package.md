@@ -1,33 +1,42 @@
 # 编译与打包
 
-本文档基于当前仓库中的 `scripts/build_whl.sh` 与 `pyproject.toml` 说明 `msAgent` 的 wheel 构建方式。
+本文档说明 `msAgent` 的统一构建入口 `build.py`，以及其调用的底层构建脚本 `scripts/build_whl.sh`。
 
 ## 推荐方式
 
-推荐优先使用仓库自带脚本：
+按照《[msAgent 安装指南 — 源码安装](../getting_started/install_guide.md#331-环境准备)》章节完成编译和测试环境的搭建。
+
+> **说明：** 环境镜像的构建方法及配套软件版本由 MindStudio 统一镜像制作指南维护，本仓库不重复定义。
+
+推荐优先使用仓库根目录的统一构建入口：
 
 ```bash
-bash scripts/build_whl.sh
+python3 build.py
 ```
 
-适用场景：
+构建成功后，wheel 会先生成在 `dist/`，再归档到 `artifacts/`。安装命令如下：
 
-- Linux / macOS
-- Windows + Git Bash
-- Windows + WSL
+```bash
+pip install artifacts/mindstudio_agent-<version>-py3-none-any.whl
+```
 
-## 构建脚本当前行为
+## 构建与测试命令
 
-`scripts/build_whl.sh` 会按当前实现执行以下步骤：
+| 命令 | 作用 |
+|---|---|
+| `python3 build.py` | 安装 `uv`，构建并归档 wheel。 |
+| `python3 build.py local` | 使用本地已安装的 `uv` 构建并归档 wheel。 |
+| `python3 build.py test` | 安装 `uv`，运行 `tests/ut` 和 `tests/skills`。 |
+| `python3 build.py test local` | 使用本地已安装的 `uv` 运行 `tests/ut` 和 `tests/skills`。 |
 
-1. 根据 `WHL_VERSION` 或 `version.info` 同步本次构建使用的版本号，并刷新 `pyproject.toml` 与 `uv.lock` 的根包版本
-2. 解析 `pyproject.toml` 中的项目名、Python 最低版本和入口模块
-3. 检查本机 Python 版本是否满足要求
-4. 识别仓库根目录下的 `skills/` 资源目录
-5. 校验 Skills 资源目录存在且非空
-6. 如果存在 `uv.lock`，先执行 `uv lock --check`
-7. 优先使用 `uv build --wheel --out-dir dist` 构建 wheel
-8. 如果本机没有 `uv`，回退到 `python -m build`
+`build.py` 的构建流程如下：
+
+1. 非 `local` 模式执行 `python -m pip install uv`
+2. 构建模式调用 `scripts/build_whl.sh` 同步构建版本、检查 Python 与 Skills 资源，并构建 wheel
+3. 将 `dist/` 中的 whl 复制到 `artifacts/`
+4. 测试模式调用 `scripts/run_ut.sh`，由其中的 `uv run` 自动准备测试依赖
+
+`scripts/build_whl.sh` 仍可单独使用，适合需要直接控制其环境变量的场景。它会先校验 `uv.lock`，不一致时在当前工作区自动执行 `uv lock` 更新，再使用 `uv build`；在没有 `uv` 时回退到 `python -m build`。
 
 ## 常用构建参数
 
@@ -42,12 +51,10 @@ bash scripts/build_whl.sh
 | `SMOKE_RESOURCE_PATH` | `resources/configs/default/config.mcp.json`  | 冒烟验证时检查是否被打进 wheel 的资源文件。 |
 | `SMOKE_SKILL_PATH` | `resources/configs/default/skills/README.md` | 冒烟验证时检查是否被打进 wheel 的 Skills 资源文件。 |
 
-如果你希望按主仓库当前锁定的 Skills 版本构建，而不是同步上游最新提交，可以这样执行：
-
 如果你想附带安装冒烟验证：
 
 ```bash
-VERIFY_WHEEL_INSTALL=1 bash scripts/build_whl.sh
+python3 build.py --extra VERIFY_WHEEL_INSTALL=1
 ```
 
 ## 手动构建
@@ -62,7 +69,7 @@ pip install uv
 test -d skills
 # 检查锁文件是否是最新的、是否和当前项目依赖声明一致
 uv lock --check
-# 构建项目的 wheel 安装包。
+# 构建项目的 wheel 安装包
 uv build --wheel --out-dir dist .
 ```
 
@@ -82,6 +89,7 @@ pip install .\dist\mindstudio_agent-<version>-py3-none-any.whl
 
 ## 相关文件
 
-- 构建脚本：`scripts/build_whl.sh`
+- 统一构建入口：`build.py`
+- 底层构建脚本：`scripts/build_whl.sh`
 - 项目元数据：`pyproject.toml`
 - 默认 Skills 目录：`skills/`

@@ -89,13 +89,13 @@ uv run pytest -q
 uv lock --check
 
 # 构建 wheel（涉及打包或 Skills 变更时建议执行）
-bash scripts/build_whl.sh
+python3 build.py
 ```
 
 如需验证 wheel 安装，可使用：
 
 ```bash
-VERIFY_WHEEL_INSTALL=1 bash scripts/build_whl.sh
+python3 build.py --extra VERIFY_WHEEL_INSTALL=1
 ```
 
 构建细节见 [编译与打包](build-and-package.md)。

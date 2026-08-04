@@ -218,22 +218,22 @@ class _SystemMessageMiddleware(AgentMiddleware[Any, Any, Any]):
 class _FilteredSkillsMiddleware(SkillsMiddleware):
     """Load skills metadata, then keep only the skills allowed by the current agent patterns."""
 
-    def __init__(self, *, backend: Any, sources: list[str], allowed_skill_paths: set[str]) -> None:
+    def __init__(self, *, backend: Any, sources: list[str], allowed_skills: list[Any] | None) -> None:
         super().__init__(backend=backend, sources=sources)
-        self._allowed_skill_paths = allowed_skill_paths
+        self._allowed_skill_names = {
+            str(getattr(skill, "name", "")).strip()
+            for skill in (allowed_skills or [])
+            if str(getattr(skill, "name", "")).strip()
+        }
         self.system_prompt_prefix = _FILTERED_SKILLS_SYSTEM_PROMPT_PREFIX
 
-    @staticmethod
-    def _normalize_skill_path(path: str) -> str:
-        return PurePosixPath(path.replace("\\", "/")).as_posix()
-
     def _filter_skills_metadata(self, skills_metadata: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        if not self._allowed_skill_paths:
+        if not self._allowed_skill_names:
             return []
         return [
             skill
             for skill in skills_metadata
-            if self._normalize_skill_path(str(skill.get("path", ""))) in self._allowed_skill_paths
+            if str(skill.get("name", "")).strip() in self._allowed_skill_names
         ]
 
     def _sorted_filtered_skills(self, skills_metadata: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -422,7 +422,6 @@ class AgentFactory:
         all_tools = [*runtime_tools, *mcp_tools]
 
         skills_sources = self._resolve_existing_paths(skills_dir)
-        allowed_skill_paths = self._build_allowed_skill_paths(allowed_skills)
         memory_sources = self._resolve_memory_sources(working_dir)
         enable_skills_middleware = self._should_enable_skills_middleware(
             config=config,
@@ -486,7 +485,7 @@ class AgentFactory:
                 _FilteredSkillsMiddleware(
                     backend=metadata_backend,
                     sources=skills_sources,
-                    allowed_skill_paths=allowed_skill_paths,
+                    allowed_skills=allowed_skills,
                 )
             )
         if tool_output_max_tokens is not None and tool_output_max_tokens > 0:
@@ -728,7 +727,7 @@ class AgentFactory:
                 _FilteredSkillsMiddleware(
                     backend=FilesystemBackend(virtual_mode=False),
                     sources=skills_sources,
-                    allowed_skill_paths=self._build_allowed_skill_paths(allowed_skills),
+                    allowed_skills=allowed_skills,
                 )
             )
         return extra
@@ -1108,18 +1107,6 @@ class AgentFactory:
         if not routes:
             return local_backend
         return CompositeBackend(default=local_backend, routes=routes)
-
-    @staticmethod
-    def _normalize_skill_path(path: Any) -> str:
-        return PurePosixPath(str(path or "").replace("\\", "/")).as_posix()
-
-    @classmethod
-    def _build_allowed_skill_paths(cls, allowed_skills: list[Any] | None) -> set[str]:
-        return {
-            cls._normalize_skill_path(path)
-            for skill in (allowed_skills or [])
-            if (path := getattr(skill, "path", None)) is not None and str(path).strip()
-        }
 
     @staticmethod
     def _filter_skills_by_patterns(skills: list[Any] | None, patterns: list[str]) -> list[Any]:

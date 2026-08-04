@@ -104,9 +104,14 @@ install_build_deps() {
     done
     log "Build dependencies check complete"
 
-    # 安装项目本身的开发依赖
-    log "Installing project dev dependencies..."
-    python3 -m pip install -e ".[dev]" 2>&1 | tail -3 || warn "pip install -e .[dev] failed (will retry on build)"
+    # 使用 uv 安装项目开发依赖（对齐项目规定的构建方式）
+    if command -v uv &>/dev/null; then
+        log "Installing project dev dependencies via uv..."
+        uv sync --dev 2>&1 | tail -3 || warn "uv sync --dev failed"
+    else
+        log "uv not found, falling back to pip..."
+        python3 -m pip install -e ".[dev]" 2>&1 | tail -3 || warn "pip install -e .[dev] failed"
+    fi
 }
 
 sync_git_identity() {

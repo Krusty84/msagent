@@ -18,7 +18,7 @@
 
 from pathlib import Path
 
-from msagent.agents.factory import AgentFactory
+from msagent.agents.factory import _FilteredSkillsMiddleware
 from msagent.skills.factory import DEFAULT_SKILL_CATEGORY, Skill
 
 
@@ -39,7 +39,7 @@ def test_skill_discovers_scripts(tmp_path: Path) -> None:
     assert skill.get_script_relative_paths() == ["scripts/run_demo.py"]
 
 
-def test_agent_factory_builds_allowed_skill_paths(tmp_path: Path) -> None:
+def test_filtered_skills_middleware_filters_by_skill_name(tmp_path: Path) -> None:
     skill_dir = tmp_path / "skills" / "analysis" / "demo-skill"
     scripts_dir = skill_dir / "scripts"
     scripts_dir.mkdir(parents=True)
@@ -53,6 +53,43 @@ def test_agent_factory_builds_allowed_skill_paths(tmp_path: Path) -> None:
         path=skill_dir / "SKILL.md",
     )
 
-    allowed_paths = AgentFactory._build_allowed_skill_paths([skill])
+    middleware = _FilteredSkillsMiddleware(
+        backend=None,
+        sources=[],
+        allowed_skills=[skill],
+    )
 
-    assert allowed_paths == {skill.path.as_posix()}
+    skills_metadata = [
+        {
+            "name": "demo-skill",
+            "description": "demo description",
+            "path": "/skills/analysis/demo-skill/SKILL.md",
+        },
+        {
+            "name": "other-skill",
+            "description": "other description",
+            "path": "/skills/analysis/other-skill/SKILL.md",
+        },
+    ]
+
+    filtered = middleware._filter_skills_metadata(skills_metadata)
+
+    assert filtered == [
+        {
+            "name": "demo-skill",
+            "description": "demo description",
+            "path": "/skills/analysis/demo-skill/SKILL.md",
+        }
+    ]
+
+
+def test_filtered_skills_middleware_returns_empty_when_no_allowed_skills() -> None:
+    middleware = _FilteredSkillsMiddleware(
+        backend=None,
+        sources=[],
+        allowed_skills=[],
+    )
+
+    filtered = middleware._filter_skills_metadata([{"name": "demo-skill", "description": "demo"}])
+
+    assert filtered == []

@@ -84,8 +84,7 @@ skills/mindstudio-storage-analysis/
 │   ├── summarize_msprof.py
 │   └── render_io_report.py
 ├── assets/io_report_template.html
-├── references/              # 数据格式、采集、故障建议、HTML 契约
-└── evals/                   # 确定性测试、真机检查器和受控 workload
+└── references/              # 数据格式、采集、故障建议、HTML 契约
 ```
 
 不要提交以下内容：API Key、`.msagent/`、`deepseek.env`、`__pycache__`、`.pyc`、
@@ -162,33 +161,30 @@ msagent --stream -w "$PWD" \
 
 预期回答应明确提到 `mindstudio-storage-analysis`。后续测试统一使用 `--stream`。
 
-## 9. 先跑确定性回归
+## 9. 先做生产脚本检查
 
 ```bash
-python3 skills/mindstudio-storage-analysis/evals/run_eval.py
-python3 -m unittest discover \
-  -s skills/mindstudio-storage-analysis/evals \
-  -p 'test_*.py' -v
+python3 -m py_compile skills/mindstudio-storage-analysis/scripts/*.py
+python3 skills/mindstudio-storage-analysis/scripts/discover_io_target.py --help
+python3 skills/mindstudio-storage-analysis/scripts/collect_io_snapshot.py --help
+python3 skills/mindstudio-storage-analysis/scripts/analyze_io_snapshot.py --help
 ```
 
-预期没有失败。`SKIP` 只能表示环境前提不满足，不能算通过。
+预期命令没有语法或依赖错误。测试代码未随 Skill 提交，历史测试结果仅作为开发记录。
 
 ## 10. NPU 真机测试顺序
 
-### 10.1 NPU 运行时冒烟
+### 10.1 NPU 运行时检查
 
-只在空闲、隔离的测试节点上，由人明确决定后执行：
+确认驱动、运行时和 PyTorch NPU 适配可用：
 
 ```bash
 source /path/to/cann/set_env.sh
-python3 skills/mindstudio-storage-analysis/evals/run_npu_runtime_eval.py \
-  --elements 1048576 \
-  --iterations 100 \
-  --report /tmp/npu-runtime.json
+npu-smi info
+python3 -c 'import torch, torch_npu; print(torch.npu.is_available()); print(torch.npu.device_count())'
 ```
 
-预期报告为 `PASS`，并列出实际 NPU device。这个测试只证明 ACL/NPU 能运行，不证明
-存储导致了 NPU 空闲。
+这个检查只证明 NPU 运行时可见，不证明存储导致了 NPU 空闲。
 
 ### 10.2 启动一项真实 Ascend 训练
 
@@ -249,13 +245,13 @@ artifact”的实现。因此本轮真机测试的正确验收是：
 - 没有 profiler 或时间窗不重叠时，R500 必须降级，不能声称存储导致 NPU 空闲；
 - `op_summary_diagnostics.json` 不能直接作为 analyzer 的 `--profile` 输入。
 
-用已有同窗口文件执行只读检查：
+用生产分析器检查已有的同窗口文件：
 
 ```bash
-python3 skills/mindstudio-storage-analysis/evals/run_live_eval.py \
-  --snapshot /path/to/io_snapshot.json \
+python3 skills/mindstudio-storage-analysis/scripts/analyze_io_snapshot.py \
+  /path/to/io_snapshot.json \
   --profile /path/to/npu_metrics.json \
-  --require-npu-runtime
+  -o /path/to/findings.json
 ```
 
 ### 10.5 多卡多 rank
@@ -277,15 +273,15 @@ mountstats /path/to/nfs-dataset 2>/dev/null || cat /proc/self/mountstats
 ```
 
 先跑正常 NFS 基线，再跑大量小文件数据集。通过 msAgent 使用与 10.3 相同的完整流程，
-只是把目标路径换成 NFS 数据集。额外执行：
+只是把目标路径换成 NFS 数据集。需要手工验证生产采集和分析链路：
 
 ```bash
-python3 skills/mindstudio-storage-analysis/evals/run_live_eval.py \
-  --duration 30 \
+python3 skills/mindstudio-storage-analysis/scripts/collect_io_snapshot.py \
+  --duration 30 --out /tmp/nfs-io-snapshot.json \
   --pid <训练PID> \
-  --path /path/to/nfs-dataset \
-  --require-npu \
-  --require-nfs
+  --path /path/to/nfs-dataset
+python3 skills/mindstudio-storage-analysis/scripts/analyze_io_snapshot.py \
+  /tmp/nfs-io-snapshot.json -o /tmp/nfs-findings.json
 ```
 
 验收标准：

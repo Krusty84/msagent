@@ -90,9 +90,9 @@ Multi-rank, DataLoader, or NPU-idle wording alone is not proof of a storage issu
 
 All relative commands below assume the current directory is the Skill root: the directory
 containing this `SKILL.md`. Resolve that directory from the loaded Skill location and `cd` to
-it before running `scripts/...` or `evals/...`; do not assume the repository root is the cwd.
+it before running `scripts/...`; do not assume the repository root is the cwd.
 
-Target discovery has no third-party Python dependency and must run first when PID or path is unknown. Before running the collector, analyzer, renderer, or evals, use Python 3.10 or newer and verify dependencies:
+Target discovery has no third-party Python dependency and must run first when PID or path is unknown. Before running the collector, analyzer, or renderer, use Python 3.10 or newer and verify dependencies:
 
 ```bash
 python3 -c "import pydantic, yaml; print(pydantic.__version__)"
@@ -248,36 +248,6 @@ Return both the concise terminal diagnosis and the absolute HTML path. Warn befo
 - Do not emit high-confidence dynamic findings from missing, stale, malformed, or target-mismatched time windows.
 - Do not treat provider `unsupported`, `empty`, or failure states as normal health.
 
-## Validate the skill
-
-Run deterministic evals and unit tests:
-
-```bash
-python3 evals/run_eval.py
-python3 -m unittest discover -s evals -p 'test_*.py' -v
-```
-
-Run read-only validation on a Linux/Ascend host while the representative workload is active:
-
-```bash
-python3 evals/run_live_eval.py --duration 10 --pid <workload_pid> --path /data --require-npu
-```
-
-For R500 investigation, capture the IO Snapshot during the profiled workload and obtain `device_free_percent` with timestamps from an actual profiler timeline/DB view. The current JSON-only profile contract reports this as medium-confidence context; it does not certify an R500 positive-high conclusion until a trusted artifact verifier exists. The `op_summary` diagnostic summarizer cannot create certifying metrics. Validate the paired artifacts without starting a new collection window:
-
-```bash
-python3 evals/run_live_eval.py --snapshot io_snapshot.json --profile npu_metrics.json --require-npu-runtime
-```
-
-Interpret `SKIP` as an unmet prerequisite, not a pass. `--require-nfs` certifies activity only for the NFS mount containing `snapshot.target.path`; unrelated NFS traffic cannot satisfy it. Require `--require-npu-runtime` or `--require-nfs` only in an environment intended to certify those capabilities.
-
-For an explicitly idle, isolated test node only, an operator may run the bounded real-device smoke below. It is synthetic NPU load and must never be launched automatically by this Skill or against a production workload:
-
-```bash
-source /path/to/cann/set_env.sh
-python3 evals/run_npu_runtime_eval.py --elements 1048576 --iterations 100 --report /tmp/npu-runtime.json
-```
-
 ## References
 
 - `references/io_snapshot_schema.md`: snapshot schema and provider contract.
@@ -290,6 +260,3 @@ python3 evals/run_npu_runtime_eval.py --elements 1048576 --iterations 100 --repo
 - `scripts/summarize_msprof.py`: non-certifying `msprof op_summary` diagnostic summarizer.
 - `scripts/render_io_report.py`: deterministic, offline HTML report renderer.
 - `assets/io_report_template.html`: self-contained report template used only by the renderer.
-- `evals/cases.yaml` and `evals/run_eval.py`: deterministic behavior cases and runner.
-- `evals/run_live_eval.py`: read-only Linux, provider, NPU, primary GlusterFS, auxiliary NFS, and R500 environment validation.
-- `evals/run_npu_runtime_eval.py`: explicit, bounded ACLNN real-device smoke; operator-invoked only.

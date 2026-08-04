@@ -223,12 +223,6 @@ python3 scripts/summarize_msprof.py /path/to/msprof-output --device 0 -o op_summ
 
 它只读取唯一的 `op_summary_*.csv`，输出明确标注的 task-gap 和逐列 MTE2 ratio 统计 proxy。`op_summary` 没有设备 timeline，Task Duration 也包含调度、执行和响应阶段；因此摘要器不会生成 `device_free_percent`、全局 `mte2_ratio`、`profile_window` 或 `conduction_evidence`，输出不能直接传给 analyzer 的 `--profile`。
 
-用 live runner 检查实时环境：
-
-```bash
-python3 evals/run_live_eval.py --duration 30 --pid <workload_pid> --path /data --require-npu-runtime
-```
-
 R500 验收必须使用同一 workload 时间窗内配对的 Snapshot 和真实 profiler timeline/DB 指标。应在 profiler 覆盖目标 workload 时并行运行 collector，再复用该 Snapshot；不要为已完成的 profile 启动一个新的采集窗口：
 
 ```bash
@@ -237,17 +231,10 @@ python3 scripts/collect_io_snapshot.py --duration 30 --pid 42 --path /data/train
 # 可选：生成不参与 R500 认证的 op_summary 诊断 proxy
 python3 scripts/summarize_msprof.py /path/to/msprof-output --device 0 -o op_summary_diagnostics.json
 # 从 timeline/DB 取得真实 device Free、认证 scope、metric provenance 及其窗口，生成 npu_metrics.json；核验实际 Host evidence_interval 同窗传导或受控实验后执行
-python3 evals/run_live_eval.py --snapshot io_snapshot.json --profile npu_metrics.json --require-npu-runtime
+python3 scripts/analyze_io_snapshot.py io_snapshot.json --profile npu_metrics.json -o findings.json
 ```
 
-第一条 collector 命令必须用 `--pid`/`--path` 显式绑定目标，并与被 profile 的 workload 时间窗口重叠。`summarize_msprof.py` 只产生非认证 proxy。`npu_metrics.json` 必须由真实 timeline/DB 指标构建，带 `profile_window.scope="matched_workload_device_timeline"`，并为每个动态指标记录 `provenance.{metric}`：`source_type`、可审计的 `artifact_id`、非负整数 `device_id`、精确 `metric` 和允许的 `extraction_method`。当前 JSON-only contract 只能给出 medium R500 候选；可信 artifact verifier 尚未实现时不得要求 R500 high。`op_summary`、导出 task gap、缺失或任意 scope 均不参与认证。`run_live_eval.py --profile` 要求 profile 带 `profile_window.start/end`，analyzer 会拒绝与所给 Snapshot 不同窗的动态指标。`--require-npu-runtime` 会执行真实 ACL init、设备枚举和 finalize，但不会制造负载。`--require-nfs` 只认证包含 `snapshot.target.path` 的 NFS 挂载及其同窗 delta，不接受其他挂载的活动。
-
-在明确空闲的隔离测试节点上，若需要验证 ACLNN 编译、HBM 拷贝、算子执行和结果校验，可由操作者显式运行有界 smoke；这不是 collector 的自动步骤：
-
-```bash
-source /path/to/cann/set_env.sh
-python3 evals/run_npu_runtime_eval.py --elements 1048576 --iterations 100 --report /tmp/npu-runtime.json
-```
+第一条 collector 命令必须用 `--pid`/`--path` 显式绑定目标，并与被 profile 的 workload 时间窗口重叠。`summarize_msprof.py` 只产生非认证 proxy。`npu_metrics.json` 必须由真实 timeline/DB 指标构建，带 `profile_window.scope="matched_workload_device_timeline"`，并为每个动态指标记录 `provenance.{metric}`：`source_type`、可审计的 `artifact_id`、非负整数 `device_id`、精确 `metric` 和允许的 `extraction_method`。当前 JSON-only contract 只能给出 medium R500 候选；可信 artifact verifier 尚未实现时不得要求 R500 high。`op_summary`、导出 task gap、缺失或任意 scope 均不参与认证。analyzer 要求 profile 带 `profile_window.start/end`，并拒绝与所给 Snapshot 不同窗的动态指标。
 
 ## 2. IO Snapshot 数据契约
 

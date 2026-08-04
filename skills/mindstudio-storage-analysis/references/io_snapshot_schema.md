@@ -160,5 +160,3 @@ snap, profile, errors, profile_errors, fatal = validate_analysis_request(data)
 if fatal or errors or profile_errors:
     raise ValueError(f"fatal={fatal}; snapshot={errors}; profile={profile_errors}")
 ```
-
-测试见 `evals/test_collect_io_snapshot.py` 与 `evals/test_analyze_io_snapshot.py`；完整行为矩阵见 `evals/cases.yaml`。

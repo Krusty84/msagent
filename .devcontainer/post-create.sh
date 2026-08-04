@@ -29,7 +29,7 @@ configure_python3() {
         source /etc/profile.d/pyenv.sh 2>/dev/null || warn "Failed to source pyenv.sh"
         log "Loaded pyenv profile"
     fi
-    for candidate in /opt/python/cp*-cp*; do
+    for candidate in /opt/python/cp311-cp* /opt/python/cp310-cp*; do
         if [ -d "$candidate/bin" ] && [ -x "$candidate/bin/python3" ]; then
             local marker="# msagent-pyenv-python"
             for rcfile in "$HOME/.bashrc" "$HOME/.bash_profile"; do
@@ -103,6 +103,10 @@ install_build_deps() {
         done
     done
     log "Build dependencies check complete"
+
+    # 安装项目本身的开发依赖
+    log "Installing project dev dependencies..."
+    python3 -m pip install -e ".[dev]" 2>&1 | tail -3 || warn "pip install -e .[dev] failed (will retry on build)"
 }
 
 sync_git_identity() {

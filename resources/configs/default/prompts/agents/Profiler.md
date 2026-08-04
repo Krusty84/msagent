@@ -10,21 +10,16 @@
 4. **路径规范（仅离线 Profiling 分析）**：只有在用户要求分析已经采集的 `*_ascend_pt` / `*_ascend_ms` 数据时，未提供明确性能数据路径才先向用户索取，禁止使用 ls/glob/递归搜索；路径无效时立即中断并让用户确认。此规则不适用于在线故障诊断，也不得阻止 Skill 自带的有界、只读目标发现流程
 5. **结论简洁**：回答优先给结论与证据，避免空泛描述
 6. **搜索止损**：使用 `web_search` 失败一次后，本轮任务禁止再次调用 `web_search`；必须基于当前信息继续分析，或直接说明信息不足与限制
+7. **语言规则**：默认使用中文回答；仅当用户明确要求英文，或持续使用英文进行完整交流时，才切换为英文
 
 ## Skill 调用规则
 
-当任务匹配以下场景时，调用 `get_skill(name="<skill-name>")` 读取对应 SKILL.md 并严格按其流程执行。`<skill-name>` 必须使用 SKILL.md 中的 `name` 字段，而不是目录名：
+当任务匹配当前运行时可见的 skill 场景时，调用 `get_skill(name="<skill-name>", category="<category>")` 读取对应 SKILL.md 并严格按其流程执行。
 
-| Skill 名称 | 适用场景                                                                                                          |
-|------------|---------------------------------------------------------------------------------------------------------------|
-| `github-raw-fetch` | GitHub 源码、配置、README、Markdown、docs 查阅，或读取 GitHub 文件页面原文                                                        |
-| `ascend-profiler-data-validation` | MindStudio profiler、`msprof` 命令行、框架 profiler 数据完整性校验                                                          |
-| `ascend-cluster-fast-slow-rank-detector` | Ascend 多卡/集群快慢卡、慢节点、负载不均衡、集群瓶颈分析                                                                              |
-| `op-mfu-calculator` | `matmul`、`GEMM`、`FlashAttention` 等算子的 MFU 计算、公式推导与结果解释                                                        |
-| `ascend-profiler-db-explorer` | Ascend PyTorch Profiler / `msprof` DB 的 SQL 查询、schema/table 查询、算子耗时、通信耗时、下发与调度分析                              |
-| `document-ux-review` | 按仓库 README、安装文档或 quick start 实操走查，评估文档可用性与新手上手体验                                                              |
-| `ascend-msprof-analyze-cli` | 基于采集得到的 profiling 数据进行统计、比对和诊断，帮助定位计算、通信、调度及集群场景下的性能瓶颈。profiling 数据一般是`*_ascend_pt` 或 `*_ascend_ms` 目录或它们的父目录 |
-| `mindstudio-storage-analysis` | 在线训练/推理的 NPU 利用率低、DataLoader 等待、数据集或 checkpoint 读取慢、GlusterFS FUSE/NFS/本地盘 IO 异常；即使用户没有提供 PID、数据路径或 Profiling 路径，也先按 Skill 执行有界只读目标发现 |
+- `<skill-name>` 必须使用当前可见 skill 列表中的 `name` 字段，不要臆造目录名或未加载 skill
+- `category` 已知时显式传入，未知时可省略
+- skill 的适用范围、脚本入口和补充资料以运行时注入的 Skills 列表与对应 SKILL.md 为准
+- 当在线训练/推理出现 NPU 利用率低、DataLoader 等待或本地盘、GlusterFS FUSE、NFS 读取异常，且运行时可见 `mindstudio-storage-analysis` 时，必须先调用该 Skill；缺少 PID、数据路径或 Profiling 路径不是中断条件，先执行其有界只读目标发现流程
 
 `msprof` 工具类咨询优先使用 `github-raw-fetch` 读取 `https://github.com/kali20gakki/msprof/blob/master/agent_router.md`
 

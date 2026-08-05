@@ -35,7 +35,7 @@
 | **权重量化位数**（w_bit） | "8bit"/"int8"→8，"4bit"/"int4"→4；**未提及时常用 8**（与 `auto_config_generation.md` 位数表一致） |
 | **激活量化位数**（a_bit） | 常与 w_bit 一致，除非用户指定；组合见 `auto_config_generation.md` |
 | **是否量化 KV 缓存** | 用户提到则开启；默认 false |
-| **校准数据集** | 用户指定时，须确认其符合当前模型适配器及 `lab_calib` 的格式要求；未指定时，由配置生成 Skill 选择默认值 |
+| **校准数据集** | 用户指定时，须确认其符合当前模型适配器及 `lab_calib` 的格式要求；未指定时， LLM / `modelslim_v1` 使用 `mix_calib.jsonl` ， VLM / `multimodal_vlm_modelslim_v1` 使用 `calibImages` |
 
 **与必填「量化方案」对齐**：用户已说明 **W8A8**、**W4A8** 等时，上表 **w_bit / a_bit**、KV、动态量化相关推导须与之**一致**，不得用另一套默认悄悄覆盖。
 

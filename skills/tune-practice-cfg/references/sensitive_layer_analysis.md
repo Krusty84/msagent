@@ -5,7 +5,7 @@
 通过 `execute` 调用 **msmodelslim CLI**：
 
 ```bash
-ASCEND_RT_VISIBLE_DEVICES="${SELECTED_NPU_IDS_CSV}" msmodelslim analyze layer \
+msmodelslim analyze layer \
     --model_type Qwen3-32B \
     --model_path "${model_path}" \
     --metrics mse_layer_wise \
@@ -18,7 +18,6 @@ ASCEND_RT_VISIBLE_DEVICES="${SELECTED_NPU_IDS_CSV}" msmodelslim analyze layer \
 
 执行命令前须构造以下变量：
 
-- `SELECTED_NPU_IDS_CSV`：将 `selected_npu_ids` 按原顺序连接为逗号分隔字符串，例如 `[6, 7]` 转换为 `6,7`。
 - `NUM_HIDDEN_LAYERS`：从模型 `config.json` 中读取 `num_hidden_layers`。依次检查顶层、`text_config`、`language_config` 和 `thinker_config.text_config`；均未找到时停止执行。
 - `effective_calib_dataset`：优先使用显式传入的 `calib_dataset`；未传入时，`modelslim_v1` 使用 `mix_calib.jsonl`，`multimodal_vlm_modelslim_v1` 使用 `calibImages`。
 - `analysis_include_patterns`：从基准 Practice 的 `spec.process[type=linear_quant].include` 读取；缺失或为空时使用 `["*"]`。多个模式必须作为同一个 `--quant_modules` 后的独立数组元素参数传递，不得拼接成一个字符串。

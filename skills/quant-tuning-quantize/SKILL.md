@@ -91,21 +91,18 @@ quant-tuning-quantize (tool)
 | `model_path` | string | ✅ | 原始模型路径 |
 | `save_path` | string | ✅ | 量化产物保存路径；须体现调优轮次，推荐 `{workdir}/round_{N}/quantized`（如 `round_1/quantized`） |
 | `model_type` | string | ✅ | 模型类型名 |
-| `device` | string | ✅ | 设备参数 |
-| `selected_npu_ids` | int[] | 条件必填 | NPU 场景的物理卡白名单；实际命令必须据此设置 `ASCEND_RT_VISIBLE_DEVICES` |
+| `device` | string | ✅ | 设备类型，如 `npu:0` |
 | `trust_remote_code` | bool | ❌ | 是否信任远程代码 |
-
-`device`：默认使用 `npu`。仅当 `config_path` 的 `apiversion` 为 `modelslim_v1` 且本轮明确执行多卡分布式量化时，才将参数写成从零开始、与可见卡数量一致的逻辑索引，例如两张可见卡使用 `npu:0,1`。
 
 ---
 
 ## CLI 调用
 
 ```bash
-ASCEND_RT_VISIBLE_DEVICES="${SELECTED_NPU_IDS_CSV}" msmodelslim quant \
+msmodelslim quant \
   --model_path "${MODEL_PATH}" \
   --save_path "${WORKDIR}/round_1/quantized" \
-  --device npu \
+  --device npu:0 \
   --model_type "${MODEL_TYPE}" \
   --config_path "${CONFIG_PATH}" \
   --trust_remote_code False
@@ -114,8 +111,6 @@ ASCEND_RT_VISIBLE_DEVICES="${SELECTED_NPU_IDS_CSV}" msmodelslim quant \
 `save_path` 必须包含轮次与产物目录层级，便于 orchestrator 区分各轮权重，例如 `{workdir}/round_1/quantized`、`{workdir}/round_2/quantized`。
 
 **成功判定**：exit code 为 0，且 `${SAVE_PATH}` 下出现量化权重产物。
-
-执行前将 `selected_npu_ids` 按原顺序连接为逗号分隔的 `SELECTED_NPU_IDS_CSV`，通过 `ASCEND_RT_VISIBLE_DEVICES` 绑定物理卡。
 
 ### 错误处理
 
@@ -160,7 +155,7 @@ ASCEND_RT_VISIBLE_DEVICES="${SELECTED_NPU_IDS_CSV}" msmodelslim quant \
 - **单轮单次**：每次调用只执行一次量化
 - **config_path 模式**：调优闭环使用 `--config_path`，与 `--quant_type` 互斥
 - **save_path 命名**：每轮使用 `{workdir}/round_{N}/quantized`，N 为当前调优轮次（如 `round_1/quantized`）
-- **device**：先用 `ASCEND_RT_VISIBLE_DEVICES` 绑定物理卡；默认使用 `--device npu`。仅 `modelslim_v1` 多卡分布式量化使用可见范围内从零开始的逻辑索引，如两张卡使用 `--device npu:0,1`
+- **device**：优先使用单卡，即以 `--device npu:0`/`--device npu:3` 这种入参形式
 
 ---
 
@@ -178,7 +173,6 @@ ASCEND_RT_VISIBLE_DEVICES="${SELECTED_NPU_IDS_CSV}" msmodelslim quant \
 ## 检查清单
 
 - [ ] `config_path` 指向的 Practice YAML 已通过校验
-- [ ] NPU 场景已按 `selected_npu_ids` 设置 `ASCEND_RT_VISIBLE_DEVICES`
-- [ ] `device` 格式正确；默认使用 `npu`，仅 `modelslim_v1` 多卡分布式量化使用 `npu:0,1,...`
+- [ ] `device` 格式正确（如 `npu:0`, `npu:0,1,2,3`），优先使用单卡
 - [ ] `save_path` 为 `{workdir}/round_{N}/quantized` 形式且磁盘空间充足
 - [ ] `msmodelslim quant --help` 可正常执行

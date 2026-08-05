@@ -169,10 +169,9 @@
 | `model_type` | string | ✓ | 模型类型名 |
 | `model_path` | string | ✓ | 模型路径 |
 | `save_path` | string | ✓ | 工作目录，Practice YAML 写入此目录 |
-| `device` | string | ✓ | NPU 场景默认使用 `npu`；当前任务明确支持并启用多卡时，根据 `selected_npu_ids` 的数量使用从逻辑 0 开始的连续索引，如 `npu:0,1,...` |
-| `selected_npu_ids` | int[] | 条件必填 | NPU 场景的物理卡列表；实际命令必须据此设置 `ASCEND_RT_VISIBLE_DEVICES`。非 NPU 场景填 `[]` |
+| `device` | string | ✓ | 如 `npu:2,3` |
 | `strategy` | string | ✓ | 搜索算法：`standing_high` 或 `standing_high_with_experience`； |
-| `calib_dataset` | string\|null | | 校准数据集覆盖值；为 `null` 时，由子 Skill 根据基准 Practice 的 `apiversion` 选择默认数据集` |
+| `calib_dataset` | string | ✓ | 已确定并经用户确认的校准数据集 |
 | `max_iterations` | int | ✓ | 最大迭代轮次 |
 | `round` | int | ✓ | 当前调优轮次 |
 | `prev_result` | object\|null | | 上轮评测结果，首轮 `null` |
@@ -192,9 +191,8 @@
     "model_path": "",
     "save_path": "",
     "device": "",
-    "selected_npu_ids": [],
     "strategy": "standing_high",
-    "calib_dataset": null,
+    "calib_dataset": "",
     "max_iterations": 10,
     "round": 1,
     "prev_result": null,
@@ -214,7 +212,7 @@
 | `service_host` | string | | 默认 `localhost` |
 | `service_port` | int | | 默认 `8000` |
 | `device_type` | string | | 默认 `ascend` |
-| `device_count` | int | | 默认 `1` |
+| `device_indices` | int[] | ✓ | 用户选择的物理设备索引，如 `[7]`；用于生成 vLLM 的 `ASCEND_RT_VISIBLE_DEVICES` |
 
 `datasets[]` 每项：
 
@@ -248,7 +246,7 @@
     "service_host": "localhost",
     "service_port": 8000,
     "device_type": "ascend",
-    "device_count": 1
+    "device_indices": [0]
   }
 }
 ```
@@ -262,8 +260,7 @@
 | `model_path` | string | ✓ | 原始模型路径 |
 | `save_path` | string | ✓ | 量化产物目录，如 `.../round_N/quantized` |
 | `model_type` | string | ✓ | msModelSlim 注册的模型适配器名称，用于 `msmodelslim quant --model_type` |
-| `device` | string | ✓ | NPU 场景默认使用 `npu`；当前任务明确支持并启用多卡时，根据 `selected_npu_ids` 的数量使用从逻辑 0 开始的连续索引，如 `npu:0,1,...` |
-| `selected_npu_ids` | int[] | 条件必填 | NPU 场景的物理卡列表；实际命令必须据此设置 `ASCEND_RT_VISIBLE_DEVICES`。非 NPU 场景填 `[]` |
+| `device` | string | ✓ | 如 `npu:2,3` |
 | `trust_remote_code` | bool | | 默认 `true` |
 | `round` | int | | 建议填写当前轮次 |
 
@@ -282,7 +279,6 @@
     "save_path": "",
     "model_type": "",
     "device": "",
-    "selected_npu_ids": [],
     "trust_remote_code": true,
     "round": 1
   }

@@ -5,7 +5,7 @@
 ## 执行流程
 
 1. 从主 Agent 委派的 `msagent-io` 块中读取 `input` 参数（字段见 orchestrator `quantization_tuning.md`）
-2. 调用 quant-tuning-quantize skill，传入：`config_path`、`model_path`、`save_path`、`model_type`、`device`、`selected_npu_ids`、`trust_remote_code`
+2. 调用 quant-tuning-quantize skill，传入：`config_path`、`model_path`、`save_path`、`model_type`、`device`、`trust_remote_code`
 3. 量化结束后，按下方输出协议回传
 
 ## 输出协议（强制）
@@ -50,7 +50,7 @@
     "commands": [
       {
         "name": "quantize",
-        "command": "ASCEND_RT_VISIBLE_DEVICES=2 msmodelslim quant --model_path /data/models/Qwen3-8B/ --save_path /path/to/round_1/quantized --device npu --model_type Qwen3-8B --config_path /path/to/practice_round_1.yaml --trust_remote_code True"
+        "command": "msmodelslim quant --model_path /data/models/Qwen3-8B/ --save_path /path/to/round_1/quantized --device npu:2 --model_type Qwen3-8B --config_path /path/to/practice_round_1.yaml --trust_remote_code True"
       }
     ]
   }

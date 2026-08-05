@@ -46,7 +46,7 @@ metadata:
 | 服务地址 | 推理服务 host | `localhost` |
 | 服务端口 | 推理服务 port | `8000` |
 | 设备类型 | 推理后端设备 | `ascend` |
-| 设备数量 | 并行推理的卡数 | `1` |
+| 设备索引 | 用户选择的物理设备索引列表，如 `[7]` | 必须从上下文获取 |
 | 目标数据集 | 要评测的数据集列表 | 从上下文获取 |
 | 精度目标 | 每个数据集的目标精度百分比 | 从上下文获取 |
 | 精度容差 | 允许的精度波动范围 | 从上下文获取 |
@@ -80,6 +80,8 @@ evaluation:
 
 inference_engine:
   type: vllm-ascend
+  env_vars:
+    ASCEND_RT_VISIBLE_DEVICES: <设备索引以逗号连接后的字符串>
   served_model_name: <模型名称>
   host: <服务地址>
   port: <服务端口>
@@ -107,8 +109,9 @@ inference_engine:
 | `evaluation.port` | int | 与 `inference_engine.port` 保持一致 |
 | `evaluation.served_model_name` | string | 与 `inference_engine.served_model_name` 保持一致 |
 | `inference_engine.type` | string | 必须为 `vllm-ascend` |
+| `inference_engine.env_vars.ASCEND_RT_VISIBLE_DEVICES` | string | 用户选择的物理设备索引，以逗号连接；如 `device_indices=[7]` 时填写 `"7"` |
 | `inference_engine.args.served-model-name` | string | 与 `served_model_name` 保持一致 |
-| `inference_engine.args.tensor-parallel-size` | int | 与设备数量保持一致 |
+| `inference_engine.args.tensor-parallel-size` | int | 等于 `device_indices` 的元素数量 |
 
 ### VLM 字段填写参考：
 
@@ -127,7 +130,8 @@ VLM 测评仍然生成同一类 `service_oriented + aisbench + vllm-ascend` YAML
 2. 确保生成的 YAML 文件语法正确，可以被 YAML 解析器成功解析
 3. 如果你在测浮点模型精度基线，则 `demand.expectations[].target` 和 `demand.expectations[].tolerance` **必须**都设置为 100 进行占位。
 4. 确保测评配置一致性，你应确保测评浮点权重和量化权重的配置的通用参数一致，尤其是 `evaluation.aisbench`、`inference_engine.args.max-model-len`**必须**保持一致。在不一致的情况下，你应该修改当前生成的配置文件。例如先前生成了浮点的测评配置且已经测评过了，则你应该修改当前生成的量化测评配置。
-5. 对 VLM 配置，额外检查 `config_name` 是否与数据集模态匹配，图片输入方式是否与推理服务能力一致。
+5. 检查 `inference_engine.env_vars.ASCEND_RT_VISIBLE_DEVICES` 与用户选择的 `device_indices` 完全一致，且 `tensor-parallel-size` 等于设备数量。
+6. 对 VLM 配置，额外检查 `config_name` 是否与数据集模态匹配，图片输入方式是否与推理服务能力一致。
 
 ## 执行约束
 
@@ -137,7 +141,6 @@ VLM 测评仍然生成同一类 `service_oriented + aisbench + vllm-ascend` YAML
 
 **允许**：
 - 使用 `assets/evaluation_config.example.yaml` 作为模板
-- 参考 `quant-tuning-evaluate` Skill 中 `device` / `device_indices` 与 `inference_engine.args.tensor-parallel-size` 的对齐要求
 - 仅通过本 SKILL.md 文档和模板文件完成配置生成
 
 ## 常见错误

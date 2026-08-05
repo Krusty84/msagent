@@ -47,8 +47,7 @@ metadata:
 | `model_type` | `str` | 模型类型名 |
 | `model_path` | `str` | 模型路径 |
 | `save_path` | `str` | 工作目录，Practice YAML 写入此目录下 |
-| `device` | `str` | 分析设备，默认为 `"npu"` |
-| `selected_npu_ids` | `list[int]` | NPU 场景的物理卡列表；敏感层分析命令必须据此设置 `ASCEND_RT_VISIBLE_DEVICES` |
+| `device` | `str` | 分析设备，如 `"npu"`、`"npu:0"`、`"gpu:0,1"` |
 | `strategy` | `str` | 调优策略：`"standing_high"` 或 `"standing_high_with_experience"` |
 | `calib_dataset` | `str \| None` | 可选的校准数据集覆盖值；默认值见 [敏感层分析](references/sensitive_layer_analysis.md) |
 | `max_iterations` | `int` | 最大迭代轮次，由用户指定 |
@@ -96,7 +95,7 @@ metadata:
 
 **调度优化**
 
-- 如果你在进行敏感层分析的时候，还有其他已确认的 `selected_npu_ids` 范围内的设备，如果敏感层分析时长较长，则你可以同步地使用其他卡拉起第一轮的量化（注意指定不同的卡，如使用ASCEND_RT_VISIBLE_DEVICES环境变量等方式）以减少串行等待时间。在量化结束后，如果测评需要使用的卡中包含正在进行敏感层分析的卡，则你**必须**等待敏感层分析任务结束后再进行测评任务。
+- 如果你在进行敏感层分析的时候，还有其他卡闲置可用，如果敏感层分析时长较长，则你可以同步地使用其他卡拉起第一轮的量化（注意指定不同的卡，如使用ASCEND_RT_VISIBLE_DEVICES环境变量等方式）以减少串行等待时间。在量化结束后，如果测评需要使用的卡中包含正在进行敏感层分析的卡，则你**必须**等待敏感层分析任务结束后再进行测评任务。
 
 ### ① 读取或生成基准 Practice
 
@@ -228,4 +227,4 @@ python skills/tune-practice-cfg/scripts/validate_practice_yaml.py --practice-pat
 - `metadata.label` 写成字符串而非 dict
 - `type` 与字段不匹配（如 `flex_awq_ssz` 缺少 `qconfig`），参见 [量化配置格式](references/practice_yaml_format.md)
 - `valid=false` 仍继续后续步骤
-- 命令行参数 `--device` 使用了 Python 枚举表达 `DeviceType.NPU`，而不是 CLI 字符串 `npu`
+- 命令行参数 `--device` 未使用 `npu:0` 这种格式，错误地使用了 `DeviceType.NPU`

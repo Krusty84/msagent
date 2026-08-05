@@ -50,6 +50,7 @@ metadata:
 | 目标数据集 | 要评测的数据集列表 | 从上下文获取 |
 | 精度目标 | 每个数据集的目标精度百分比 | 从上下文获取 |
 | 精度容差 | 允许的精度波动范围 | 从上下文获取 |
+| `allowed_local_media_path` | VLM 路径任务的显式覆盖目录 | `null`；优先从数据集 README 自动推导 |
 
 ## 文件生成规则
 
@@ -104,7 +105,7 @@ inference_engine:
 | `evaluation.type` | string | 必须为 `aisbench` |
 | `evaluation.aisbench.request_rate` | float | 每秒发送的请求数，必须大于 `0`；< 0.001 为不限速发送，默认设为 `0.0001` |
 | `evaluation.datasets` | dict | 必须非空 |
-| `evaluation.datasets.*.config_name` | string | AISBench 注册名（查找方法见 [how_to_find_aisbench_config_name.md](references/how_to_find_aisbench_config_name.md)） |
+| `evaluation.datasets.*.config_name` | string | AISBench 注册名；输入未指定时按[注册名查找与任务选择](references/how_to_find_aisbench_config_name.md)确定 |
 | `evaluation.host` | string | 与 `inference_engine.host` 保持一致 |
 | `evaluation.port` | int | 与 `inference_engine.port` 保持一致 |
 | `evaluation.served_model_name` | string | 与 `inference_engine.served_model_name` 保持一致 |
@@ -123,6 +124,15 @@ VLM 测评仍然生成同一类 `service_oriented + aisbench + vllm-ascend` YAML
 | `evaluation.aisbench.batch_size` | int | AISBench 中表示请求最大并发数。对于样本量大、输出较短的测评集，推荐从 `64` 开始以提高吞吐 |
 | `inference_engine.args.max-model-len` | int | 需要覆盖文本 token + 图像 token 后的总长度；并满足当前数据集和模型要求 |
 | `inference_engine.args.max-num-batched-tokens` | int | 需与 max-model-len 和显存容量匹配；VLM 图像 token 会显著增加 token 占用 |
+| `inference_engine.args.allowed-local-media-path` | string | 仅图片路径任务填写；必须是经过校验的可信绝对目录 |
+
+### VLM 图片输入处理
+
+1. 按[注册名查找与任务选择](references/how_to_find_aisbench_config_name.md)确定或校验 `config_name`，取得 `media_input_type` 和可选的 `candidate_local_media_path`。
+2. `media_input_type` 为 `text` 或 `base64` 时，不生成 `allowed-local-media-path`。
+3. `media_input_type` 为 `local_path` 时，优先使用显式传入的 `allowed_local_media_path`，否则使用 `candidate_local_media_path`。
+4. 将选定目录规范化为绝对路径，并确认它已存在、是目录、可被本次 vLLM 服务访问，且任务运行时发送的媒体文件位于该目录下。禁止使用 `/` 等过宽目录；多个路径任务必须共享一个安全的可信根目录。
+5. 校验通过后写入 `inference_engine.args.allowed-local-media-path`。没有候选目录或校验失败时不得生成 YAML；返回 `VALIDATION_ERROR`，说明数据集、`selected_config_name`、候选路径和失败原因，请主 Agent 向用户确认后通过 `allowed_local_media_path` 重试。
 
 ### 文件检查步骤（直接检查即可，无需写检查脚本）
 
@@ -131,7 +141,7 @@ VLM 测评仍然生成同一类 `service_oriented + aisbench + vllm-ascend` YAML
 3. 如果你在测浮点模型精度基线，则 `demand.expectations[].target` 和 `demand.expectations[].tolerance` **必须**都设置为 100 进行占位。
 4. 确保测评配置一致性，你应确保测评浮点权重和量化权重的配置的通用参数一致，尤其是 `evaluation.aisbench`、`inference_engine.args.max-model-len`**必须**保持一致。在不一致的情况下，你应该修改当前生成的配置文件。例如先前生成了浮点的测评配置且已经测评过了，则你应该修改当前生成的量化测评配置。
 5. 检查 `inference_engine.env_vars.ASCEND_RT_VISIBLE_DEVICES` 与用户选择的 `device_indices` 完全一致，且 `tensor-parallel-size` 等于设备数量。
-6. 对 VLM 配置，额外检查 `config_name` 是否与数据集模态匹配，图片输入方式是否与推理服务能力一致。
+6. 对 VLM 配置，按“VLM 图片输入处理”完成任务选择和媒体路径校验。
 
 ## 执行约束
 
@@ -152,4 +162,4 @@ VLM 测评仍然生成同一类 `service_oriented + aisbench + vllm-ascend` YAML
 | 模型名不一致 | `served_model_name` 在三处不统一 | 统一设置 |
 | 命名规则错误 | `args` 内使用了 snake_case 而非 kebab-case | 转换为 kebab-case（如 `served_model_name` → `served-model-name`） |
 | 配置名错误 | `config_name` 与 ais_bench 注册名不匹配 | 查询正确的注册名 |
-| VLM 图片输入方式错误 | 使用路径传图任务但服务端无法访问评测机图片路径 | 改用 base64 任务注册名，或确认服务端可访问图片路径后保留路径方式 |
+| VLM 图片输入方式错误 | 任务输入方式与服务能力不匹配，或路径任务缺少可信媒体根目录 | 按 VLM 图片输入处理流程选择任务或返回主 Agent 确认路径 |

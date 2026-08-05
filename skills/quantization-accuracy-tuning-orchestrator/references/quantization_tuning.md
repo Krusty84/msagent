@@ -102,7 +102,7 @@
                      ▼                      │
             ┌─────────────────┐             │
             │ 检查退出条件:    │             │
-            │ 1. 精度达标?     │             │
+            │ 1. 当前策略收敛? │             │
             │ 2. 达到最大次数? │             │
             └────────┬────────┘             │
          ┌───── 满足退出条件? ──────┐        │
@@ -140,7 +140,7 @@
 
 退出条件（判断优先级）：
 - 二分收敛（上界与下界不可再分）→ 输出上界为最优
-- 达到最大迭代次数 → 输出历史最优达标配置
+- 达到最大迭代次数 → 从历史达标配置中输出回退层数最少（即量化层数最多）的配置
 - **"某轮达标"不是退出条件**，达标只标记上界
 
 ### 二分搜索约束（exclude 列表截断规则）
@@ -213,13 +213,14 @@
 | `service_port` | int | | 默认 `8000` |
 | `device_type` | string | | 默认 `ascend` |
 | `device_indices` | int[] | ✓ | 用户选择的物理设备索引，如 `[7]`；用于生成 vLLM 的 `ASCEND_RT_VISIBLE_DEVICES` |
+| `allowed_local_media_path` | string\|null | | VLM 路径任务的显式覆盖目录；`null` 时由配置生成 Skill 尝试从数据集 README 推导 |
 
 `datasets[]` 每项：
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `name` | string | ✓ | 数据集名称（如 `gpqa`） |
-| `config_name` | string | ✓ | AISBench 注册配置名 |
+| `config_name` | string\|null | | 用户明确指定或复用已确认配置时填写；否则为 `null`，由配置生成 Skill 查询 AISBench README 后选择 |
 | `target` | number | ✓ | 目标精度（百分比） |
 | `tolerance` | number | | 容差，默认 `0` |
 
@@ -238,7 +239,7 @@
     "datasets": [
       {
         "name": "gpqa",
-        "config_name": "gpqa_gen",
+        "config_name": null,
         "target": 79.0,
         "tolerance": 1.0
       }
@@ -246,7 +247,8 @@
     "service_host": "localhost",
     "service_port": 8000,
     "device_type": "ascend",
-    "device_indices": [0]
+    "device_indices": [0],
+    "allowed_local_media_path": null
   }
 }
 ```

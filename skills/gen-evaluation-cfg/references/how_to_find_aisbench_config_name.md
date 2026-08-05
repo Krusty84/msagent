@@ -56,7 +56,28 @@ python -c "import ais_bench; print(ais_bench.__file__)"
 | 3 | 0-shot（zero-shot）优于 few-shot |
 | 4 | 避免使用 `llmjudge` |
 
-对于 VLM，若同时提供 base64 和图片路径两种任务，默认优先选择 base64；仅当推理服务能够访问图片路径时才选择路径任务。模型专用任务仅用于对应模型或具有相同特殊输出格式的模型。
+模型专用任务仅用于对应模型或具有相同特殊输出格式的模型。
+
+### VLM 图片输入方式选择
+
+当用户未指定具体 `config_name` 时，按以下顺序选择：
+
+1. 从数据集 README 的任务表中筛选与当前模型、评估指标和服务化推理兼容的任务。
+2. 存在兼容的 base64 任务时，默认选择 base64 任务。
+3. 不存在 base64、只有图片路径任务时，读取 README 的“数据集部署”等说明，提取明确记载的数据目录：
+   - README 使用 `{工具根路径}/ais_bench/...` 时，以当前安装的 `ais_bench` 包目录替换该前缀；
+   - 相对路径必须相对 README 明确声明的工具根目录解析，不得相对当前工作目录猜测；
+   - README 只提到数据集名称但未给出目录时，不得自行拼接路径。
+4. README 中的部署目录仅作为本地媒体根目录候选，不在本参考中执行路径安全校验或生成 YAML。
+
+用户明确指定 `config_name` 时不得静默替换，但仍须校验任务与当前模型和推理服务兼容。
+
+完成选择后向生成流程提供：
+
+- `selected_config_name`：最终选定或经校验的 AISBench 注册名；
+- `media_input_type`：`text`、`base64` 或 `local_path`；
+- `candidate_local_media_path`：README 可可靠解析的候选目录；非路径任务或无法解析时为 `null`；
+- `selection_evidence`：任务表和部署说明中支持本次选择的依据。
 
 ## 示例
 

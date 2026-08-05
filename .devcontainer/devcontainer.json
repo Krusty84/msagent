@@ -5,6 +5,7 @@
   "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind",
   "remoteUser": "mindstudio",
   "updateRemoteUserUID": true,
+  "_privileged_comment": "privileged and seccomp=unconfined are required for Ascend NPU hardware access, only for internal dev environments",
   "runArgs": [
     "--network=host",
     "--privileged",

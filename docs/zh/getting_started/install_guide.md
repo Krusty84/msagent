@@ -4,7 +4,7 @@
 
 本文面向第一次使用 MindStudio-Agent 的用户，帮助您完成 msAgent 安装。
 
-您可通过以下三种方式进行安装：[在线安装](#31-在线安装)、[离线安装](#32-离线安装)、[源码安装](#33-源码安装)。
+当前支持两种安装方式：[在线安装](#31-在线安装)、[源码安装](#32-源码安装)。
 
 ## 2. 环境要求
 
@@ -20,35 +20,21 @@
 
 ### 3.1 在线安装
 
-若您的设备具备互联网访问能力，可通过一条命令自动完成工具的下载与安装。支持如下方式：
+要求设备具备互联网访问能力，可通过一条命令自动完成工具的下载与安装。
 
-- 方式一：
+普通用户建议优先使用 PyPI 安装稳定发布版本。
 
-  使用 PyPI 安装，普通用户建议优先使用 PyPI 安装稳定发布版本。
+```shell
+pip install mindstudio-agent
+```
 
-  ```shell
-  pip install mindstudio-agent
-  ```
+执行如下命令提示msAgent版本即安装成功。
 
-  执行如下命令提示msAgent版本即安装成功。
+```shell
+msagent --version
+```
 
-  ```shell
-  msagent --version
-  ```
-
-- 方式二：
-
-  请参见昇腾社区MindStudio[下载](https://www.hiascend.com/developer/software/mindstudio/download)页面，选择对应的CANN版本，并在安装方式中选择“在线安装”，系统将引导您完成后续操作。
-
-### 3.2 离线安装
-
-对处于企业内网等无外网环境的设备，请先在可联网的机器上下载完整的离线安装包，再将其传输至目标设备进行安装。请参见昇腾社区MindStudio[下载](https://www.hiascend.com/developer/software/mindstudio/download)页面，选择对应的CANN版本，并在安装方式中选择“离线安装”，获取对应的安装包及操作指引。
-
-### 3.3 源码安装
-
-源码安装支持脚本构建安装和手动构建安装方式。脚本构建安装为工具提供的源码构建脚本可一键执行生成安装包；手动构建安装则需要安装uv依赖，通过命令行构建。
-
-#### 3.3.1 方式一：脚本构建安装
+### 3.2 源码安装
 
 1. 克隆本仓库。
 
@@ -83,43 +69,6 @@
    Successfully installed mindstudio-agent-{version}
    ```
 
-#### 3.3.2 方式二：手动构建安装
-
-1. 克隆本仓库。
-
-   ```shell
-   git clone https://gitcode.com/Ascend/msagent.git
-   ```
-
-2. 安装依赖。
-
-   ```shell
-   pip install uv
-   ```
-
-3. 执行编译打包。
-
-   ```shell
-   cd msagent
-   test -d skills
-   uv lock --check
-   uv build --wheel --out-dir dist .
-   ```
-
-   编译完成后在`dist`目录下生成whl包，名称格式为`mindstudio_agent-{version}-py3-none-any`。其中`version`为版本号。
-
-4. 安装whl包
-
-   ```shell
-   pip install dist/mindstudio_agent-{version}-py3-none-any.whl
-   ```
-
-   安装完成后，若显示如下信息，则说明软件安装成功。
-
-   ```ColdFusion
-   Successfully installed mindstudio-agent-{version}
-   ```
-
 ## 4. 升级与卸载
 
 `msagent` 会在当前工作目录下生成 `.msagent/` 本地目录，用于保存缓存、会话历史、日志和运行时配置等内容。
@@ -129,22 +78,22 @@
 
 常见操作示例：
 
-- 升级：
+- 升级
 
-```shell
-rm -rf .msagent
-pip install mindstudio-agent
-```
-
-从 **26.1.0-alpha.2** 起，Web UI 依赖 `langgraph-cli[inmem]` 已改为可选 extra `[web]`。`pip install -U` 升级时**不会自动卸载**旧版已安装的 web 相关包；若不再使用 Web UI，可手动执行：
-
-```shell
-pip uninstall -y langgraph-cli langgraph-api langgraph-runtime-inmem
-```
+    ```shell
+    rm -rf .msagent
+    pip install mindstudio-agent
+    ```
+    
+    从 **26.1.0-alpha.2** 起，Web UI 依赖 `langgraph-cli[inmem]` 已改为可选 extra `[web]`。`pip install -U` 升级时**不会自动卸载**旧版已安装的 web 相关包；若不再使用 Web UI，可手动执行：
+    
+    ```shell
+    pip uninstall -y langgraph-cli langgraph-api langgraph-runtime-inmem
+    ```
 
 - 卸载：
 
-```shell
-rm -rf .msagent
-pip uninstall mindstudio-agent
-```
+    ```shell
+    rm -rf .msagent
+    pip uninstall mindstudio-agent
+    ```

@@ -50,6 +50,8 @@ description: 技能的详细描述，说明它做什么，以及什么时候使�
 | `ascend-communication-analysis` | 分析通信侧瓶颈 | `查这个集群里通信耗时和慢卡` |
 | `ascend-schedule-analysis` | 分析调度、下发和 Host Bound 问题 | `看看下发延迟和调度卡在哪里` |
 | `mindstudio-cpu-binding` | 分析 CPU 绑核、NUMA 和 Host 侧瓶颈 | `排查这个多卡任务的 CPU binding 问题` |
+| `op-mfu-calculator` | 计算算子 MFU | `按这个 shape 和耗时算 MFU` |
+| `op-mfu-profiler` | 采集profiling数据并解析算子 MFU | `这是我的程序，帮我分析算子的 MFU` |
 
 ### 2.2 精度 Skills
 
@@ -81,7 +83,6 @@ description: 技能的详细描述，说明它做什么，以及什么时候使�
 | --- | --- | --- |
 | `ascendc-operator-performance-optim` | 做 AscendC 算子性能调优 | `分析这个算子并给出优化代码` |
 | `msot-msopprof-operator-profiler` | 做 msprof op 算子分析 | `输出这个算子的瓶颈和优化建议` |
-| `op-mfu-calculator` | 计算算子 MFU | `按这个 shape 和耗时算 MFU` |
 
 ### 2.5 文档审查 Skills
 

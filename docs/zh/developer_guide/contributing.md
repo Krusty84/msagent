@@ -28,7 +28,36 @@ MindStudio-Agent 是一个面向 Ascend NPU 场景的 Agent 工作台，核心�
 
 ## 开始之前
 
-### 环境要求
+### 方式一：devcontainer 一键开发环境（推荐）
+
+msagent 已内置 [devcontainer](https://containers.dev/) 开发环境配置，开发者通过 VS Code 打开仓库后可一键进入标准化容器，无需手工安装任何依赖。
+
+**前置条件：**
+
+| 环境 | 要求 |
+|------|------|
+| PC | VS Code，安装 Dev Containers 插件 和 Remote-SSH 插件 |
+| Linux 服务器 | Docker 服务运行中 |
+
+**使用步骤：**
+
+1. 将 msagent 仓库 clone 到 Linux 服务器
+2. VS Code 通过 Remote-SSH 连接服务器，打开仓库目录
+3. VS Code 自动检测到 `.devcontainer` 配置，点击左下角 **"Reopen in Container"**
+4. 容器自动执行 `post-create.sh` 完成初始化（Python 3.11+、pip 依赖、pre-commit、项目 dev 依赖安装）
+5. 按 `Ctrl+Shift+P` → `Tasks: Run Task` 选择构建或测试任务
+
+**VS Code 内置任务：**
+
+| 任务 | 快捷键 | 说明 |
+|------|--------|------|
+| `Build: Install Dependencies` | `Ctrl+Shift+B` | 安装项目开发依赖 |
+| `Test: Run Unit Tests` | — | 运行全量单元测试 |
+| `Clean: All Workspace` | — | 清理缓存文件 |
+
+**代码智能跳转与调试：** Python 通过 Pylance 提供语义跳转（F12）和类型推导；按 `F5` 选择 `Python: Debug Active File` 进入 debugpy 调试。
+
+### 方式二：手动环境配置
 
 贡献代码或做本地验证前，请先确认环境满足要求：
 

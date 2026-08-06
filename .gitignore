@@ -30,7 +30,7 @@ ENV/
 
 # IDE
 .idea/
-.vscode/
+.vscode/settings.json
 *.swp
 *.swo
 *~
@@ -53,6 +53,9 @@ dmypy.json
 config.local.json
 .langgraph_api/
 docs/_build/
+
+# Devcontainer
+.devcontainer/.host-gitconfig
 
 test_data/
 .claude/

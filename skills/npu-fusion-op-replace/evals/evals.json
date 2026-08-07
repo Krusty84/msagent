@@ -1,0 +1,97 @@
+{
+  "skill_name": "npu-fusion-op-replace",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "我有个在 Atlas 800T A2 上跑的 LLaMA 训练脚本，modeling_rmsnorm.py 里手写了 RMSNorm（x.pow(2).mean(-1) → rsqrt → * weight），step 耗时偏高，profile 里看到一堆小算子。帮我看看能不能用融合算子优化下，先告诉我能换哪些、别直接改代码。",
+      "expected_output": "Agent 应加载本 Skill 走阶段一：识别 RMSNorm→npu_rms_norm 为候选，给出文件行号、替换示例、提示返回 tuple 取[0]、给出优先级和风险，输出 markdown 识别报告后停下来等用户确认，不直接进阶段二改代码",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "我的 transformer 模型 apply_rotary_pos_emb 是手写的 t*cos + rotate_half(t)*sin，在 NPU 上跑，想换成官方融合算子。帮我改一下，注意要能切回原实现做对比。",
+      "expected_output": "Agent 应识别为 RoPE→npu_rotary_mul 替换，给出条件分支改法（is_torch_npu_available 判断 + 保留原 fallback 分支），强调 cos/sin 需 expand_as(t_)、处理 t_pass_ concat、返回值处理，改完提示逐个验证而非一次测完",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "我们模型的 attention 是手写 Q@K^T→causal_mask→softmax→@V，query/key/value shape 是 (B,S,H,D)。想在 Ascend NPU 上换成 npu_fusion_attention，但换了之后 loss 掉得很厉害，前几步就从 0.999 余弦相似度掉到 0.5。帮我排查下。",
+      "expected_output": "Agent 应指出最可能的原因：未用显式 causal mask（仅靠 pre_tockens/next_tockens 不足），并说明 mask 语义 True=屏蔽与 PyTorch float additive mask 相反、padding mask 需转 bool 做 OR 合并、input_layout=BSND 需确认 shape、返回 tuple 取[0]；建议修复后重测精度",
+      "files": []
+    },
+    {
+      "id": 4,
+      "name": "gpt_oss_real_identification",
+      "prompt": "我在 Ascend NPU 上跑 gpt_oss 模型，模型代码在 evals/files/gpt_oss_original.py（HuggingFace transformers 版）。想用融合算子优化下性能，你帮我扫一遍代码，识别出能做融合算子替换的地方，先给我一份识别报告（文件路径+行号+替换示例+优先级+风险），别直接改代码，我确认后再动手。",
+      "expected_output": "Agent 应加载本 Skill 走阶段一，对 gpt_oss_original.py 逐个排查常用融合算子，输出 markdown 识别报告并停下等用户确认。ground truth 来自 MindSpeed-LLM 的适配后版本，做了 4 处替换：RMSNorm→npu_rms_norm、RoPE→npu_rotary_mul、Attention→npu_fusion_attention(v2)、MoE expert 循环→grouped matmul+npu_moe_token_permute/unpermute。注意 gpt_oss 的门控激活是 gate*sigmoid(gate*alpha) 不是 SiLU-based SwiGLU，不应推荐 npu_swiglu。",
+      "files": ["evals/files/gpt_oss_original.py"],
+      "assertions": [
+        {
+          "text": "识别 RMSNorm 替换：报告指出 GptOssRMSNorm（约 L53/L62 的 forward）可用 npu_rms_norm 替换，并提示返回 tuple 需取 [0]",
+          "should_pass_when": "output 提及 npu_rms_norm 且指向 GptOssRMSNorm/其 forward，且提到返回值取 [0]"
+        },
+        {
+          "text": "识别 RoPE 替换：报告指出 _apply_rotary_emb / apply_rotary_pos_emb（约 L231/L243）可用 npu_rotary_mul 替换，并提示 cos/sin 需与输入 shape 对齐（expand_as 或 cat 翻倍）",
+          "should_pass_when": "output 提及 npu_rotary_mul 且指向 apply_rotary_pos_emb/_apply_rotary_emb，且提到 cos/sin shape 处理（expand_as 或 cat 翻倍）"
+        },
+        {
+          "text": "识别 Attention 替换：报告指出 eager_attention_forward（约 L251）的手写 Q@K^T→mask→softmax→@V 可用 npu_fusion_attention（或 v2）替换，并提示 causal mask / sparse_mode 与返回值取 [0]",
+          "should_pass_when": "output 提及 npu_fusion_attention 或 npu_fusion_attention_v2，指向 eager_attention_forward，且提到 causal mask/sparse_mode 与返回 [0]"
+        },
+        {
+          "text": "识别 MoE expert 循环替换：报告指出 GptOssExperts（约 L74/L95 的 expert 循环 matmul）可用 grouped matmul（npu_grouped_matmul / moe_grouped_gemm）+ npu_moe_token_permute/unpermute 替换",
+          "should_pass_when": "output 提及 npu_grouped_matmul 或 grouped_matmul 或 moe_grouped_gemm，并提到 npu_moe_token_permute/unpermute，指向 GptOssExperts"
+        },
+        {
+          "text": "不应推荐 npu_swiglu：gpt_oss 门控激活是 gate*sigmoid(gate*alpha) 带 clamp（L87-91 _apply_gate），不是 a1*silu(a2) 的 SwiGLU，npu_swiglu 不适用",
+          "should_pass_when": "output 未推荐 npu_swiglu，或明确说明该激活非 SiLU-based、npu_swiglu 不适用"
+        },
+        {
+          "text": "阶段一停在报告：输出是识别报告（含文件路径+行号+替换示例+优先级+风险），未直接修改/重写源码，提示等用户确认后再进阶段二",
+          "should_pass_when": "output 是 markdown 识别报告且未直接改写源码，并明确表示先等用户确认"
+        },
+        {
+          "text": "替换示例用条件分支保留 fallback：给出的替换代码示例通过参数或 is_torch_npu_available() 判断进入融合分支，保留原实现做 fallback（不破坏原逻辑）",
+          "should_pass_when": "output 的替换示例包含条件判断（args.xx 或 is_torch_npu_available）且保留原分支 fallback"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "name": "qwen3_moe_real_identification",
+      "prompt": "我在 Ascend NPU 上跑 Qwen3-MoE 模型，模型代码在 evals/files/qwen3_moe_original.py（HuggingFace transformers 版）。想用融合算子优化性能，帮我扫一遍代码识别能做融合算子替换的地方，先给我一份识别报告（文件路径+行号+替换示例+优先级+风险），别直接改代码，确认后再动手。",
+      "expected_output": "Agent 应加载本 Skill 走阶段一，对 qwen3_moe_original.py 逐个排查常用融合算子，输出 markdown 识别报告并停下等用户确认。ground truth 来自 MindSpeed-LLM 适配后版本，做了 3 处替换：RMSNorm→npu_rms_norm、RoPE→npu_rotary_mul、MoE expert 块→grouped matmul+npu_swiglu+npu_moe_token_permute/unpermute。关键：qwen3_moe 的门控激活是 act_fn(gate)*up（act_fn=silu），正是 SiLU-based SwiGLU，npu_swiglu 适用（与 gpt_oss 相反）；concat 顺序 [gate, up]（gate 被 silu，up 乘）。",
+      "files": ["evals/files/qwen3_moe_original.py"],
+      "assertions": [
+        {
+          "text": "识别 RMSNorm 替换：报告指出 Qwen3MoeRMSNorm（约 L290/L299 的 forward）可用 npu_rms_norm 替换，提示返回 tuple 取 [0]",
+          "should_pass_when": "output 提及 npu_rms_norm 且指向 Qwen3MoeRMSNorm/其 forward，且提到返回值取 [0]"
+        },
+        {
+          "text": "识别 RoPE 替换：报告指出 apply_rotary_pos_emb（约 L64，含 rotate_half）可用 npu_rotary_mul 替换，提示 cos/sin shape 对齐",
+          "should_pass_when": "output 提及 npu_rotary_mul 且指向 apply_rotary_pos_emb，且提到 cos/sin shape 处理（expand_as 或 unsqueeze/broadcast）"
+        },
+        {
+          "text": "识别 MoE expert 块替换：报告指出 Qwen3MoeExperts（约 L215/L227 的 expert 循环）和 Qwen3MoeSparseMoeBlock（约 L275）可用 grouped matmul + npu_moe_token_permute/unpermute 替换",
+          "should_pass_when": "output 提及 grouped_matmul/Ops.gmm/moe_grouped_gemm 之一，并提到 npu_moe_token_permute/unpermute，指向 Qwen3MoeExperts 或 Qwen3MoeSparseMoeBlock"
+        },
+        {
+          "text": "应推荐 npu_swiglu（正向断言，与 gpt_oss 相反）：qwen3_moe 的 MLP（约 L210 act_fn(gate_proj(x))*up_proj(x)）和 MoE experts（约 L246 self.act_fn(gate)*up）的激活是 silu(gate)*up，正是 SiLU-based SwiGLU，npu_swiglu 适用",
+          "should_pass_when": "output 推荐 npu_swiglu，且指向 Qwen3MoeMLP 或 Qwen3MoeExperts 的 act_fn(gate)*up 模式"
+        },
+        {
+          "text": "concat 顺序正确 [gate, up]：npu_swiglu 对前半做 SiLU 乘以后半，原代码是 silu(gate)*up，故 gate 在前（被 silu）、up 在后；不应写成 [up, gate]",
+          "should_pass_when": "output 的 swiglu 替换示例 concat 顺序为 [gate, up]（gate 在前被 silu），或直接对已按 gate_up 排列的权重调用 npu_swiglu"
+        },
+        {
+          "text": "阶段一停在报告：输出是识别报告（含文件路径+行号+替换示例+优先级+风险），未直接修改/重写源码，提示等用户确认后再进阶段二",
+          "should_pass_when": "output 是 markdown 识别报告且未直接改写源码，并明确表示先等用户确认"
+        },
+        {
+          "text": "替换示例用条件分支保留 fallback：给出的替换代码示例通过参数（use_fused_rmsnorm/use_fused_rotary_pos_emb/moe_grouped_gemm 等）或 is_torch_npu_available() 判断进入融合分支，保留原实现做 fallback",
+          "should_pass_when": "output 的替换示例包含条件判断（args.xx 或 is_torch_npu_available）且保留原分支 fallback"
+        }
+      ]
+    }
+  ]
+}

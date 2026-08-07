@@ -3,7 +3,7 @@ name: gen-evaluation-cfg
 description: Generate msmodelslim evaluation YAML configuration (service_oriented + aisbench + vllm-ascend). Use when user asks for evaluation config generation.
 license: Apache-2.0
 metadata:
-  version: 0.9.4
+  version: 0.9.8
   domain: quantization
   framework: msmodelslim
   aliases:
@@ -120,10 +120,10 @@ VLM 测评仍然生成同一类 `service_oriented + aisbench + vllm-ascend` YAML
 
 | 路径 | 类型 | 说明 |
 |------|------|------|
-| `evaluation.aisbench.max_out_len` | int | VLM 客观问答通常答案较短，可按数据集要求调小，减少无效生成时间；不得小于任务正确答案所需长度 |
-| `evaluation.aisbench.batch_size` | int | AISBench 中表示请求最大并发数。对于样本量大、输出较短的测评集，推荐从 `64` 开始以提高吞吐 |
-| `inference_engine.args.max-model-len` | int | 需要覆盖文本 token + 图像 token 后的总长度；并满足当前数据集和模型要求 |
-| `inference_engine.args.max-num-batched-tokens` | int | 需与 max-model-len 和显存容量匹配；VLM 图像 token 会显著增加 token 占用 |
+| `evaluation.aisbench.max_out_len` | int | 优先采用模型或数据集建议；明确为非思考短答任务时用 `2048`，thinking 或无法判断时用 `32768`，出现长度截断再翻倍 |
+| `evaluation.aisbench.batch_size` | int | 请求最大并发数；无通用默认值，信息不足时从 `8` 开始逐级测试 |
+| `inference_engine.args.max-model-len` | int | 优先采用模型建议；无依据时取不小于 `2 × max_out_len` 且至少 `32768`，不能超过模型上限 |
+| `inference_engine.args.max-num-batched-tokens` | int | 默认取 `min(max-model-len, 33792)`；显存充足但吞吐不足时再提高 |
 | `inference_engine.args.allowed-local-media-path` | string | 仅图片路径任务填写；必须是经过校验的可信绝对目录 |
 
 ### VLM 图片输入处理
@@ -142,6 +142,7 @@ VLM 测评仍然生成同一类 `service_oriented + aisbench + vllm-ascend` YAML
 4. 确保测评配置一致性，你应确保测评浮点权重和量化权重的配置的通用参数一致，尤其是 `evaluation.aisbench`、`inference_engine.args.max-model-len`**必须**保持一致。在不一致的情况下，你应该修改当前生成的配置文件。例如先前生成了浮点的测评配置且已经测评过了，则你应该修改当前生成的量化测评配置。
 5. 检查 `inference_engine.env_vars.ASCEND_RT_VISIBLE_DEVICES` 与用户选择的 `device_indices` 完全一致，且 `tensor-parallel-size` 等于设备数量。
 6. 对 VLM 配置，按“VLM 图片输入处理”完成任务选择和媒体路径校验。
+7. 对 VLM 配置，先确定完整输出和总长度，再调整并发与调度 token 预算。
 
 ## 执行约束
 
@@ -151,7 +152,9 @@ VLM 测评仍然生成同一类 `service_oriented + aisbench + vllm-ascend` YAML
 
 **允许**：
 - 使用 `assets/evaluation_config.example.yaml` 作为模板
-- 仅通过本 SKILL.md 文档和模板文件完成配置生成
+- 读取本 Skill 直接引用的 `references/` 文件
+- 读取 AISBench 数据集 README、模型官方 README/模型卡，以及模型目录中的 `config.json`、`generation_config.json`
+- 读取用户提供的已有 Evaluation YAML、AISBench 生成配置、summary、prediction 和服务日志，用于确认推理模式、长度截断与资源参数；只读分析，不修改这些评测产物
 
 ## 常见错误
 

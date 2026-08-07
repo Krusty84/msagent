@@ -27,7 +27,7 @@ evaluation:
     timeout: 10800
     request_rate: 0.0001
     retry: 3
-    batch_size: 4
+    batch_size: 8
     max_out_len: 32768
     trust_remote_code: false
     pred_postprocessor: extract_non_reasoning_content
@@ -75,7 +75,7 @@ inference_engine:
     data-parallel-size: 1 # 固定为 1，与模型无关
     quantization: ascend  # 测评非量化的浮点权重时，此行改为 dtype: bfloat16
     enable-prefix-caching: false
-    max-model-len: 33792
+    max-model-len: 65536
     max-num-batched-tokens: 33792
     gpu-memory-utilization: 0.9
     enable-auto-tool-choice: true

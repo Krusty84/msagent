@@ -19,9 +19,6 @@
 | `ops-performance-tuning` | Ascend 算子性能瓶颈分析、优化建议输出、端到端性能优化   |
 | `msot-msopprof-operator-profiler` | Ascend 算子性能瓶颈分析、TOP5优化建议输出、总结报告等 |
 
-
-
-
 ## Todo 使用约束
 
 - 只在需要跟踪面向用户的多步骤任务时维护 Todo
@@ -40,18 +37,18 @@
 - 不能把猜测包装成结论；不确定时要明确写出待验证项
 - 若首选方案受阻，优先尝试低风险替代路径并说明原因
 
-
 ## 算子性能分析优化
 
 - 调用 **`msot-msopprof-operator-profiler`** 完成性能分析报告输出
 - 调用 **`ops-performance-tuning`** 进行端到端性能优化
 
-
 ## 数据目录结构
+
 msprof op 单算子单卡上板性能采集目录结构
-```
+
+```text
 OPPROF_{timestamp}_XXX
-├── dump                            // 	原始的性能数据，用户无需关注
+├── dump                            // 原始的性能数据，用户无需关注
 ├── ArithmeticUtilization.csv
 ├── L2Cache.csv
 ├── Memory.csv
@@ -64,7 +61,8 @@ OPPROF_{timestamp}_XXX
 ```
 
 msprof op 单卡多算子上板性能采集目录结构
-```
+
+```text
 └──OPPROF_{timestamp}_XXX
 ├── OpName0                  // OpName0为采集算子名称
 │ ├── 0                     // 表示算子调度顺序
@@ -83,7 +81,8 @@ msprof op 单卡多算子上板性能采集目录结构
 ```
 
 msprof op simulator 单卡单算子仿真性能采集目录结构
-```
+
+```text
 OPPROF_{timestamp}_XXX
 ├── dump
 └── simulator
@@ -106,7 +105,7 @@ OPPROF_{timestamp}_XXX
 
 msprof op simulator 单卡多算子仿真性能采集目录结构
 
-```
+```text
 └──OPPROF_{timestamp}_XXX
 ├── OpName1           // OpName1为采集算子名称
 │ ├── 0              // 表示算子调度到的顺序
@@ -123,9 +122,9 @@ msprof op simulator 单卡多算子仿真性能采集目录结构
 │ ├── dump
 ```
 
-
 msprof op 上板 落盘数据文件说明:
-```
+
+```text
 dump文件夹：原始的性能数据，存放msprof op 采集的PMU性能数据。
 
 ArithmeticUtilization.csv
@@ -151,7 +150,8 @@ trace.json: 通算流水可视化呈现文件，Chrome浏览器具体请参考�
 ```
 
 msprof op simulator 仿真落盘数据文件说明:
-```
+
+```text
 dump文件夹：原始仿真生成的dump数据存放文件夹。
 
 simulator文件夹
@@ -165,7 +165,6 @@ visualize_data.bin:仿真流水图和仿真热点函数等信息可视化呈现�
 trace.json: 仿真指令流水图文件，包括每个核的子文件以及全部核的汇总文件，可参考指令流水图和内存通路吞吐率波形图。
 ```
 
-
 ## 输出规范
 
 ### 原则（必守）
@@ -178,7 +177,7 @@ trace.json: 仿真指令流水图文件，包括每个核的子文件以及全�
 
 **完整分析（多问题/根因排查）**
 
-```
+```text
 问题 / 证据 / 影响 / 建议 / 验证方法
 
 [优先级排序]
@@ -186,7 +185,7 @@ trace.json: 仿真指令流水图文件，包括每个核的子文件以及全�
 
 **单一问题/快速回答**
 
-```
+```text
 结论 + 证据 + 建议
 
 [多条建议时补充优先级]

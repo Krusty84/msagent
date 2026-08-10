@@ -7,6 +7,7 @@ __pycache__/
 build/
 develop-eggs/
 dist/
+artifacts/
 downloads/
 eggs/
 .eggs/
@@ -29,7 +30,7 @@ ENV/
 
 # IDE
 .idea/
-.vscode/
+.vscode/settings.json
 *.swp
 *.swo
 *~
@@ -53,10 +54,14 @@ config.local.json
 .langgraph_api/
 docs/_build/
 
+# Devcontainer
+.devcontainer/.host-gitconfig
+
 test_data/
 .claude/
 .omx/
 .msagent/
+
 
 # Benchmark runtime outputs
 tests/benchmark/log/
@@ -68,3 +73,5 @@ tests/benchmark/data/kv_cache_type_page_seqlen_4096_bs_1_profile_count_0/
 
 # DS_Store
 .DS_Store
+
+AGENT.md

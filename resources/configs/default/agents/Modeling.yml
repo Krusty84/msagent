@@ -22,6 +22,8 @@ skills:
     - default:msmodeling-device-config
     - default:msmodeling-text-generate-executor
     - default:msmodeling-throughput-optimizer-executor
+    - default:msmodeling-optix-deploy
+    - default:msmodeling-optix-param-recommend
   use_catalog: false
 compression:
   auto_compress_enabled: true

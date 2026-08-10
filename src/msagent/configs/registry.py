@@ -37,6 +37,7 @@ from msagent.core.constants import (
     CONFIG_SUBAGENTS_DIR,
     CONFIG_SUBAGENTS_FILE_NAME,
 )
+from msagent.tools.internal.memory import ensure_memory_file, is_default_memory_content
 
 
 class ConfigRegistry:
@@ -73,6 +74,8 @@ class ConfigRegistry:
         else:
             await self._copy_missing_template_files(template_config_dir)
             await self._normalize_legacy_defaults(template_config_dir)
+
+        await asyncio.to_thread(ensure_memory_file, self.working_dir)
 
         # Ensure CONFIG_DIR_NAME is ignored in git (local-only, not committed)
         git_info_exclude = self.working_dir / ".git" / "info" / "exclude"
@@ -332,7 +335,7 @@ class ConfigRegistry:
         if memory_path.exists():
             content = await asyncio.to_thread(memory_path.read_text)
             content = content.strip()
-            if content:
+            if content and not is_default_memory_content(content):
                 return f"<user-memory>\n{content}\n</user-memory>"
         return ""
 

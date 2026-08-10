@@ -55,6 +55,7 @@ pip install mindstudio-agent
   | [Profiler](../agent_guide/Profiler.md) | 性能调优 | `msagent --agent Profiler` |
   | [Accuracy](../agent_guide/Accuracy.md) | 精度调试 | `msagent --agent Accuracy` |
   | [Quantizer](../agent_guide/Quantizer.md) | 模型量化 | `msagent --agent Quantizer` |
+  | [Modeling](../agent_guide/Modeling.md) | 仿真建模与自动寻优 | `msagent --agent Modeling` |
   | [Operator](../agent_guide/Operator.md) | 算子调优 | `msagent --agent Operator` |
   | [Minos](../agent_guide/Minos.md) | 文档辅助 | `msagent --agent Minos` |
 
@@ -105,12 +106,23 @@ Skill 是面向特定场景的专项能力模块（如性能分析、模型量�
 | `/tool-output` 或 `Ctrl+O` | 打开全屏工具输出查看器。 |
 | 左右方向键 | 切换多个工具输出。 |
 | 上下方向键、`PageUp`/`PageDown` | 滚动内容。 |
-| `Enter` / `Ctrl+O` / 鼠标点击 | 展开或折叠完整输出。 | 
+| `Enter` / `Ctrl+O` / 鼠标点击 | 展开或折叠完整输出。 |
 | `Esc` | 关闭查看器。 |
 
 ![tool_output](../figures/tool_output.png)
 
-### 4.5 记录输出结果
+### 4.5 保存长期记忆
+
+如果某些信息需要在后续会话中持续生效，可以用 `/remember` 保存为当前项目的长期记忆。记忆会写入 `.msagent/memory.md`，后续会话会自动读取。
+
+| 命令 | 说明 |
+| --- | --- |
+| `/remember <content>` | 追加一条长期记忆，如 `/remember 用户希望默认使用中文回答`。 |
+| `/showmemory` | 查看当前项目已保存的长期记忆。 |
+
+适合保存用户偏好、项目背景、长期有效的路径或排查结论。不要保存 API Key、密码、令牌等敏感信息。
+
+### 4.6 记录输出结果
 
 上下文窗口有限，进行多轮复杂任务时，建议在关键节点触发结论记录，避免早期分析结果被后续交互挤出窗口。例如，Skill 完成一轮数据分析后，可手动追加 Prompt 要求 Agent 输出阶段性报告：
 

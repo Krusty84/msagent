@@ -352,6 +352,16 @@ def test_format_retry_notice_text_for_llm_and_tool(tmp_path: Path) -> None:
     assert dispatcher._format_retry_notice_text(tool_notice) == ("Tool run_command 重试 1/1，0.5s 后重试")
 
 
+def test_format_console_error_explains_empty_stream_and_rate_limit() -> None:
+    empty_stream = MessageDispatcher._format_console_error(ValueError("No generations found in stream"))
+    rate_limit = MessageDispatcher._format_console_error(RuntimeError("Error code: 429"))
+
+    assert "empty response" in empty_stream
+    assert "conversation is still usable" in empty_stream
+    assert "rate-limited" in rate_limit
+    assert "conversation is still usable" in rate_limit
+
+
 def test_render_retry_notice_uses_warning_output_without_live(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

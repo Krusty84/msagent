@@ -544,6 +544,18 @@ class MessageDispatcher:
     @classmethod
     def _format_console_error(cls, error: BaseException) -> str:
         """Build a concise terminal-friendly error message."""
+        message_lower = str(error).lower()
+        if "no generations found in stream" in message_lower:
+            return (
+                "The model service returned an empty response from the streaming API. "
+                "This request was not completed; the conversation is still usable. Please retry shortly."
+            )
+        status_code = cls._find_exception_attr(error, "status_code")
+        if str(status_code) == "429" or "error code: 429" in message_lower or "rate limit" in message_lower:
+            return (
+                "The model service is still rate-limited after the configured retries. "
+                "This request was not completed; the conversation is still usable. Please retry shortly."
+            )
         message = (str(error) or type(error).__name__).strip()
         if message != "Connection error.":
             return message

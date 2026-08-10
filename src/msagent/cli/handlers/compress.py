@@ -145,6 +145,9 @@ class CompressionHandler:
             console.print("")
 
         except Exception as e:
-            console.print_error(f"Error compressing conversation: {e}")
+            console.print_warning(
+                "Conversation compression could not be completed. The response above and the existing "
+                "conversation were preserved; start a new session if the context limit is reached."
+            )
             console.print("")
-            logger.debug("Compression error", exc_info=True)
+            logger.warning("Conversation compression failed: %s", e, exc_info=True)

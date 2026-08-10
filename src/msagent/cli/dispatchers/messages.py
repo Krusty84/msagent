@@ -527,6 +527,65 @@ class MessageDispatcher:
         return fields
 
     @classmethod
+    def _is_dns_resolution_error(cls, error: BaseException) -> bool:
+        """Identify resolver failures reported by socket/http client exception chains."""
+        markers = (
+            "temporary failure in name resolution",
+            "name or service not known",
+            "nodename nor servname provided",
+            "getaddrinfo failed",
+        )
+        for current in cls._walk_exception_chain(error):
+            if getattr(current, "errno", None) in {-2, -3}:
+                return True
+            message = str(current).lower()
+            if any(marker in message for marker in markers):
+                return True
+        return False
+
+    @classmethod
+    def _is_proxy_gateway_timeout(cls, error: BaseException) -> bool:
+        """Identify proxy gateway timeout failures from the exception chain."""
+        for current in cls._walk_exception_chain(error):
+            message = str(current).lower()
+            if "proxyerror" in message and "504" in message:
+                return True
+            if "504 gateway time-out" in message or "504 gateway timeout" in message:
+                return True
+        return False
+
+    @classmethod
+    def _is_ssl_certificate_verification_error(cls, error: BaseException) -> bool:
+        """Identify TLS certificate verification failures from the exception chain."""
+        markers = (
+            "certificate_verify_failed",
+            "certificate verify failed",
+            "unable to get local issuer certificate",
+        )
+        return any(
+            any(marker in str(current).lower() for marker in markers)
+            for current in cls._walk_exception_chain(error)
+        )
+
+    @classmethod
+    def _is_response_read_error(cls, error: BaseException) -> bool:
+        """Identify failures while reading a response from a remote service."""
+        return any(type(current).__name__ == "ReadError" for current in cls._walk_exception_chain(error))
+
+    @classmethod
+    def _is_response_read_timeout(cls, error: BaseException) -> bool:
+        """Identify failures caused by waiting too long for a remote response."""
+        return any(type(current).__name__ == "ReadTimeout" for current in cls._walk_exception_chain(error))
+
+    @classmethod
+    def _is_connection_establishment_error(cls, error: BaseException) -> bool:
+        """Identify failures where no network connection could be established."""
+        return any(
+            type(current).__name__ == "ConnectError" and "all connection attempts failed" in str(current).lower()
+            for current in cls._walk_exception_chain(error)
+        )
+
+    @classmethod
     def _extract_response_body(cls, error: BaseException) -> str | None:
         """Extract and normalize an API response body from the exception chain."""
         body = cls._find_exception_attr(error, "body")
@@ -544,6 +603,61 @@ class MessageDispatcher:
     @classmethod
     def _format_console_error(cls, error: BaseException) -> str:
         """Build a concise terminal-friendly error message."""
+        message_lower = str(error).lower()
+        if cls._is_dns_resolution_error(error):
+            return (
+                "DNS lookup failed, so the model service or proxy hostname could not be resolved. "
+                "Check network connectivity, DNS, the model base_url, and proxy settings, then retry."
+            )
+        if cls._is_ssl_certificate_verification_error(error):
+            return (
+                "TLS certificate verification failed while connecting to the model service or proxy. "
+                "The certificate chain is not trusted by this environment. Check the service or proxy CA certificate "
+                "and SSL verification configuration, then retry."
+            )
+        if cls._is_response_read_timeout(error):
+            return (
+                "Timed out while waiting for a response from the model service or remote tool. Check service load, "
+                "network, proxy or VPN stability, and the read timeout configuration, then retry."
+            )
+        if cls._is_response_read_error(error):
+            return (
+                "The connection was interrupted while reading a response from the model service or remote tool. "
+                "Check network, proxy or VPN stability, and service availability, then retry."
+            )
+        if cls._is_proxy_gateway_timeout(error):
+            return (
+                "The proxy gateway timed out while connecting to the model service. "
+                "Check the HTTP/HTTPS proxy, VPN or corporate network connection, and model service availability, "
+                "then retry."
+            )
+        if cls._is_connection_establishment_error(error):
+            return (
+                "Unable to establish a connection to the model service or proxy. Check network connectivity, the "
+                "model base_url, proxy or VPN settings, firewall access, and service availability, then retry. "
+                "For more details, restart with `msagent -v` and check .msagent/app.log."
+            )
+        if (
+            "failed to deserialize the json body into the target type" in message_lower
+            and "missing field 'thinking'" in message_lower
+        ):
+            return (
+                "The model service rejected a thinking message in this conversation. This may indicate an "
+                "incompatible model reasoning protocol. Start a new conversation and retry; if it recurs, verify "
+                "the model and base_url compatibility. For more details, restart with `msagent -v` and check "
+                ".msagent/app.log."
+            )
+        if "no generations found in stream" in message_lower:
+            return (
+                "The model service returned an empty response from the streaming API. "
+                "This request was not completed; the conversation is still usable. Please retry shortly."
+            )
+        status_code = cls._find_exception_attr(error, "status_code")
+        if str(status_code) == "429" or "error code: 429" in message_lower or "rate limit" in message_lower:
+            return (
+                "The model service is still rate-limited after the configured retries. "
+                "This request was not completed; the conversation is still usable. Please retry shortly."
+            )
         message = (str(error) or type(error).__name__).strip()
         if message != "Connection error.":
             return message

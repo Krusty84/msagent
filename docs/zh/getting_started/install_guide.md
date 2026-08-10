@@ -4,7 +4,7 @@
 
 本文面向第一次使用 MindStudio-Agent 的用户，帮助您完成 msAgent 安装。
 
-您可通过以下三种方式进行安装：[在线安装](#31-在线安装)、[离线安装](#32-离线安装)、[源码安装](#33-源码安装)。
+当前支持两种安装方式：[在线安装](#31-在线安装)、[源码安装](#32-源码安装)。
 
 ## 2. 环境要求
 
@@ -20,35 +20,21 @@
 
 ### 3.1 在线安装
 
-若您的设备具备互联网访问能力，可通过一条命令自动完成工具的下载与安装。支持如下方式：
+要求设备具备互联网访问能力，可通过如下命令完成工具的下载与安装。
 
-- 方式一：
+```shell
+pip install mindstudio-agent
+```
 
-  使用 PyPI 安装，普通用户建议优先使用 PyPI 安装稳定发布版本。
+执行如下命令提示msAgent版本即安装成功。
 
-  ```shell
-  pip install mindstudio-agent
-  ```
+```shell
+msagent --version
+```
 
-  执行如下命令提示msAgent版本即安装成功。
+### 3.2 源码安装
 
-  ```shell
-  msagent --version
-  ```
-
-- 方式二：
-
-  请参见昇腾社区MindStudio[下载](https://www.hiascend.com/developer/software/mindstudio/download)页面，选择对应的CANN版本，并在安装方式中选择“在线安装”，系统将引导您完成后续操作。
-
-### 3.2 离线安装
-
-对处于企业内网等无外网环境的设备，请先在可联网的机器上下载完整的离线安装包，再将其传输至目标设备进行安装。请参见昇腾社区MindStudio[下载](https://www.hiascend.com/developer/software/mindstudio/download)页面，选择对应的CANN版本，并在安装方式中选择“离线安装”，获取对应的安装包及操作指引。
-
-### 3.3 源码安装
-
-源码安装支持使用仓库根目录的 `build.py` 统一构建，也支持手动执行 `uv` 构建命令。
-
-#### 3.3.1 环境准备
+#### 3.2.1 环境准备
 
 源码编译统一使用 MindStudio 标准构建环境。
 
@@ -59,65 +45,26 @@
 
 镜像构建完成后，必须使用统一镜像制作指南第 7 章给出的 `ctr_in.py` 命令，在交互式终端中启动并进入容器。不得使用普通 `docker run` 创建容器，也不得使用 `docker exec <容器名> bash -c '<命令>'` 替代交互式环境；否则可能跳过 Python、GCC 和 CANN 环境初始化。
 
-进入 `ctr_in.py` 打开的交互式容器 Shell 后，执行如下命令克隆本仓库：
+#### 3.2.2 编译并安装
 
-```bash
-cd ~
-git clone https://gitcode.com/Ascend/msagent.git
-```
+1. 进入 `ctr_in.py` 打开的交互式容器 Shell 后，执行如下命令克隆本仓库：
 
-#### 3.3.2 方式一：使用构建脚本
-
-保持在 `ctr_in.py` 打开的同一个交互式容器 Shell 中，在仓库根目录执行以下命令，自动完成依赖下载与构建：
-
-```bash
-cd ~/msagent
-python3 build.py
-```
-
-构建成功后，安装包将生成在 `artifacts/` 目录下。使用如下命令进行安装：
-
-```shell
-pip install artifacts/mindstudio_agent-{version}-py3-none-any.whl
-```
-
-安装完成后，若显示如下信息，则说明软件安装成功。
-
-```ColdFusion
-Successfully installed mindstudio-agent-{version}
-```
-
-默认构建会安装 `uv`。如本地已安装 `uv`，可使用 `python3 build.py local` 跳过安装。
-
-#### 3.3.3 方式二：手动构建安装
-
-1. 安装依赖。
-
-   ```shell
-   pip install uv
+   ```bash
+   cd ~
+   git clone https://gitcode.com/Ascend/msagent.git
    ```
 
-2. 执行编译打包。
+2. 保持在 `ctr_in.py` 打开的同一个交互式容器 Shell 中，在仓库根目录执行以下命令，自动完成依赖下载与构建：
 
-   ```shell
-   cd msagent
-   test -d skills
-   uv lock --check
-   uv build --wheel --out-dir dist .
+   ```bash
+   cd ~/msagent
+   python3 build.py
    ```
 
-   适用场景：
-
-   - Linux / macOS
-   - Windows + Git Bash
-   - Windows + WSL
-
-   编译完成后在`dist`目录下生成whl包，名称格式为`mindstudio_agent-{version}-py3-none-any`。其中`version`为版本号。
-
-3. 安装whl包。
+3. 构建成功后，安装包将生成在 `artifacts/` 目录下。使用如下命令进行安装：
 
    ```shell
-   pip install dist/mindstudio_agent-{version}-py3-none-any.whl
+   pip install artifacts/mindstudio_agent-{version}-py3-none-any.whl
    ```
 
    安装完成后，若显示如下信息，则说明软件安装成功。
@@ -126,7 +73,9 @@ Successfully installed mindstudio-agent-{version}
    Successfully installed mindstudio-agent-{version}
    ```
 
-#### 3.3.4 执行单元测试（可选）
+   默认构建会安装 `uv`。如本地已安装 `uv`，可使用 `python3 build.py local` 跳过安装。
+
+#### 3.2.3 执行单元测试（可选）
 
 此步骤非安装必需。如需验证代码基本功能，可在仓库根目录执行：
 
@@ -156,22 +105,22 @@ msagent --help
 
 常见操作示例：
 
-- 升级：
+- 升级
 
-```shell
-rm -rf .msagent
-pip install mindstudio-agent
-```
+  ```shell
+  rm -rf .msagent
+  pip install mindstudio-agent
+  ```
 
-从 **26.1.0-alpha.2** 起，Web UI 依赖 `langgraph-cli[inmem]` 已改为可选 extra `[web]`。`pip install -U` 升级时**不会自动卸载**旧版已安装的 web 相关包；若不再使用 Web UI，可手动执行：
+  从 **26.1.0-alpha.2** 起，Web UI 依赖 `langgraph-cli[inmem]` 已改为可选 extra `[web]`。`pip install -U` 升级时**不会自动卸载**旧版已安装的 web 相关包；若不再使用 Web UI，可手动执行：
 
-```shell
-pip uninstall -y langgraph-cli langgraph-api langgraph-runtime-inmem
-```
+  ```shell
+  pip uninstall -y langgraph-cli langgraph-api langgraph-runtime-inmem
+  ```
 
-- 卸载：
+- 卸载
 
-```shell
-rm -rf .msagent
-pip uninstall mindstudio-agent
-```
+  ```shell
+  rm -rf .msagent
+  pip uninstall mindstudio-agent
+  ```

@@ -80,7 +80,7 @@ def create_legacy_parser() -> argparse.ArgumentParser:
         "-v",
         "--verbose",
         action="store_true",
-        help="Enable verbose logging to console and .msagent/app.log",
+        help="Enable verbose logging to console and .msagent/logs/app.log",
     )
     config_parser.add_argument(
         "--show",
@@ -118,7 +118,7 @@ def create_legacy_parser() -> argparse.ArgumentParser:
         "-v",
         "--verbose",
         action="store_true",
-        help="Enable verbose logging to console and .msagent/app.log",
+        help="Enable verbose logging to console and .msagent/logs/app.log",
     )
     web_parser.add_argument(
         "--host",
@@ -190,7 +190,7 @@ def create_session_parser() -> argparse.ArgumentParser:
         "-v",
         "--verbose",
         action="store_true",
-        help="Enable verbose logging to console and .msagent/app.log",
+        help="Enable verbose logging to console and .msagent/logs/app.log",
     )
     _add_runtime_options(parser, include_timer=True)
     return parser

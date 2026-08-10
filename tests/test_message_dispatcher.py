@@ -220,10 +220,12 @@ async def test_dispatch_logs_detailed_connection_errors(
         await dispatcher.dispatch("hello")
 
     assert printed_errors == [
-        "Error processing message: Connection error. Cause: ConnectError: all connection attempts failed"
+        "Error processing message: Unable to establish a connection to the model service or proxy. Check network "
+        "connectivity, the model base_url, proxy or VPN settings, firewall access, and service availability, then retry. "
+        "For more details, restart with `msagent -v` and check .msagent/logs/app.log."
     ]
     assert "Message processing error [thread_id=thread-1" in caplog.text
-    assert "console_error=Connection error. Cause: ConnectError: all connection attempts failed" in caplog.text
+    assert "console_error=Unable to establish a connection to the model service or proxy." in caplog.text
     assert "exception_type=APIConnectionError" in caplog.text
     assert "exception_message=Connection error." in caplog.text
     assert "exception_repr=APIConnectionError('Connection error.')" in caplog.text
@@ -234,6 +236,85 @@ async def test_dispatch_logs_detailed_connection_errors(
     assert (
         "exception_chain=APIConnectionError: Connection error. <- ConnectError: all connection attempts failed"
     ) in caplog.text
+
+
+def test_dns_resolution_error_is_explained() -> None:
+    request = httpx.Request("POST", "https://model.example.test:8443/v1/chat?api_key=secret")
+    try:
+        try:
+            raise OSError(-3, "Temporary failure in name resolution")
+        except OSError as cause:
+            raise APIConnectionError(request=request) from cause
+    except APIConnectionError as error:
+        console_error = MessageDispatcher._format_console_error(error)
+
+    assert "DNS lookup failed" in console_error
+    assert "base_url" in console_error
+
+
+def test_proxy_gateway_timeout_is_explained() -> None:
+    error = ConnectionError("ProxyError: 504 Gateway Time-out")
+
+    console_error = MessageDispatcher._format_console_error(error)
+
+    assert "proxy gateway timed out" in console_error.lower()
+    assert "HTTP/HTTPS proxy" in console_error
+
+
+def test_ssl_certificate_verification_error_is_explained() -> None:
+    error = ConnectionError(
+        "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: "
+        "unable to get local issuer certificate (_ssl.c:1006)"
+    )
+
+    console_error = MessageDispatcher._format_console_error(error)
+
+    assert "TLS certificate verification failed" in console_error
+    assert "certificate chain is not trusted" in console_error
+
+
+def test_response_read_error_is_explained() -> None:
+    class ReadError(Exception):
+        pass
+
+    console_error = MessageDispatcher._format_console_error(ReadError())
+
+    assert "interrupted while reading a response" in console_error
+    assert "network, proxy or VPN stability" in console_error
+
+
+def test_response_read_timeout_is_explained() -> None:
+    request = httpx.Request("POST", "https://model.example.test/v1/chat")
+
+    console_error = MessageDispatcher._format_console_error(httpx.ReadTimeout("timed out", request=request))
+
+    assert "Timed out while waiting for a response" in console_error
+    assert "service load" in console_error
+    assert "read timeout configuration" in console_error
+
+
+def test_connection_establishment_error_is_explained() -> None:
+    request = httpx.Request("POST", "https://model.example.test/v1/chat")
+    error = httpx.ConnectError("All connection attempts failed", request=request)
+
+    console_error = MessageDispatcher._format_console_error(error)
+
+    assert "Unable to establish a connection" in console_error
+    assert "firewall access" in console_error
+
+
+def test_thinking_message_protocol_error_is_explained() -> None:
+    error = RuntimeError(
+        "Error code: 400 - {'error': {'message': 'Failed to deserialize the JSON body into the target type: "
+        "messages[23].content: missing field \'thinking\'', 'type': 'invalid_request_error'}}"
+    )
+
+    console_error = MessageDispatcher._format_console_error(error)
+
+    assert "rejected a thinking message" in console_error
+    assert "incompatible model reasoning protocol" in console_error
+    assert "Start a new conversation" in console_error
+    assert "msagent -v" in console_error
 
 
 @pytest.mark.asyncio
@@ -266,7 +347,7 @@ async def test_dispatch_writes_detailed_processing_errors_to_verbose_log(
 
         log_text = log_path.read_text(encoding="utf-8")
         assert "Message processing error [thread_id=thread-1" in log_text
-        assert "console_error=Connection error. Cause: ConnectError: all connection attempts failed" in log_text
+        assert "console_error=Unable to establish a connection to the model service or proxy." in log_text
         assert "exception_type=APIConnectionError" in log_text
         assert "exception_message=Connection error." in log_text
         assert (
@@ -350,6 +431,16 @@ def test_format_retry_notice_text_for_llm_and_tool(tmp_path: Path) -> None:
 
     assert dispatcher._format_retry_notice_text(llm_notice) == "LLM 重试 2/5，5s 后重试"
     assert dispatcher._format_retry_notice_text(tool_notice) == ("Tool run_command 重试 1/1，0.5s 后重试")
+
+
+def test_format_console_error_explains_empty_stream_and_rate_limit() -> None:
+    empty_stream = MessageDispatcher._format_console_error(ValueError("No generations found in stream"))
+    rate_limit = MessageDispatcher._format_console_error(RuntimeError("Error code: 429"))
+
+    assert "empty response" in empty_stream
+    assert "conversation is still usable" in empty_stream
+    assert "rate-limited" in rate_limit
+    assert "conversation is still usable" in rate_limit
 
 
 def test_render_retry_notice_uses_warning_output_without_live(

@@ -16,7 +16,7 @@
 
 | Skill 名称 | 适用场景                             |
 |------------|----------------------------------|
-| `ascendc-operator-performance-optim` | Ascend 算子性能瓶颈分析、优化建议输出、端到端性能优化   |
+| `ops-performance-tuning` | Ascend 算子性能瓶颈分析、优化建议输出、端到端性能优化   |
 | `msot-msopprof-operator-profiler` | Ascend 算子性能瓶颈分析、TOP5优化建议输出、总结报告等 |
 
 
@@ -44,7 +44,7 @@
 ## 算子性能分析优化
 
 - 调用 **`msot-msopprof-operator-profiler`** 完成性能分析报告输出
-- 调用 **`ascendc-operator-performance-optim`** 进行端到端性能优化
+- 调用 **`ops-performance-tuning`** 进行端到端性能优化
 
 
 ## 数据目录结构

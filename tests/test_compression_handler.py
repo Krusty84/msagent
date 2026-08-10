@@ -29,6 +29,33 @@ from msagent.configs import ApprovalMode
 from msagent.utils.offload import ConversationOffloadResult
 
 
+def test_compression_handler_explains_tokenizer_download_timeout() -> None:
+    error = RuntimeError(
+        "HTTPConnectionPool(host='openaipublic.blob.core.windows.net', port=443): "
+        "Max retries exceeded with url: /encodings/cl100k_base.tiktoken "
+        "(Caused by ConnectTimeoutError())"
+    )
+
+    message = compress_module.CompressionHandler._format_compression_failure(error)
+
+    assert "tokenizer encoding" in message
+    assert "request timed out" in message
+    assert "existing conversation were preserved" in message
+
+
+def test_compression_handler_explains_tokenizer_certificate_failure() -> None:
+    error = RuntimeError(
+        "HTTPSConnectionPool(host='openaipublic.blob.core.windows.net', port=443): "
+        "Max retries exceeded with url: /encodings/cl100k_base.tiktoken "
+        "(Caused by SSLError(SSLCertVerificationError()))"
+    )
+
+    message = compress_module.CompressionHandler._format_compression_failure(error)
+
+    assert "TLS certificate verification failed" in message
+    assert "proxy CA certificate" in message
+
+
 class _FakeGraph:
     def __init__(self) -> None:
         self._agent_backend = object()

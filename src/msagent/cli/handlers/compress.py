@@ -32,6 +32,40 @@ class CompressionHandler:
         """Initialize with reference to CLI session."""
         self.session = session
 
+    @staticmethod
+    def _format_compression_failure(error: BaseException) -> str:
+        """Return a concise user-facing explanation for known compression failures."""
+        message = str(error).lower()
+        tokenizer_download_timed_out = (
+            "cl100k_base.tiktoken" in message
+            and any(marker in message for marker in ("connecttimeout", "connection timed out", "timed out"))
+        )
+        if tokenizer_download_timed_out:
+            return (
+                "Conversation compression could not download the tokenizer encoding because the request timed out. "
+                "The response above and the existing conversation were preserved; check network or proxy access to "
+                "the tokenizer service, or start a new session if the context limit is reached."
+            )
+        tokenizer_certificate_error = "cl100k_base.tiktoken" in message and any(
+            marker in message
+            for marker in (
+                "certificate_verify_failed",
+                "certificate verify failed",
+                "sslcertverificationerror",
+            )
+        )
+        if tokenizer_certificate_error:
+            return (
+                "Conversation compression could not download the tokenizer encoding because TLS certificate "
+                "verification failed. The response above and the existing conversation were preserved; check the "
+                "tokenizer service or proxy CA certificate and SSL verification configuration, or start a new "
+                "session if the context limit is reached."
+            )
+        return (
+            "Conversation compression could not be completed. The response above and the existing "
+            "conversation were preserved; start a new session if the context limit is reached."
+        )
+
     async def handle(self) -> None:
         """Compress current conversation history inside the current thread."""
         try:
@@ -145,6 +179,6 @@ class CompressionHandler:
             console.print("")
 
         except Exception as e:
-            console.print_error(f"Error compressing conversation: {e}")
+            console.print_warning(self._format_compression_failure(e))
             console.print("")
-            logger.debug("Compression error", exc_info=True)
+            logger.warning("Conversation compression failed: %s", e, exc_info=True)

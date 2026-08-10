@@ -63,6 +63,23 @@ def test_calculate_message_tokens_falls_back_to_tiktoken_and_character_estimate(
     assert compression_module.calculate_message_tokens(messages, _BrokenLLM()) == len("hello world") // 4
 
 
+def test_calculate_message_tokens_handles_network_failure_from_llm_tokenizer(monkeypatch) -> None:
+    class _NetworkTokenizerLLM:
+        def get_num_tokens_from_messages(self, _messages):
+            raise RuntimeError("certificate verify failed while downloading tokenizer")
+
+    messages = [HumanMessage(content="offline token estimate")]
+    monkeypatch.setattr(
+        compression_module.tiktoken,
+        "get_encoding",
+        lambda _name: (_ for _ in ()).throw(RuntimeError("network unavailable")),
+    )
+
+    assert compression_module.calculate_message_tokens(messages, _NetworkTokenizerLLM()) == len(
+        "offline token estimate"
+    ) // 4
+
+
 def test_should_auto_compress_respects_context_window_and_threshold() -> None:
     assert compression_module.should_auto_compress(80, None, 0.5) is False
     assert compression_module.should_auto_compress(80, 0, 0.5) is False

@@ -7,7 +7,7 @@
 | 命令 | 说明 |
 |---|---|
 | `/hotkeys` | 查看键盘快捷键说明。 |
-| `/agents` | 打开 Agent 选择器。 |
+| `/agents` | 打开 Agent 选择器。切换后会开启新会话，不会继承原 Agent 的对话上下文；可通过 `/threads` 恢复原会话。 |
 | `/model` | 打开模型选择器。 |
 | `/threads` | 浏览并恢复历史会话线程；已执行过 offload 的线程会显示 `[history offloaded]`。 |
 | `/tools` | 查看当前可用工具。 |

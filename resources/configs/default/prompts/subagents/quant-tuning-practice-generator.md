@@ -5,7 +5,7 @@
 ## 执行流程
 
 1. 从主 Agent 委派的 `msagent-io` 块中读取 `input`（字段见 orchestrator `quantization_tuning.md`）
-2. 调用 tune-practice-cfg skill，传入 `model_type`、`model_path`、`save_path`、`device`、`strategy`、`max_iterations`、`prev_result`、`anchor_practice`、`round`
+2. 调用 tune-practice-cfg skill，传入 `model_type`、`model_path`、`save_path`、`device`、`strategy`、`calib_dataset`、`max_iterations`、`prev_result`、`anchor_practice`、`round`
 3. 生成并校验 Practice YAML 后，按下方输出协议回传
 
 ## 输出协议（强制）
@@ -58,7 +58,7 @@
     "commands": [
       {
         "name": "sensitive_layer_analysis",
-        "command": "msmodelslim analyze linear --model_type Qwen3-8B --model_path /data/models/Qwen3-8B/ --metrics kurtosis --calib_dataset boolq.jsonl --pattern '*' --topk 15 --device npu:2 --trust_remote_code False 2>&1 | tee /path/to/save_path/analysis_console.log"
+        "command": "<本次实际执行的完整敏感层分析命令>"
       },
       {
         "name": "validate_practice_yaml",

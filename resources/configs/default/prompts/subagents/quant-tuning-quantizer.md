@@ -5,7 +5,7 @@
 ## 执行流程
 
 1. 从主 Agent 委派的 `msagent-io` 块中读取 `input` 参数（字段见 orchestrator `quantization_tuning.md`）
-2. 调用 quant-tuning-quantize skill，传入：`config_path`、`model_path`、`save_path`、`device`、`trust_remote_code`
+2. 调用 quant-tuning-quantize skill，传入：`config_path`、`model_path`、`save_path`、`model_type`、`device`、`trust_remote_code`
 3. 量化结束后，按下方输出协议回传
 
 ## 输出协议（强制）

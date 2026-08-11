@@ -3,7 +3,7 @@ name: quant-tuning-evaluate
 description: 执行模型测评。通过 scripts/run_evaluation.py 依据 Evaluation YAML 对量化模型进行评测。
 license: Apache-2.0
 metadata:
-  version: 0.3.0
+  version: 0.3.1
   domain: quantization
   framework: msmodelslim
   protocol: script
@@ -175,6 +175,8 @@ python skills/quant-tuning-evaluate/scripts/run_evaluation.py \
 | `passed` | 是否达标（score >= target - tolerance）|
 | `overall_passed` | 所有数据集是否都达标 |
 
+`run_evaluation.py` 必须在调用公共 `emit_result()` 前使用 Pydantic JSON 模式序列化 `EvaluateResult`。禁止直接返回 `model_dump()` 的 Python 模式结果，因为其中的 `Decimal`（如 `accuracy`、`target`、`tolerance`）无法由标准 `json.dumps()` 序列化。JSON 模式会将十进制值无损转换为字符串；下游通过 `EvaluateResult.model_validate()` 读取时会恢复为 `Decimal`。
+
 ---
 
 ## 执行示例
@@ -220,6 +222,7 @@ python skills/quant-tuning-evaluate/scripts/run_evaluation.py \
 | `HCCL init failed` | NPU 通信失败 | 检查 `device_indices` 和设备状态 |
 | `evaluate.yaml not found` | 配置文件不存在 | 检查 `config_path` |
 | `out of memory` | 设备内存不足 | 换设备 |
+| `Object of type Decimal is not JSON serializable` | 使用了 Python 模式 `model_dump()` | 改用 `model_dump(mode="json")`，且不得重新执行已完成的评测 |
 
 若错误不在上述常见错误中或者多次解决后依然未解决，依据[错误上报](references/error_handling.md)，按照错误上报格式返回至`quant-tuning-evaluator` Agent
 
@@ -234,3 +237,4 @@ python skills/quant-tuning-evaluate/scripts/run_evaluation.py \
 - [ ] 目标端口未被占用
 - [ ] NPU/GPU 设备可用
 - [ ] msmodelslim 已安装
+- [ ] 成功结果可被标准 `json.dumps()` 序列化，并可由 `EvaluateResult.model_validate()` 重新读取

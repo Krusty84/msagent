@@ -120,9 +120,9 @@ VLM 测评仍然生成同一类 `service_oriented + aisbench + vllm-ascend` YAML
 
 | 路径 | 类型 | 说明 |
 |------|------|------|
-| `evaluation.aisbench.max_out_len` | int | 优先采用模型或数据集建议；明确为非思考短答任务时用 `2048`，thinking 或无法判断时用 `32768`，出现长度截断再翻倍 |
+| `evaluation.aisbench.max_out_len` | int | 优先采用模型卡、数据集官方配置或用户明确给出的建议；没有明确依据时使用 `32768` |
 | `evaluation.aisbench.batch_size` | int | 请求最大并发数；无通用默认值，信息不足时从 `8` 开始逐级测试 |
-| `inference_engine.args.max-model-len` | int | 优先采用模型建议；无依据时取不小于 `2 × max_out_len` 且至少 `32768`，不能超过模型上限 |
+| `inference_engine.args.max-model-len` | int | VLM 默认 `65536`；模型、数据集或用户明确指定时使用指定值，且不能超过模型上限 |
 | `inference_engine.args.max-num-batched-tokens` | int | 默认取 `min(max-model-len, 33792)`；显存充足但吞吐不足时再提高 |
 | `inference_engine.args.allowed-local-media-path` | string | 仅图片路径任务填写；必须是经过校验的可信绝对目录 |
 
@@ -142,7 +142,6 @@ VLM 测评仍然生成同一类 `service_oriented + aisbench + vllm-ascend` YAML
 4. 确保测评配置一致性，你应确保测评浮点权重和量化权重的配置的通用参数一致，尤其是 `evaluation.aisbench`、`inference_engine.args.max-model-len`**必须**保持一致。在不一致的情况下，你应该修改当前生成的配置文件。例如先前生成了浮点的测评配置且已经测评过了，则你应该修改当前生成的量化测评配置。
 5. 检查 `inference_engine.env_vars.ASCEND_RT_VISIBLE_DEVICES` 与用户选择的 `device_indices` 完全一致，且 `tensor-parallel-size` 等于设备数量。
 6. 对 VLM 配置，按“VLM 图片输入处理”完成任务选择和媒体路径校验。
-7. 对 VLM 配置，先确定完整输出和总长度，再调整并发与调度 token 预算。
 
 ## 执行约束
 

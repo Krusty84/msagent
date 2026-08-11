@@ -146,8 +146,6 @@ metadata:
 | 改动项 | 说明 | 对应 YAML 位置 |
 |--------|------|----------------|
 | 调整 `tuning_exclude` | 增减敏感层回退；最终与 `protected_exclude` 取并集 | `spec.process[].exclude` |
-| 替换离群值抑制 | `iter_smooth` ↔ `flex_smooth_quant` ↔ `flex_awq_ssz` | `spec.process[].type` |
-| 调整抑制强度 | 如 `flex_awq_ssz` 的 `step`、`enable_subgraph_type` | `spec.process[].qconfig.ext` |
 
 **修改粒度**：
 - **一次只改一两处字段**，避免多因素同时变化导致无法归因
@@ -223,8 +221,6 @@ python skills/tune-practice-cfg/scripts/validate_practice_yaml.py --practice-pat
 ## 常见错误
 
 - 回退层选择时拆分同分同退组（应整体回退或整体保留）
-- 一次同时改 exclude + 抑制策略 + 校准集，无法归因
 - `metadata.label` 写成字符串而非 dict
-- `type` 与字段不匹配（如 `flex_awq_ssz` 缺少 `qconfig`），参见 [量化配置格式](references/practice_yaml_format.md)
 - `valid=false` 仍继续后续步骤
 - 命令行参数 `--device` 未使用 `npu:0` 这种格式，错误地使用了 `DeviceType.NPU`

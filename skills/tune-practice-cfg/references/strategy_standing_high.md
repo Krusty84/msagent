@@ -20,14 +20,6 @@
    └─ 精度不达标 → 增大下界
    → 得到 init_disable_level
 
-3. 摸高阶段（逐步减少回退层）
-   ├─ 初始 reduce_level = 1
-   ├─ 尝试 current_level - reduce_level 层回退
-   ├─ 遍历离群值抑制策略候选（策略轮换）
-   │   ├─ 精度达标 → 更新 best，reduce_level *= 2（加速提升）
-   │   └─ 精度不达标 → 尝试下一个策略
-   ├─ 所有策略失败且 reduce_level > 1 → reduce_level = 1（重置步长）
-   └─ 所有策略失败且 reduce_level = 1 → 返回当前 best
 ```
 
 ---
@@ -36,17 +28,7 @@
 
 | 配置项 | 说明 |
 |--------|------|
-| **离群值抑制策略候选** | 摸高时轮换的抑制策略列表，每项对应一个 process 配置片段（至少 1 项） |
 | **完整量化配置模板** | 包含线性层量化参数、保存配置等完整 Practice YAML |
-
----
-
-## 离群值抑制策略轮换
-
-摸高阶段依次尝试不同的离群值抑制策略：
-- 每轮摸高尝试所有候选策略
-- 任一策略达标即视为成功
-- 全部失败则减小步长或终止
 
 ---
 
@@ -54,12 +36,12 @@
 
 | 必要输入 | 产出 |
 |----------|------|
-| 模型、离群值抑制策略候选、量化配置模板 | 多轮 Practice YAML |
+| 模型、量化配置模板 | 多轮 Practice YAML |
 
 ## 适用范围与配置边界
 
 本策略不依赖模型模态；所有受支持的模型共用上述二分搜索和摸高算法，具体配置结构由基准 Practice 决定。
 
-每轮 Practice 必须继承基准 Practice 的 `apiversion`、`include`、静态 `exclude` 及其他 schema 专属字段。策略只能调整 `tuning_exclude` 和离群值抑制等调优字段，最终写入的 `exclude` 为静态排除项与 `tuning_exclude` 的并集。
+每轮 Practice 必须继承基准 Practice 的 `apiversion`、`include`、静态 `exclude` 及其他 schema 专属字段。策略只能调整 `tuning_exclude`，最终写入的 `exclude` 为静态排除项与 `tuning_exclude` 的并集。
 
 具体 YAML 字段和量化边界见 [量化配置格式](practice_yaml_format.md)，敏感层排序规则见 [敏感层分析](sensitive_layer_analysis.md)。

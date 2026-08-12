@@ -76,6 +76,7 @@
 | [`msot-msopprof-operator-profiler`](./msot-msopprof-operator-profiler/SKILL.md) | 基于 msprof op 工具深度分析算子性能瓶颈，给出算子信息、关键性能数据、TOP5性能瓶颈、TOP5优化建议与报告总结，提升开发者算子性能优化效率  | 算子可执行程序、算子msprof op 性能数据目录                                                               | Python3                                                                |
 | [`nan-overflow-detection`](./nan-overflow-detection/SKILL.md) | 多卡分布式训练 loss/gnorm 精度溢出检测与根因追溯，跨 rank 定位源卡并追溯根因算子                                              | 包含 rank 子目录（`rank0/`, `rank1/`, ...）的 step0 目录                                          | Python3                                                                |
 | [`deterministic-calculation-analysis`](./deterministic-calculation-analysis/SKILL.md) | 执行 MindStudio Probe (msProbe) 数据比对并分析比对结果，定位确定性计算问题首个输入一致输出不一致的API       |  msPorbe dump 数据目录（采集统计信息和tensor的CRC-32校验值，task="statistics", summary_mode="md5"）     | Python3, `msProbe`                                                                |
+| [`train-infer-op-diff-scanner`](./train-infer-op-diff-scanner/SKILL.md) | RL 训练（Megatron）与推理（vLLM）路径的算子差异性运行时扫描，对比融合算子 vs 单算子差异并生成含代码调用栈的完整报告 | RL 训练启动脚本路径，或"训推算子扫描 / 训推差异性 / 算子差异报告 / 融合算子对比"等请求 | `torch_npu`、`msprof`、`megatron-core`、`vllm`、`vllm-ascend`、`mbridge`、`sqlite3` |
 
 ## 目录结构
 
@@ -123,6 +124,11 @@
 │       └── msprobe_utils.py
 ├── op-mfu-calculator/
 │   └── SKILL.md
+├── train-infer-op-diff-scanner/
+│   ├── SKILL.md
+│   └── references/
+│       ├── report_template.md
+│       └── run_qwen3_0_6b_megatron_vllm_ascend.sh
 ```
 
 

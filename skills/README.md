@@ -52,6 +52,7 @@ description: 技能的详细描述，说明它做什么，以及什么时候使�
 | `mindstudio-cpu-binding` | 分析 CPU 绑核、NUMA 和 Host 侧瓶颈 | `排查这个多卡任务的 CPU binding 问题` |
 | `op-mfu-calculator` | 计算算子 MFU | `按这个 shape 和耗时算 MFU` |
 | `op-mfu-profiler` | 采集profiling数据并解析算子 MFU | `这是我的程序，帮我分析算子的 MFU` |
+| `spike-root-cause-analysis` | 梯度尖刺 (Gradient Spike) 根因定位 | `这个 spike 数据的根因是什么` |
 
 ### 2.2 精度 Skills
 

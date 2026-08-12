@@ -150,6 +150,7 @@ python3 <skill_dir>/scripts/bound_analyzer.py \
 | L2/UB/L1/L0 复用不足 | [存储层次](references/optimize/optimize-memory-hierarchy.md) |
 | Pipe 气泡或同步过密 | [流水优化](references/optimize/optimize-pipeline.md) |
 | Scalar/API 热点 | [API 使用](references/optimize/optimize-api-usage.md) |
+| 多步融合 Vector、MemBase 已尽、VF 样例 | [RegBase / SIMD VF](references/optimize/optimize-ascendc-regbase-vf.md) |
 | CATLASS / Triton / TileLang | [CATLASS](references/optimize/optimize-catlass.md) / [Triton](references/optimize/optimize-triton.md) / [TileLang](references/optimize/optimize-tilelang.md) |
 | PyPTO / SHMEM | [PyPTO](references/optimize/optimize-pypto.md) / [SHMEM](references/optimize/optimize-shmem.md) |
 

@@ -358,7 +358,7 @@ Step 6 要求"选最多三个同型案例"。实测以下算子类型在本案�
 - MoE routing / key-value sort / gather-scatter / histogram（SIMT 不规则读写）
 - Mix / CV 融合算子（FlashAttention 类，AIC+AIV CrossCore mode2）
 - RMSNorm+RoPE+KVCache 这类融合 vector 算子
-- RegBase / SIMD VF（`__simd_vf__`/`Reg::*`）范式的算子
+- ~~RegBase / SIMD VF~~（已补 [optimize/optimize-ascendc-regbase-vf.md](optimize/optimize-ascendc-regbase-vf.md) 专项文档）
 
 **降级策略**：
 

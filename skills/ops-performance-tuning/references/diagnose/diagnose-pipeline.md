@@ -43,3 +43,6 @@
 2. busy ratio 高但 active bandwidth 很低时，优先检查小包、非对齐、指令数量和频繁同步，不宣称 HBM 饱和。
 3. Vector/Cube ratio 低时结合等待比例和时间线区分“没有计算量”与“计算 Pipe 被上游阻塞”。
 4. 修改后必须同时验证总时延、active bandwidth、等待比例和精度；单一 ratio 改善不足以采纳。
+5. **所有 pipe 占用都低（均值 <50%）不是"无 bound"**：排除 compute 与带宽饱和后，典型为流水未重叠、频繁同步（SetFlag/WaitFlag/PipeBarrier/CrossCore flag）或小包轮询等待，按 latency/synchronization bound 处理；bound_analyzer.py 对此输出 `LATENCY/SYNC 可疑`。
+6. **多 pipe 占用互补求和≈1 是串行无重叠的指纹**（如 cube 0.44+mte2 0.42+mte1 0.18 ≈ 1）：各 pipe 轮流忙、无一饱和，说明搬运与计算完全串行，机制上对应单缓冲 + 逐级 SetFlag/WaitFlag，候选 Double Buffer/流水重叠。
+7. Scalar pipe 占用高（>90%）而 vec/MTE 低时，优先怀疑逐元素标量访问（GetValue/SetValue）、标量地址计算或控制流开销，对应 optimize-api-usage.md 的标量削减方向。

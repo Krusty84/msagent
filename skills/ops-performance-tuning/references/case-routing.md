@@ -348,3 +348,20 @@ msprof op --output=./prof/baseline \
 | 35 | matmul | 大 Shape Matmul 分核布局/L2 命中率（S-13） | 非 PR（cannbot-skills 调优案例库） | 2.1→1.6ms（+31%，6144³） | — | [cases/pypto/pr_pypto_l2_hit_layout_s13.md](cases/pypto/pr_pypto_l2_hit_layout_s13.md) |
 | 36 | attention | GQA Decode Attention Vector 合轴+合图 | 非 PR（cannbot-skills 调优案例库） | 275.44→258.98us（-6.0%）；任务数 -18.5% | — | [cases/pypto/pr_pypto_gqa_decode_vector_merge.md](cases/pypto/pr_pypto_gqa_decode_vector_merge.md) |
 | 37 | misc | 权重矩阵批量 NONE_CACHEABLE（I-2，Pangu 7B） | 非 PR（cannbot-skills 调优案例库） | 437.28→354us（-19.1%） | — | [cases/pypto/pr_pypto_weight_none_cacheable.md](cases/pypto/pr_pypto_weight_none_cacheable.md) |
+
+---
+
+## 5. 无同型案例时的降级策略与覆盖缺口
+
+Step 6 要求"选最多三个同型案例"。实测以下算子类型在本案例库**没有同型条目**，命中时按降级策略执行，不要硬凑案例：
+
+- MoE routing / key-value sort / gather-scatter / histogram（SIMT 不规则读写）
+- Mix / CV 融合算子（FlashAttention 类，AIC+AIV CrossCore mode2）
+- RMSNorm+RoPE+KVCache 这类融合 vector 算子
+- RegBase / SIMD VF（`__simd_vf__`/`Reg::*`）范式的算子
+
+**降级策略**：
+
+1. 只用 `references/diagnose/` 的证据链 + `references/optimize/` 的机制文档驱动，候选项的证据、修改位置、预期指标、回滚条件照常写全；
+2. 机制文档只有表格一行、无代码模板时（常见：合并小搬运、Double Buffer 非 TQue 形态），实施细节自行推导并提高验证强度（精度全量 + 多轮稳态）；
+3. 在报告中明确标注"无同型案例，机制来自通用文档"，并把本次证据链沉淀为新案例候选（operator、DSL、SoC、Bound、修改点、前后数字），供后续补库。

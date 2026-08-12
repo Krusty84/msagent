@@ -20,6 +20,7 @@ rg -n "build.sh|run.sh|mpirun|ranktable|add_executable|kernel" \
 2. 保存每个 rank 的 stdout/stderr 和退出码；任一 rank 异常均视为失败。
 3. 对比完整输出、通信元素数和 rank 映射；不以“程序退出 0”替代正确性验证。
 4. 先跑 HCCL 或工程正式标杆，再跑 SHMEM/MC2；两者使用相同拓扑、消息量、dtype、warmup 和 repeat。
+5. **设备前提检查（Step 1 就要做）**：`rankNum ≤ 可用空闲设备数`。host 侧 `deviceId = rankId` 的样例每 rank 独占一个物理设备，`ASCEND_RT_VISIBLE_DEVICES` 可见设备数不足时 rank 会在 `aclrtSetDevice` 报 `aclError:107001` 或对端阻塞超时——不要等到 Step 3/4 才发现。rankNum=1 退化运行通常挂起且失去通信语义，不能当基线。cann-samples 抽离案例的构建树重建见 [compile-ascendc.md §4.3.1](compile-ascendc.md)（`shmem.cmake` 会现场编译 third_party/shmem，已有 install 产物优先复用）。
 
 ## 3. 性能口径与采集
 

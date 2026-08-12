@@ -16,10 +16,13 @@ import sys
 from pathlib import Path
 
 
-COMPARABILITY_KEYS = (
+# 硬口径：这些字段不一致则禁止比较（跨 shape/dtype/SoC/设备/计时法无意义）
+HARD_KEYS = (
     "op", "soc", "mode", "timing_method", "baseline_kind", "cann_version", "device_id",
-    "shape", "dtype", "format", "tiling_key", "block_dim", "warmup", "repeat",
+    "shape", "dtype", "format", "warmup", "repeat",
 )
+# 机制变量：分核/tiling 类优化本身就会改变它们，差异降级为 WARN 并写入报告
+MECHANISM_KEYS = ("tiling_key", "block_dim")
 
 
 def main() -> int:
@@ -27,13 +30,16 @@ def main() -> int:
     parser.add_argument("--baseline", required=True, help="基线 result json")
     parser.add_argument("--after", required=True, help="优化后 result json")
     parser.add_argument("--output", required=True, help="输出 markdown 报告路径")
+    parser.add_argument("--strict", action="store_true",
+                        help="恢复旧行为：tiling_key/block_dim 差异也视为口径不一致")
     args = parser.parse_args()
 
     baseline = json.loads(Path(args.baseline).read_text(encoding="utf-8"))
     after = json.loads(Path(args.after).read_text(encoding="utf-8"))
 
+    hard_keys = tuple(HARD_KEYS) + (tuple(MECHANISM_KEYS) if args.strict else ())
     differences = []
-    for key in COMPARABILITY_KEYS:
+    for key in hard_keys:
         before_value = baseline.get(key)
         after_value = after.get(key)
         if before_value is not None and after_value is not None and before_value != after_value:
@@ -43,6 +49,16 @@ def main() -> int:
         for item in differences:
             print(f"  - {item}", file=sys.stderr)
         return 2
+
+    mechanism_notes = []
+    if not args.strict:
+        for key in MECHANISM_KEYS:
+            before_value = baseline.get(key)
+            after_value = after.get(key)
+            if before_value is not None and after_value is not None and before_value != after_value:
+                mechanism_notes.append(f"{key}: {before_value!r} -> {after_value!r}")
+        for item in mechanism_notes:
+            print(f"WARN: 机制变量变化（分核/tiling 类优化属预期）: {item}", file=sys.stderr)
 
     if baseline.get("precision") != "pass" or after.get("precision") != "pass":
         print("ERROR: 只有精度均为 pass 的结果才能生成性能结论", file=sys.stderr)
@@ -71,10 +87,18 @@ def main() -> int:
         f"## 结论",
         "",
     ]
-    if speedup > 1.0:
+    if mechanism_notes:
+        lines.append("机制变量变化（分核/tiling 类优化的预期变量，非口径问题）：")
+        for item in mechanism_notes:
+            lines.append(f"- {item}")
+        lines.append("")
+    if speedup > 1.05:
         lines.append(f"性能提升 {speedup:.2f}x（{delta_pct:+.1f}%），可进入稳定性复测。")
-    elif speedup >= 0.98:
-        lines.append(f"性能变化可能位于噪声范围（{speedup:.2f}x），需按原口径增加采样确认。")
+    elif speedup >= 0.95:
+        lines.append(
+            f"性能变化 {speedup:.2f}x（{delta_pct:+.1f}%）落在 ±5% 噪声带内："
+            "按 SKILL Step 7 规则应视为无稳定收益，增加采样轮次确认或回滚，"
+            "不要把噪声内变化当作优化收益。")
     else:
         lines.append(f"性能劣化 {speedup:.2f}x（{delta_pct:+.1f}%），应回滚该轮修改。")
 

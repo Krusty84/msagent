@@ -33,12 +33,18 @@ def main() -> int:
     parser.add_argument("--max-abs-err", type=float, default=0.0, help="最大绝对误差")
     parser.add_argument("--max-rel-err", type=float, default=0.0, help="最大相对误差")
     parser.add_argument("--kernel-avg-us", type=float, required=True, help="kernel 平均耗时 (µs)")
-    parser.add_argument("--timing-method", default="event", choices=("event", "sim", "msprof"),
-                        help="计时方法")
+    parser.add_argument("--timing-method", default="event",
+                        choices=("event", "sim", "msprof", "msprof_task_duration", "profiler_summary"),
+                        help="计时方法：event=设备 event 计时（首选）；msprof_task_duration=工程无 event 设施且 "
+                             "kernel 为长耗时（ms 级）时用 OpBasicInfo Task Duration 作基线；"
+                             "profiler_summary=工程自带 profiler 对比框架（如 torch_npu op_summary）")
+    parser.add_argument("--status", default="ok", choices=("ok", "partial", "dry_run"),
+                        help="结果状态：partial=采集/验证不完整，dry_run=未上板仅离线结论")
     parser.add_argument("--baseline-kind", default="self_before_after",
                         choices=("system", "self_before_after"), help="基线类型")
     parser.add_argument("--cann-version", default=None, help="CANN 完整版本")
-    parser.add_argument("--repo-commit", default=None, help="源码 commit")
+    parser.add_argument("--repo-commit", default=None,
+                        help="源码 commit；非 git 工程填 n/a 或 sha256:<源码hash>")
     parser.add_argument("--device-id", default=None, help="NPU 设备 ID")
     parser.add_argument("--shape", default=None, help="逻辑/物理 shape；多组时写用例 ID")
     parser.add_argument("--dtype", default=None, help="输入输出 dtype 摘要")
@@ -66,6 +72,7 @@ def main() -> int:
         "variant": args.variant,
         "soc": args.soc,
         "mode": args.mode,
+        "status": args.status,
         "precision": args.precision,
         "mismatch": args.mismatch,
         "maxAbsErr": args.max_abs_err,

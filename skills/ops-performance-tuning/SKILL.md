@@ -66,6 +66,9 @@ bash <skill_dir>/scripts/env_check.sh --mode <board|sim> --cann-path <cann-path>
 2. A2/A3/A5 编译目标来自目标仓文档、本机工具链或 `build.sh --help`，不按机器昵称猜测。
 3. 使用 `msprof op --help` 或 `msopprof --help` 记录当前版本真实支持的参数、指标和 simulator/MC2 能力。
 4. 选择健康且空闲的 NPU，记录设备 ID、频率和同卡负载。
+5. **通信/多 rank 算子**：`rankNum ≤ 可用空闲设备数` 在本步判定，不满足直接标记 `BLOCKED`（host 侧 `deviceId = rankId` 的样例每 rank 独占一个物理设备）。
+6. **Triton-Ascend 算子**：可用性门禁是"最小 triton kernel 上板跑通"（vector add 级），不是 `import triton` 成功；版本配套与 207000 排查见 [compile-triton.md §2.7](references/compile/compile-triton.md)。
+7. **数据/校验脚本的 Python 依赖**：逐个 `python3 -c "import <mod>"` 核对 gen_data/verify 脚本的真实 import（常见缺口：torch、en_dtypes、ml_dtypes、pandas），缺失时在产物目录建隔离 venv，不污染系统环境。
 
 缺 simulator 但执行上板路径时为非阻塞。没有可用 NPU 时只完成编译、路由和命令生成，不生成性能数字。
 
@@ -85,6 +88,14 @@ bash <skill_dir>/scripts/env_check.sh --mode <board|sim> --cann-path <cann-path>
 ### Step 3：建立不可变基线
 
 固定源码基线、软件栈、SoC、设备、频率、shape、dtype、format、物理 padding、TilingKey、blockDim、warmup、repeat 和计时方法。优先使用设备 event 或工程正式 benchmark；msOpProf 只用于结构诊断，短 kernel 不得用 profiler 插桩耗时替代 event 基线。
+
+计时口径的边界情形（实测补充）：
+
+- **工程无 benchmark/计时设施**（cann-samples 样例普遍如此）：允许在产物目录的工程副本上给 host 侧补 aclrtEvent 计时 harness（warmup/repeat 固定），属测量设施而非优化变量；模板与归类规则见 [benchmark-harness.md](references/profile/benchmark-harness.md)。原始基线源码必须先备份。
+- **长 kernel（ms 级）且工程无 event 设施**：允许用 msopprof `OpBasicInfo` Task Duration 作基线（result_saver `--timing-method msprof_task_duration`），报告中注明口径；工程 README 的参考数字同口径时才可对比。
+- **短 kernel（µs 级单 launch）**：launch 开销会掩盖 kernel 级收益（wall 口径下任何优化都不可归因）。用 stream 内多 launch 单 event 对计时；仍不可归因时以 profiler device duration 作辅助口径并注明，不要按 wall 噪声判回滚或宣称收益。
+- **冷跑/稳态差异**：首跑含初始化与缓存预热（实测可差 25%），固定 warmup 剔除；稳态 ≥3 次取中位，run 间噪声 >5% 时小于噪声幅度的收益不得归因。
+- **工程自带 profiler 对比框架**（如 torch_npu op_summary 的 torch vs triton benchmark）：视为工程正式 benchmark，按本节优先级采信。
 
 ```bash
 python3 <skill_dir>/scripts/result_saver.py \

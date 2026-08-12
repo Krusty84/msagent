@@ -55,6 +55,19 @@ cmake --build build --target matmul       # Cube 编程模型 (Tensor API)
 - `matmul`：Tensor API 实现矩阵乘法，学习 Cube Core 编程
 - `cann_sample_check_arch(dav-3510)`：架构校验宏，dav-2201 的样例在 dav-3510 自动跳过
 
+#### 4.3.1 案例脱离 cann-samples 仓独立构建（盲测/抽离场景）
+
+单案例目录（如 `Samples/2_Performance/<case>`）抽出仓库后不能直接 cmake——它依赖仓顶层设施。最小重建配方（在产物目录建构建树，源仓只读复制）：
+
+1. 复制仓根 `CMakeLists.txt`、`cmake/`（`ascend.cmake`、`sample_common.cmake`、`tensor_api.cmake` 等）到构建树；
+2. **打补丁跳过 git 依赖**：`tensor_api.cmake` 在非 git 目录会执行 `git submodule update` 导致构建失败——ops-tensor 已存在时删掉/跳过该 custom target；`third_party/ops-tensor` 整体复制或软链；
+3. 构建树顶层 CMakeLists 改为只 `add_subdirectory` 目标案例；
+4. SHMEM 类案例还需 `cmake/shmem.cmake`，它会**现场编译** `third_party/shmem`（`-DSOC_TYPE=Ascend950`），耗时长；已有 `install/` 产物时优先复用而不是重建；从别的构建树复制的 `third_party/shmem/build` 含旧路径的 CMakeCache，重配前必须清掉。
+
+另有一种自包含形态（单 `.asc` + 案例自带 `cmake/ascend.cmake` + `include/sample_common.h`）：直接 `cmake -S . -B build -DNPU_ARCH=dav-3510` 即可，不依赖 cann-samples 顶层。
+
+**数据脚本依赖**：cann-samples 性能案例的 `scripts/gen_data.py` 常需 `torch`/`en_dtypes`/`ml_dtypes`（e8m0/e4m3fn 等），基础 CANN 环境和常见 conda env 没有这些包——Step 1 环境检查时用 `python3 -c "import <mod>"` 逐个核对脚本 import，缺失则在产物目录建隔离 venv 安装。注意 host 二进制可能用 `system("python3 verify_result.py")` 隐式依赖 PATH 中的 python3，跑验证前确认 PATH 指向装了依赖的解释器。
+
 ### 4.4 方式三：gitee ascend/samples AddCustom
 
 FrameworkLaunch/AclNNInvocationNaive：改 CMakeLists 中 toolkit 路径 → `export NPU_HOST_LIB=.../lib64` → `cmake .. && make && ./execute_add_op` 或 `bash run.sh`。

@@ -25,3 +25,11 @@
 | 应用直接运行失败 | 不是 profiler 问题 | 停止采集，保存应用错误 |
 | profiler 成功但无原始文件 | 输出路径、权限、采集对象或工具参数错误 | 标记 `FAIL`，检查目录与 Kernel 匹配 |
 | 仿真使用非 0 设备 | 仿真设备配置错误 | 修改应用参数或环境为设备 0 |
+| `--kernel-name` 采集后结果为空但应用正常跑完 | kernel 名被 C++ mangled（匿名命名空间符号 `_ZN12_GLOBAL__N_1...`），过滤条件不匹配 | 先无过滤全量采集，从 `OpBasicInfo.csv` 抄真实 kernel 名；见 profile-msopprof.md §5.1 |
+| 采集日志报 `libprofapi.so` / `CheckInputFileValid` / `child process exited 1` 但 CSV 正常产出 | 工具链噪声报错（CANN 9.1 实测） | 以产出检查为准，不凭 ERROR 行判失败 |
+| fork 多进程程序只采到每进程第一个 kernel | msopprof 对 fork 子进程（SHMEM 多 rank 样例）采集不完整 | 标记 `partial`；改 SHMEMI_PROF 或完整 `msprof` |
+| tiling/分核改动后运行 device fault（D2H 错误） | 新 tiling 与 kernel 的 buffer/深度假设冲突 | ① 按原口径回滚确认基线可复跑；② 加 `-g`（`--bisheng_flags=ccec_g` 或 `ascendc_compile_options`）重编 + msSanitizer 定位；③ 缩小改动粒度（如 baseK 128→192 而非 256）；④ 核对深度/容量联动字段（depthA1/B1、scaleFactor） |
+| kernel 挂起（host 自旋等 device） | 死锁：同步协议改动后 flag 配对错误、或原子修改对只生效一半 | ① 强杀进程后实测 device 会自行恢复（可直接复跑基线确认）；② 对"不可拆分原子对"先做最小二分：只切模板/配置不改调度，验证单路径可用后再引入第二部分；③ 挂起即回滚，不在 hang 状态上调性能 |
+| 精度 golden 生成链断裂（标杆 aclnn 拒绝该场景/脚本退化） | 校验不再可信：如官方输入含 NaN 位型导致"全 NaN 一致即 pass"的退化通过 | 停止性能调优；改用语义仿真 golden（CPU 参考）并保持工程原容差，补充无 NaN 辅助数据集；审查校验脚本本身（位级比对 vs 数值转换）后再恢复门禁 |
+| 基线冷跑与稳态差异大（>20%） | 首次运行含编译/初始化/缓存预热，非 kernel 真实耗时 | 固定 warmup 剔除冷跑；稳态跑 ≥3 次取中位；run 间噪声 >5% 时，小于噪声幅度的收益不得归因 |
+| 短 kernel（µs 级）event wall 无收益但 profiler 有收益 | launch 开销（µs 级）掩盖 kernel 收益，属计时口径问题 | 不要据 wall 判回滚或直接宣称收益：stream 内多 launch 单 event 对计时，或以 device duration 作辅助口径并在报告中注明 |

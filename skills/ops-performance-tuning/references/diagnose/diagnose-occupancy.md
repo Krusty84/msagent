@@ -32,6 +32,13 @@ occupancy 特性用于**核间负载分析**：判断多核之间任务分配是
 
 若当前归档没有 Occupancy 数据，不得从单个 block 时延外推所有核的负载。先按上一节检查本机帮助并补采；版本不支持时使用完整 block 时延、任务规模和 blockDim 作为替代证据，并降低置信度。
 
+**两类 occupancy 问题要区分开（实测常见误判）**：
+
+- **核间不均衡**：Block Dim 已接近物理核数，但各 block 行时延差异大（长尾核拖慢整体）——本文档主体覆盖的场景。
+- **核数不足（占用率低）**：`OpBasicInfo.csv` 的 Block Dim 远小于 SoC 物理核数（如 Block Dim=1/4 vs A5 约 48 AIV），PipeUtilization 只有对应行数——此时各 block 行数值一致也不能排除 occupancy，瓶颈是"根本没用满核"，机制上对应 blockDim 提升/工作量重切（optimize-ascendc-tiling.md 的 blockDim 候选）。A5 实测物理核数与 `GetCoreNumAiv()` 等**逻辑核数接口可能不一致**（如逻辑报 54/56、实测单波满载约 48），分核参数用 blockDim sweep 实测校准，不要直接照抄接口返回值。
+
+另外注意：SIMT/VF 样例的网格语义是 `BLOCKS × THREAD_NUM`，**只加 BLOCKS 而不重切线程映射是空操作**（新增核的起始行越界直接空转）；这两者是同一机制的原子对，必须一起改。
+
 可给出的替代证据是"靠 PipeUtilization 交叉诊断核间均衡"判读路径在该用例上的真实应用：`PipeUtilization.csv` 按 `block_id` 0–7 分行，8 核数值几乎一致——
 
 - before：各核 `aiv_mte2_ratio` 0.8805~0.9058、`aiv_mte2_active_bw(GB/s)` 2.2420~2.5649、`aiv_time(us)` 864.9~961.9；

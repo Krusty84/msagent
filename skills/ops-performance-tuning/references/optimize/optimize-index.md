@@ -8,16 +8,16 @@
 
 | 文件 | 内容 | 原小节 |
 |---|---|---|
-| [ascendc-tiling.md](optimize/optimize-ascendc-tiling.md) | Ascend C · Tiling 与核间负载 | §1.1 |
-| [data-copy.md](optimize/optimize-data-copy.md) | Ascend C · 数据搬运 | §1.2 |
-| [api-usage.md](optimize/optimize-api-usage.md) | Ascend C · API 使用 | §1.3 |
-| [memory-hierarchy.md](optimize/optimize-memory-hierarchy.md) | Ascend C · 内存层级利用 | §1.4 |
-| [pipeline.md](optimize/optimize-pipeline.md) | Ascend C · 流水与 Double Buffer | §1.5 |
-| [shmem.md](optimize/optimize-shmem.md) | SHMEM 通信算子（通信/流水/同步/内存/分核 + 端到端实战数据） | §2.1–2.6 |
-| [catlass.md](optimize/optimize-catlass.md) | CATLASS（workspace 驻留 L2、容量约束、DispatchPolicy、诊断映射、Swizzle） | §3.1–3.7 |
-| [triton.md](optimize/optimize-triton.md) | Triton-Ascend（Vector 类深度优化、30 优化点、SIMT→SIMD 原子操作、constexpr） | §4.1–4.4 |
-| [tilelang.md](optimize/optimize-tilelang.md) | TileLang-Ascend（按算子类型、Persistent 调度、Double Buffer 前置分析） | §5.1–5.3 |
-| [pypto.md](optimize/optimize-pypto.md) | PyPTO（三阶段调优框架、诊断决策树） | §6.1–6.2 |
+| [ascendc-tiling.md](optimize-ascendc-tiling.md) | Ascend C · Tiling 与核间负载 | §1.1 |
+| [data-copy.md](optimize-data-copy.md) | Ascend C · 数据搬运 | §1.2 |
+| [api-usage.md](optimize-api-usage.md) | Ascend C · API 使用 | §1.3 |
+| [memory-hierarchy.md](optimize-memory-hierarchy.md) | Ascend C · 内存层级利用 | §1.4 |
+| [pipeline.md](optimize-pipeline.md) | Ascend C · 流水与 Double Buffer | §1.5 |
+| [shmem.md](optimize-shmem.md) | SHMEM 通信算子（通信/流水/同步/内存/分核 + 端到端实战数据） | §2.1–2.6 |
+| [catlass.md](optimize-catlass.md) | CATLASS（workspace 驻留 L2、容量约束、DispatchPolicy、诊断映射、Swizzle） | §3.1–3.7 |
+| [triton.md](optimize-triton.md) | Triton-Ascend（Vector 类深度优化、30 优化点、SIMT→SIMD 原子操作、constexpr） | §4.1–4.4 |
+| [tilelang.md](optimize-tilelang.md) | TileLang-Ascend（按算子类型、Persistent 调度、Double Buffer 前置分析） | §5.1–5.3 |
+| [pypto.md](optimize-pypto.md) | PyPTO（三阶段调优框架、诊断决策树） | §6.1–6.2 |
 
 ---
 
@@ -31,3 +31,11 @@
 | 分核/负载均衡 | blockDim=核数、尾块交替 | sender/receiver 分核、串行 peer 消除 | swizzle `<4,1>` 均衡 | Grid 匹配核数 | `T.Persistent` physical_grid |
 | 存储层级利用 | L2 分块、UB 融合、L0C 原地累加 | 避免 GM scratch | C 驻留 L2（命中 96–99%） | UB 容量规划 85KB | alloc_L1/alloc_ub |
 | 标量削减 | 禁 std 数学函数、SetMaskCount | — | — | 循环不变量外提、优化点 5/6/17 | — |
+
+---
+
+## 已知覆盖缺口（实测确认，勿硬套本文档）
+
+- **RegBase / SIMD VF（`__simd_vf__` + `AscendC::Reg::*` / MicroAPI）**：Ascend 950 的新编程范式，本库各文档均按 MemBase（TQue/TPipe）叙述，VF 特有优化面（VL 分块、mask 开销、VF_REPEAT、寄存器压力、MemBase→RegBase 迁移路线）**当前零覆盖**。命中 VF 样例时：MemBase 层的机制（分核、合并搬运、删冗余同步）仍可用；VF 语义层问题以 CANN 随包文档和 cann-samples 的 VF 样例为准，并把缺口记录进报告。
+- **Mix / CV 融合算子（FlashAttention 类，1 AIC + 2 AIV、CrossCore mode2）**：无专项文档，跨 j 迭代 GM buffer ping-pong、CrossCore flag 粒度放宽、GM→L1 滚动预取等机制只有通用原理可推导，实施细节（event id 分配、pipe 内顺序论证）需自行证明并提高验证强度。
+- **Double Buffer 的非 TQue 形态**：pipeline.md 的示范是 MemBase `InitBuffer(queue,2,size)`；Tensor API / 裸 SetFlag-WaitFlag 风格的 cube kernel 需要 ping-pong event id + prologue/drain 结构，改造前先确认可用 event id 数量并做 L1/L0 容量核算（多少 KB 能开几级缓冲）。

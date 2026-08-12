@@ -62,3 +62,13 @@
 - 每个指标都能追溯到完整命令和本机帮助；不支持或失败的项写入 `partial`。
 - baseline 与 optimized 的设备、频率、shape、dtype、TilingKey、blockDim、launch 和指标组一致。
 - 短 kernel 同时保留正式 event 计时；msOpProf 绝对耗时只用于结构与趋势解释。
+
+## 5. 实测坑（A5 / CANN 9.1 验证）
+
+1. **`--kernel-name` 匹配的是 C++ mangled 符号名，不是源码函数名**。Ascend C `__global__` kernel（尤其匿名命名空间内的）实际符号形如 `_ZN12_GLOBAL__N_127gelu_eltwise_regbase_kernelEPhS0_`，用 `--kernel-name=gelu_eltwise_regbase_kernel` 会**静默过滤掉全部 launch**——应用照常跑完、只有一行 WARN、产出为空，极易误判为采集成功。正确做法：**先不加过滤全量采集一次，从 `OpBasicInfo.csv` 抄回真实 kernel 名**再决定是否过滤。
+2. **输出目录布局随参数组合变化**：`--kill=on --launch-count=1` 时 CSV 直接在 `OPPROF_*/` 下；多 launch/多 kernel 时在 `OPPROF_*/device<N>/<mangled_name>/<idx>/` 下。脚本化取数必须先 `find` 探测，不要写死路径。
+3. **fork 多进程程序（SHMEM 多 rank 样例）采集不完整**：实测只能捕到每个进程**第一个** kernel（后续 kernel 无产出），多 kernel 程序的 kernel 清单核对（§4 第一条）会在此场景失败，应标记 `partial` 并改用 SHMEMI_PROF 或完整 `msprof`。
+4. **A5 上部分字段恒为 NA**：vector kernel 的 `aiv_mte3_active_bw`、cube kernel 的 `aiv_*` 整列、`MemoryUB.csv` 对 cube kernel 大量列均为 NA；`--aic-metrics=Occupancy` 可能只产出 `OpBasicInfo.csv` 而无独立 occupancy 数据。诊断前先确认本次产出里哪些列有效，不要用 NA 列参与判读。
+5. **`--warm-up` 语义未文档化**：默认 warm-up 次数（实测 5）在 replay 模式下会重放应用前 N 次 launch，短程序反复重启进程会放大进程派生/初始化开销，解释 e2e 数字时注意区分。
+6. **可忽略的噪声报错**：采集日志中 `[ERROR] <CheckInputFileValid> ... is not a file`、`Failed to load so libprofapi.so`、`child process exited 1` 与 CSV 正常产出可以并存，以 §4 的产出检查为准，不要仅凭 ERROR 行判失败。
+7. **多 pipe 占用互补求和≈1 是串行无重叠的典型指纹**（如 cube 0.44+mte2 0.42+mte1 0.18）：判读时把各 pipe ratio 加总，接近 1 且无一条饱和 → 优先怀疑流水未重叠而非单 pipe 瓶颈（详见 [diagnose-pipeline.md 判读规则](../diagnose/diagnose-pipeline.md)）。

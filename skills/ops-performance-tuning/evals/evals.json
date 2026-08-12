@@ -37,6 +37,24 @@
       "expected_output": "不能进入性能优化；记录失败用例、容差和误差并转入精度调试。全部通过后重新建立不可变基线。",
       "files": [],
       "expectations": []
+    },
+    {
+      "id": 5,
+      "title": "kernel-name 过滤采空",
+      "config": {"disabled": true, "eval_mode": "text", "ascend_platforms": ["A5"], "timeout": 900, "max_tokens": 6000},
+      "prompt": "用 msopprof --kernel-name=<源码函数名> 采集 Ascend C 算子，应用正常跑完但结果目录为空，下一步？",
+      "expected_output": "kernel 名是 C++ mangled 符号（匿名命名空间为 _ZN12_GLOBAL__N_1...），过滤条件不匹配导致静默采空；先无过滤全量采集，从 OpBasicInfo.csv 抄回真实 kernel 名再过滤；不能凭应用跑完就判采集成功。",
+      "files": [],
+      "expectations": []
+    },
+    {
+      "id": 6,
+      "title": "分核优化与对比口径",
+      "config": {"disabled": true, "eval_mode": "text", "ascend_platforms": ["A5"], "timeout": 900, "max_tokens": 6000},
+      "prompt": "优化把 blockDim 从 4 提到 48，delta_report 以口径不一致拒绝比较，处理是否合规？",
+      "expected_output": "block_dim/tiling_key 是分核类优化的机制变量，差异应降级为 WARN 并写入报告；shape/dtype/SoC/设备/warmup/repeat/计时法等硬口径仍必须一致；可用 --strict 恢复全字段强校验。",
+      "files": [],
+      "expectations": []
     }
   ]
 }

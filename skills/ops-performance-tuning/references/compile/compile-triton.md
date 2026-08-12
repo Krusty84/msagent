@@ -41,3 +41,14 @@ python3 -m pip install -e .
 ### 2.6 性能分析入口
 
 docs/en/debug_guide/profiling.md（<https://github.com/triton-lang/triton-ascend/blob/main/docs/en/debug_guide/profiling.md>）：board profiling 分析 tiling（如 block dim 超过 48 个 vector core 导致 host 调度开销）、仿真流水图定位 MTE2/VECTOR 流水中断、代码热点（scalar 指令占比过高 → 优化标量计算/向量化）。
+
+### 2.7 环境修复与 SoC 配套（实测：Ascend950PR / CANN 9.1）
+
+`import torch_npu` 成功不代表可用——**真正的可用性门禁是"最小 triton kernel 上板跑通"**（见 §2.4，vector add 级别）。环境修复按以下顺序排查：
+
+1. **`Unsupported soc version: Ascend950PR 9579`**：torch_npu 版本太旧不认识 950PR。实测 torch_npu 2.6.0.post5 报错，2.11.0/2.12.0 可用；公开 issue 中 950PR 可用组合为 torch 2.10 + torch_npu 2.10 + triton-ascend 3.2.1（同代组合均可先试）。torch 用 `+cpu` wheel（`--index-url https://download.pytorch.org/whl/cpu`）可同时满足 torch-npu 的 `torch==X+cpu` 依赖钉。
+2. **triton-ascend wheel 与 CANN 头文件不兼容**：pypi 的 triton-ascend 3.2.0 的 `npu_utils.cpp` 引用已被 CANN 9.1 改名的枚举（`RT_LIMIT_TYPE_SIMT_WARP_STACK_SIZE`→`RT_LIMIT_TYPE_SIMT_STACK_SIZE`），运行时 JIT 编译 npu_utils 失败；更新版本（3.2.1+）或按报错改名打补丁。
+3. **kernel 启动 207000（"This feature is not supported"，plog 中 `Custom hand fail! name=<kernel>`）**：import 和 JIT 编译都成功但 launch 被运行时拒绝。实测区分两类：① 后端整体不支持该 SoC（简单 add kernel 也挂）→ 换配套组合；② 仅复杂 kernel 挂（开发中 fork 的 codegen 不完整）→ 换正式 release 后端。**不要在这种状态下调性能**。
+4. **新 API 缺失**（如 `tl.insert_slice`）：kernel 用了比本机 triton-ascend 更新的语言 API，属于工具链版本不足，只能升级/源码构建后端——按任务边界这属于开发工作，不是性能调优，标记 `BLOCKED` 并记录所需 API。
+5. **triton-ascend 的元数据依赖**：`torch-npu` 在 pypi 上钉 `torch==X+cpu`；triton-ascend 对 scipy/pytest/psutil/pandas 等有版本钉，用 venv 隔离安装避免污染系统环境；`import triton` 需要 `pybind11`、`yaml`（pyyaml）等隐式依赖，缺失时逐个补装。
+6. 版本配套查询入口：`pip index versions torch-npu` / `pip index versions triton-ascend`（pypi 只发布到 3.2.0，更新版本在 GitCode release 或源码构建）。

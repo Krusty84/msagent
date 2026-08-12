@@ -29,6 +29,7 @@ skills:
     - default:ascend-cluster-fast-slow-rank-detector
     - default:github-raw-fetch
     - default:ascend-profiler-data-validation
+    - default:spike-root-cause-analysis
     - default:op-mfu-calculator
   use_catalog: false
 compression:

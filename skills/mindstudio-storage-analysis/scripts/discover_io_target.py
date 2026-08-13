@@ -45,6 +45,7 @@ _TRAINING_SIGNALS: tuple[tuple[str, int], ...] = (
 _PATH_OPTIONS: dict[str, str] = {
     "data": "dataset",
     "data-dir": "dataset",
+    "data-file": "dataset",
     "data-path": "dataset",
     "data-root": "dataset",
     "dataset": "dataset",
@@ -68,7 +69,8 @@ _PATH_OPTIONS: dict[str, str] = {
 }
 
 _SENSITIVE_OPTION = re.compile(
-    r"(?:password|passwd|token|secret|credential|access[-_]?key|private[-_]?key|auth)",
+    r"(?:^|[.-])(?:password|passwd|token|secret|credential|api-?key|access-?key|"
+    r"access-?key-id|private-?key|auth|authorization|authentication)$",
     re.IGNORECASE,
 )
 _URL_CREDENTIALS = re.compile(r"(://)[^/@\s:]+:[^/@\s]+@")
@@ -98,6 +100,7 @@ _REMOTE_FILESYSTEMS = {
     "beegfs",
     "ceph",
     "fuse",
+    "fuse.glusterfs",
     "fuse.s3fs",
     "fuse.goofys",
 }
@@ -146,7 +149,7 @@ def sanitize_cmdline(tokens: list[str]) -> str:
             safe.append("<redacted>")
             redact_next = False
             continue
-        if token.startswith("-") and "=" in token:
+        if "=" in token:
             name, _value = token.split("=", 1)
             if _SENSITIVE_OPTION.search(_normalized_option(name)):
                 safe.append(f"{name}=<redacted>")
@@ -733,7 +736,11 @@ def main(argv: list[str] | None = None) -> int:
             time_budget_seconds=args.time_budget,
         )
         if args.output:
-            _atomic_write_json(args.output.resolve(), payload)
+            if str(args.output) in {"-", "/dev/stdout", "/proc/self/fd/1"}:
+                json.dump(payload, sys.stdout, ensure_ascii=False, indent=2, allow_nan=False)
+                sys.stdout.write("\n")
+            else:
+                _atomic_write_json(args.output.resolve(), payload)
         else:
             json.dump(payload, sys.stdout, ensure_ascii=False, indent=2, allow_nan=False)
             sys.stdout.write("\n")

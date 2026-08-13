@@ -61,7 +61,7 @@ Respect these boundaries:
 - NFS performance confirmation remains available from current-window mountstats RTT, execute latency, retransmission, or major-timeout evidence; mount type or low throughput alone never confirms a bottleneck.
 - Lustre, CIFS, GPFS, BeeGFS, Ceph, and non-Gluster FUSE mounts are identified and routed to provider-specific manual evidence collection unless dedicated metrics are supplied.
 - High `mte2_ratio` is not Host storage evidence. If Host IO is healthy and `mte2_ratio` is high, hand off to computation analysis.
-- Treat `npu-smi` as hardware-health and coarse-utilization evidence only. Do not use an idle `npu-smi` sample as R500 conduction evidence.
+- Treat `npu-smi` as hardware-health and coarse-utilization evidence only. Do not use an idle `npu-smi` sample as R500 conduction evidence, and do not describe `npu-smi` as profiler data in terminal or HTML reports.
 - On non-Ascend GPU smoke tests, use Host IO rules normally and treat same-window GPU idle/profiler overlap as analogous conduction evidence. Never use Ascend-only `mte2_ratio` outside Ascend profiler contexts.
 
 ### Trigger exclusions and handoffs
@@ -79,8 +79,8 @@ Multi-rank, DataLoader, or NPU-idle wording alone is not proof of a storage issu
 
 1. Classify the scenario: DataLoader/dataset reads, checkpoint loading, GlusterFS FUSE/NFS/remote access, small files, rank/worker contention, or suspected device starvation. For a live low-NPU-utilization request, continue even when the user supplied only the symptom.
 2. Resolve the target PID and data/checkpoint path. Reuse explicit values from the user. If either is unknown, the first diagnostic action must be the bounded read-only target discoverer, before dependency checks, profiler-path requests, or other filesystem searches. The discoverer uses only the Python standard library.
-3. Read `recommendation` and the ranked candidates. When `requires_confirmation=true`, present the top candidates with their reasons and ask one concise confirmation question; never silently choose between similar candidates. Target discovery never starts collection.
-4. Collect a read-only IO Snapshot for the affected workload window. Pass `--pid` for bounded R400 PID-to-device mapping; add `--path` to bind the affected data scope. A path alone never triggers a host-wide `/proc` scan.
+3. Read `recommendation` and the ranked candidates. When `requires_confirmation=true`, present the top candidates with their reasons and ask one concise confirmation question; never silently choose between similar candidates. If the user has explicitly selected a PID, or supplied a deterministic PID tie-break, but the data path remains ambiguous, proceed with PID-only collection instead of guessing a path. A process working directory, repository root, config directory, log directory, or checkpoint output directory must never be substituted for a dataset path without explicit evidence or user confirmation. Target discovery never starts collection.
+4. Collect a read-only IO Snapshot for the affected workload window. Pass `--pid` for bounded R400 PID-to-device mapping; add `--path` only when the user supplied it or discovery produced a clear path recommendation. When only the PID is resolved, omit `--path` and report target-path scope as missing. A path alone never triggers a host-wide `/proc` scan.
 5. Run the deterministic analyzer. Do not replace analyzer output with invented thresholds.
 6. Inspect R100-R400 as the Host IO chain, then inspect R500 separately. Require profiler-side idle plus confirmed Host IO before attributing device idle to storage.
 7. Report confidence, evidence fields, missing evidence, safe recommendations, rollback, and before/after validation in the terminal.
@@ -122,10 +122,10 @@ Use the output as follows:
 
 - `process_candidates`: ranked candidate workload processes, with evidence for each score.
 - `process_candidates[].path_candidates`: ranked data/checkpoint path candidates for each process, with command-line, open-file, working-directory, and mount evidence.
-- `recommendation.preview_command`: the exact read-only collector command to run when a process is sufficiently clear. Execute it only when `requires_confirmation=false`; otherwise show candidates and confirm the target first.
+- `recommendation.preview_command`: the exact read-only collector command to run when both process and path are sufficiently clear. Execute it only when `requires_confirmation=false`. If the user independently resolves only the PID, construct a PID-only collector command and leave the path unset; never copy a weak path candidate into `--path`.
 - `status=partial` means the bounded scan hit a permission, count, or time limit. Report that limitation; do not reinterpret missing candidates as proof that no workload exists.
 
-An explicit user PID or exact path hint takes priority. Without explicit values, a process must score at least 50 and lead the next candidate by at least 15 points; a path must score at least 70 and lead by at least 15. Otherwise the Agent must ask for confirmation. A working directory alone is weak evidence and never proves it is the dataset path.
+An explicit user PID or exact path hint takes priority. Without explicit values, a process must score at least 50 and lead the next candidate by at least 15 points; a path must score at least 70 and lead by at least 15. Otherwise the Agent must ask for confirmation, except that an explicitly resolved PID may be collected without a path. A working directory alone is weak evidence and never proves it is the dataset path. The terminal and HTML summaries must call such a path unresolved rather than relabeling a project directory as data.
 
 Collect a snapshot:
 

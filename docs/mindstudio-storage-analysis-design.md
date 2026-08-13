@@ -440,7 +440,20 @@ mindstudio-storage-analysis/
 │   ├── collect_io_snapshot.py
 │   ├── analyze_io_snapshot.py
 │   ├── summarize_msprof.py
-│   └── render_io_report.py
+│   ├── render_io_report.py
+│   ├── _collection/
+│   │   ├── common.py
+│   │   ├── disk.py
+│   │   ├── process.py
+│   │   └── filesystem.py
+│   └── _analysis/
+│       ├── common.py
+│       ├── contract.py
+│       ├── local.py
+│       ├── path_scope.py
+│       ├── network.py
+│       ├── contention.py
+│       └── npu.py
 ├── assets/
 │   └── io_report_template.html
 └── references/
@@ -449,6 +462,8 @@ mindstudio-storage-analysis/
     ├── failure_handbook.md
     └── html_report.md
 ```
+
+五个顶层脚本是 Agent 可调用的稳定入口；以下划线开头的目录只是内部实现，不增加新的 Agent 步骤。`collect_io_snapshot.py` 负责采集调度，内部模块分别处理通用契约、磁盘、进程和文件系统；`analyze_io_snapshot.py` 负责规则调度，内部模块分别处理通用证据、输入契约、本地盘 R000/R100、网络存储 R200/R300、IO 干扰 R400 和 NPU 传导 R500。重构不得改变 CLI 参数、Snapshot/Findings 格式或规则编号。
 
 运行环境要求：
 

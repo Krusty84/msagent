@@ -69,10 +69,10 @@ python3 scripts/discover_io_target.py --pid 12345 -o target_candidates.json
 | `process_candidates[]` | 按证据排序的训练进程候选 | 向用户展示 PID、启动命令摘要和入选原因 |
 | `process_candidates[].path_candidates[]` | 每个进程可能使用的数据/checkpoint 路径 | 展示路径、来源、打开文件样例和挂载类型 |
 | `recommendation.pid/path` | 证据足够区分时给出的推荐目标 | 仅在无需确认时传给 collector |
-| `recommendation.requires_confirmation` | 是否仍有相近或证据较弱的候选 | 为 `true` 时必须让用户确认，不能替用户猜 |
+| `recommendation.requires_confirmation` | 是否仍有相近或证据较弱的候选 | 为 `true` 时必须让用户确认，不能替用户猜；如果用户已单独确认 PID，但路径仍不明确，则只带 `--pid` 采集，不猜路径 |
 | `recommendation.preview_command` | 已填好目标的只读采集命令 | 确认后执行，生成 `io_snapshot.json` |
 
-无显式值时，进程候选需达到 50 分且领先第二名至少 15 分；路径候选需达到 70 分且领先至少 15 分。启动命令里的数据参数和当前打开的数据文件是强证据，单独的工作目录是弱证据。分数只用于选择采集目标，不是存储异常结论。
+无显式值时，进程候选需达到 50 分且领先第二名至少 15 分；路径候选需达到 70 分且领先至少 15 分。启动命令里的数据参数和当前打开的数据文件是强证据，单独的工作目录是弱证据。分数只用于选择采集目标，不是存储异常结论。用户已确认 PID 或给出明确 PID 选择规则、但路径仍不清楚时，可以执行 `--pid` 采集并省略 `--path`；不得把进程工作目录、仓库根目录、配置目录、日志目录或 checkpoint 输出目录冒充数据集路径。
 
 ### 1.3 进程级 IO 统计
 
@@ -293,7 +293,7 @@ python3 scripts/analyze_io_snapshot.py io_snapshot.json --profile npu_metrics.js
 - 用户已经提供的信息不要重复问。
 - 不询问 `iostat`、`mount`、拓扑等采集器能自取的信息。
 - PID 或数据路径未知时，先运行 `discover_io_target.py`；不要先把服务器定位工作推给用户。
-- `recommendation.requires_confirmation=false` 时可直接使用推荐目标进行只读采集；为 `true` 时只展示最相关的 2～3 个候选和原因，并让用户确认其中一个。
+- `recommendation.requires_confirmation=false` 时可直接使用推荐目标进行只读采集；为 `true` 时只展示最相关的 2～3 个候选和原因，并让用户确认其中一个。若用户已经明确解决了 PID 歧义而路径仍有歧义，则无需为了路径阻塞 Host IO 采集：只传 `--pid`，把路径记录为未解析。
 - `status=partial` 或 `no_candidates` 不是“没有训练任务”的证明。说明扫描限制后，再询问一个最能缩小范围的信息，例如启动命令特征或大致数据目录。
 - 如果用户已有 Snapshot，跳过采集提问，直接进入 Snapshot 质量检查。
 

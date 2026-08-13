@@ -9,8 +9,16 @@ TEST_TARGETS=(
   "${REPO_ROOT}/tests/test_benchmark_runner.py"
 )
 
+PYTHON_BIN="${PYTHON_BIN:-python3}"
+if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
+  echo "${PYTHON_BIN} is required to run system tests." >&2
+  exit 1
+fi
+
+"${PYTHON_BIN}" -m pip install uv
+
 if ! command -v uv >/dev/null 2>&1; then
-  echo "uv is required to run system tests." >&2
+  echo "uv installation failed; cannot run system tests." >&2
   exit 1
 fi
 

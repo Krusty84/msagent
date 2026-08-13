@@ -54,6 +54,41 @@ description: 技能的详细描述，说明它做什么，以及什么时候使�
 | `op-mfu-profiler` | 采集profiling数据并解析算子 MFU | `这是我的程序，帮我分析算子的 MFU` |
 | `mindstudio-storage-analysis` | 分析存储、Host IO 和 NFS 瓶颈及其对 NPU 空闲的影响 | `排查 DataLoader 变慢是否由存储 IO 导致` |
 
+#### `mindstudio-storage-analysis` 文件说明
+
+主流程为：**Agent 读取 `SKILL.md` → 发现目标（可选）→ 采集 IO Snapshot → 执行 R000-R500 规则 → Agent 解释结果 → 生成 HTML 报告（可选）**。
+
+五个顶层脚本是 Agent 可直接调用的稳定入口；`_collection/` 和 `_analysis/` 是内部实现，不应绕过入口脚本单独调用。完整架构见 [MindStudio Storage Analysis Skill 设计方案](../docs/mindstudio-storage-analysis-design.md)。
+
+| 文件或目录 | 作用 | 使用者 / 调用方 |
+| --- | --- | --- |
+| [`SKILL.md`](mindstudio-storage-analysis/SKILL.md) | 定义触发条件、执行顺序、证据边界和危险操作安全门 | Agent 通过 `get_skill` 读取，是 Skill 的核心入口 |
+| [`agents/openai.yaml`](mindstudio-storage-analysis/agents/openai.yaml) | 提供展示名称、简介和默认提示词 | 支持该元数据约定的 Agent UI |
+| [`requirements.txt`](mindstudio-storage-analysis/requirements.txt) | 声明 Skill 所需 Python 依赖 | 安装和运行环境 |
+| [`scripts/discover_io_target.py`](mindstudio-storage-analysis/scripts/discover_io_target.py) | 有界、只读地发现训练进程 PID 和数据路径候选 | PID 或路径未知时由 Agent 先调用 |
+| [`scripts/collect_io_snapshot.py`](mindstudio-storage-analysis/scripts/collect_io_snapshot.py) | 编排同窗只读采集，生成 `io_snapshot.json` | Agent 调用的采集入口 |
+| [`scripts/analyze_io_snapshot.py`](mindstudio-storage-analysis/scripts/analyze_io_snapshot.py) | 校验 Snapshot 并执行 R000-R500，生成 `findings.json` | Agent 调用的分析入口 |
+| [`scripts/summarize_msprof.py`](mindstudio-storage-analysis/scripts/summarize_msprof.py) | 从 `msprof op_summary` 生成非认证辅助摘要 | 有 msprof 导出数据时由 Agent 可选调用 |
+| [`scripts/render_io_report.py`](mindstudio-storage-analysis/scripts/render_io_report.py) | 将原始 JSON 和 Agent 总结渲染为离线 HTML | 需要可视化报告时由 Agent 可选调用 |
+| [`scripts/_collection/common.py`](mindstudio-storage-analysis/scripts/_collection/common.py) | 定义 Snapshot/Provider 模型、命令边界和公共挂载工具 | `collect_io_snapshot.py` 内部使用 |
+| [`scripts/_collection/disk.py`](mindstudio-storage-analysis/scripts/_collection/disk.py) | 采集块设备、diskstats、iostat、readahead 和调度器 | `collect_io_snapshot.py` 内部使用 |
+| [`scripts/_collection/filesystem.py`](mindstudio-storage-analysis/scripts/_collection/filesystem.py) | 采集挂载、容量、内存、NFS 和 GlusterFS | `collect_io_snapshot.py` 内部使用 |
+| [`scripts/_collection/process.py`](mindstudio-storage-analysis/scripts/_collection/process.py) | 采集 pidstat、进程树以及 PID 到存储设备的映射 | `collect_io_snapshot.py` 内部使用 |
+| [`scripts/_analysis/common.py`](mindstudio-storage-analysis/scripts/_analysis/common.py) | 提供 finding、Provider、设备名和时间窗公共逻辑 | 分析规则内部使用 |
+| [`scripts/_analysis/contract.py`](mindstudio-storage-analysis/scripts/_analysis/contract.py) | 校验并规范化 Snapshot 和 NPU profile | `analyze_io_snapshot.py` 内部使用 |
+| [`scripts/_analysis/local.py`](mindstudio-storage-analysis/scripts/_analysis/local.py) | 实现 R000 证据质量和 R100 本地存储规则 | `analyze_io_snapshot.py` 内部使用 |
+| [`scripts/_analysis/network.py`](mindstudio-storage-analysis/scripts/_analysis/network.py) | 实现 R200 网络存储和 R300 小文件/远程访问规则 | `analyze_io_snapshot.py` 内部使用 |
+| [`scripts/_analysis/contention.py`](mindstudio-storage-analysis/scripts/_analysis/contention.py) | 实现 R400 多进程 IO 争用规则 | `analyze_io_snapshot.py` 内部使用 |
+| [`scripts/_analysis/npu.py`](mindstudio-storage-analysis/scripts/_analysis/npu.py) | 实现 R500 Host IO 到 NPU 空闲的同窗传导判断 | `analyze_io_snapshot.py` 内部使用 |
+| [`scripts/_analysis/path_scope.py`](mindstudio-storage-analysis/scripts/_analysis/path_scope.py) | 规范化路径并排除日志、库文件等非数据路径 | 分析规则内部使用 |
+| [`assets/io_report_template.html`](mindstudio-storage-analysis/assets/io_report_template.html) | 离线报告的固定、自包含模板 | `render_io_report.py` 直接读取 |
+| [`references/collection_guide.md`](mindstudio-storage-analysis/references/collection_guide.md) | 说明 iostat、pidstat、NFS、GlusterFS 等采集协议 | Agent 按诊断场景读取 |
+| [`references/io_snapshot_schema.md`](mindstudio-storage-analysis/references/io_snapshot_schema.md) | 说明 Snapshot 字段、Provider 状态和时间窗契约 | Agent 和开发者维护数据接口时读取 |
+| [`references/failure_handbook.md`](mindstudio-storage-analysis/references/failure_handbook.md) | 映射根因证据、常见误判和安全建议 | Agent 解释 findings 时读取 |
+| [`references/html_report.md`](mindstudio-storage-analysis/references/html_report.md) | 定义 `agent_report.json` 和 HTML 报告输入契约 | Agent 生成报告时读取 |
+
+`scripts/_collection/__init__.py` 和 `scripts/_analysis/__init__.py` 仅用于声明内部 Python 包，不承载独立业务流程。
+
 ### 2.2 精度 Skills
 
 | Skill | 作用 | 示例 prompt |

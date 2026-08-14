@@ -26,15 +26,15 @@ _op_plugin_docs.py 没有对应条目。本脚本对 model-infer-fusion scope �
   list   枚举所有算子名
 
 示例：
-  python3 torch_npu_query.py show npu_fusion_attention
-  python3 torch_npu_query.py show npu_fusion_attention --full
-  python3 torch_npu_query.py search attention
-  python3 torch_npu_query.py search "MoE" --max 20
-  python3 torch_npu_query.py list
-  python3 torch_npu_query.py list --prefix npu_
+  python3 query_torch_npu_api.py show npu_fusion_attention
+  python3 query_torch_npu_api.py show npu_fusion_attention --full
+  python3 query_torch_npu_api.py search attention
+  python3 query_torch_npu_api.py search "MoE" --max 20
+  python3 query_torch_npu_api.py list
+  python3 query_torch_npu_api.py list --prefix npu_
 
 无 torch_npu 环境时可显式指定文档路径：
-  python3 torch_npu_query.py --docs-path /path/to/_op_plugin_docs.py list
+  python3 query_torch_npu_api.py --docs-path /path/to/_op_plugin_docs.py list
 """
 
 from __future__ import annotations

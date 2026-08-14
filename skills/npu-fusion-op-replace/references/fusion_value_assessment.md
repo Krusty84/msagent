@@ -60,7 +60,7 @@
 
 1. 在 `kernel_details.csv` 找高频算子序列（按耗时排序，找 top）。
 2. 确认这些算子**属于同一个模块、上下衔接**——跨模块的算子在硬件上不一定连续执行，拼起来没意义。
-3. 按 pattern（如 `slice+matmul+gelu`）去知识图谱或 `scripts/torch_npu_api_ref.py search <关键词>` 找现成融合 API。
+3. 按 pattern（如 `slice+matmul+gelu`）去知识图谱或 `scripts/query_torch_npu_api.py search <关键词>` 找现成融合 API。
 4. 评估能否等价替换：
    - 有现成 API → 列入候选替换清单。
    - 没有现成 API → 指出"建议做自定义融合算子"，给性能提升估计（参照 Roofline 加速上限表）。

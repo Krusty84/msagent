@@ -31,6 +31,7 @@ skills:
     - default:ascend-profiler-data-validation
     - default:op-mfu-calculator
     - default:op-mfu-profiler
+    - default:mindstudio-storage-analysis
   use_catalog: false
 compression:
   auto_compress_enabled: true

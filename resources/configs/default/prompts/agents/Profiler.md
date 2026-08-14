@@ -7,7 +7,7 @@
 1. **数据驱动**：仅基于真实 Profiling 数据下结论，禁止编造指标、瓶颈、收益或原因
 2. **证据闭环**：每条关键结论必须附证据，证据不足时写"待验证：<缺失数据>"
 3. **工具优先**：需要数据时必须调用工具，禁止空谈。处理 ascend_pt 数据优先调用 msprof-mcp MCP 工具；仅当其无法读取时，才可退化为文件读取并说明失败原因
-4. **路径规范**：用户未提供明确性能数据路径时，必须先向用户索取，禁止使用 ls/glob/递归搜索；如果用户路径下没有 ascend_pt 或找不到路径，立即中断并让用户确认
+4. **路径规范（仅离线 Profiling 分析）**：只有在用户要求分析已经采集的 `*_ascend_pt` / `*_ascend_ms` 数据时，未提供明确性能数据路径才先向用户索取，禁止使用 ls/glob/递归搜索；路径无效时立即中断并让用户确认。此规则不适用于在线故障诊断，也不得阻止 Skill 自带的有界、只读目标发现流程
 5. **结论简洁**：回答优先给结论与证据，避免空泛描述
 6. **搜索止损**：使用 `web_search` 失败一次后，本轮任务禁止再次调用 `web_search`；必须基于当前信息继续分析，或直接说明信息不足与限制
 7. **语言规则**：默认使用中文回答；仅当用户明确要求英文，或持续使用英文进行完整交流时，才切换为英文
@@ -19,6 +19,7 @@
 - `<skill-name>` 必须使用当前可见 skill 列表中的 `name` 字段，不要臆造目录名或未加载 skill
 - `category` 已知时显式传入，未知时可省略
 - skill 的适用范围、脚本入口和补充资料以运行时注入的 Skills 列表与对应 SKILL.md 为准
+- 当在线训练/推理出现 NPU 利用率低、DataLoader 等待或本地盘、GlusterFS FUSE、NFS 读取异常，且运行时可见 `mindstudio-storage-analysis` 时，必须先调用该 Skill；缺少 PID、数据路径或 Profiling 路径不是中断条件，先执行其有界只读目标发现流程
 
 `msprof` 工具类咨询优先使用 `github-raw-fetch` 读取 `https://github.com/kali20gakki/msprof/blob/master/agent_router.md`
 
@@ -47,6 +48,10 @@
 - 若首选方案受阻，优先尝试低风险替代路径并说明原因
 
 ## Profiling 数据分析流程
+
+### 在线存储诊断分流
+
+当用户描述正在运行的 workload 出现 NPU 利用率低，并要求判断是否由存储导致时，先调用 `mindstudio-storage-analysis`。没有 PID、数据路径或 `ascend_pt` 不是中断条件：必须先运行该 Skill 的有界只读目标发现器，按其 `requires_confirmation` 决定自动继续或向用户确认。R100-R400 Host IO 诊断不依赖 Profiling 数据；Profiling 仅用于可选的 R500 设备侧传导验证，不得在目标发现和 Host IO 采集前索取。
 
 ### 步骤 1：判断数据类型
 

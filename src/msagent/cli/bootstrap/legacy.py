@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import configparser
 import os
 from pathlib import Path
 
@@ -32,7 +33,7 @@ DEFAULT_API_ENV_MAP = {
 
 DEFAULT_SESSION_COMMAND = "__session__"
 PUBLIC_COMMANDS = {"config", "web"}
-ROOT_ONLY_FLAGS = {"--version"}
+ROOT_ONLY_FLAGS = {"--help", "-h", "--version", "-V"}
 
 AGENT_HELP = (
     "Agent name. Available agents:\n"
@@ -50,6 +51,103 @@ SESSION_DESCRIPTION = (
     "  config      Configure msAgent\n"
     "  web         Start a LangGraph server for deep-agents-ui"
 )
+
+ROOT_HELP_TEXT = """Description:
+  Start an interactive msagent session, or use subcommands to configure the
+  local project settings.
+
+Usage:
+  msagent [message] [options]
+  msagent config [options]
+
+Optional arguments:
+  -h, --help                               Show help message and exit.
+  -V, --version                            Show version information and exit.
+      --stream                             Stream output.
+      --no-stream                          Render the final reply without token streaming.
+  -v, --verbose                            Enable verbose logging to console and .msagent/app.log.
+  -w, --working-dir <DIR>                  Working directory for the session [default: current directory]
+  -a, --agent <NAME>                       Agent name. Available: Profiler, Accuracy, Quantizer, Modeling, Operator, Minos.
+  -m, --model <NAME>                       LLM model alias.
+      --timer                              Enable startup timing.
+  -am, --approval-mode {semi-active,active,aggressive}
+                                           Tool approval mode [default: active]
+      --trace-jsonl <FILE>                 Write JSONL trace events to this file.
+
+Examples:
+  # Start an interactive session in the current directory
+  msagent
+
+  # Send a message directly to the default agent
+  msagent "analyze profiling"
+
+  # Start a session with a specific agent and model
+  msagent --agent Profiler --model deepseek-v4-flash
+
+  # Show current project-local configuration
+  msagent config --show
+
+Troubleshooting:
+  - "command not found": make sure msagent is installed in the current Python environment.
+  - Missing model response: run `msagent config --show` and verify the configured LLM provider and model.
+  - Permission or path errors: check that --working-dir points to a writable project directory.
+"""
+
+VERSION_BANNER = """=================================================================
+                   >>>>>   MindStudio   <<<<<
+    THE END-TO-END TOOLCHAIN TO UNLEASH HUAWEI ASCEND COMPUTE
+================================================================="""
+
+VERSION_INFO_DEFAULTS = {
+    "version": "",
+    "commit": "unknown",
+    "date": "unknown",
+    "repo": "https://gitcode.com/Ascend/msagent",
+}
+
+
+def _load_version_info() -> dict[str, str]:
+    for path in (
+        Path(__file__).resolve().parents[2] / "version.info",
+        Path(__file__).resolve().parents[4] / "version.info",
+    ):
+        if not path.exists():
+            continue
+        try:
+            parser = configparser.ConfigParser()
+            parser.read(path, encoding="utf-8")
+            section = parser["PACKAGE"]
+            return {
+                key: section.get(key.capitalize(), default).strip() or default
+                for key, default in VERSION_INFO_DEFAULTS.items()
+            }
+        except Exception:
+            continue
+
+    return VERSION_INFO_DEFAULTS.copy()
+
+
+def render_root_help() -> None:
+    console.print(ROOT_HELP_TEXT, end="", markup=False)
+
+
+def _resolve_copyright_year(build_date: str) -> str:
+    return build_date[:4] if len(build_date) >= 4 and build_date[:4].isdigit() else "2026"
+
+
+def render_version_info() -> None:
+    version_info = _load_version_info()
+    copyright_year = _resolve_copyright_year(version_info["date"])
+    version_text = (
+        f"{VERSION_BANNER}\n"
+        f"{APP_NAME} {version_info.get('version') or 'unknown'} ({version_info['commit']})\n"
+        f"Copyright (C) {copyright_year} Huawei Technologies Co., Ltd.\n"
+        "License: Mulan PSL v2.\n\n"
+        "Build Info:\n"
+        f"  Date : {version_info['date']}\n"
+        f"  Repo : {version_info['repo']}\n"
+    )
+    console.print(version_text, end="", markup=False)
 
 
 def normalize_argv(argv: list[str]) -> list[str]:
@@ -69,6 +167,7 @@ def create_legacy_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawTextHelpFormatter,
     )
     parser.add_argument(
+        "-V",
         "--version",
         action="store_true",
         help="Show version information and exit",
@@ -230,9 +329,7 @@ def _add_runtime_options(parser: argparse.ArgumentParser, *, include_timer: bool
 async def dispatch_legacy_command(args: argparse.Namespace) -> int:
     """Dispatch a parsed retained command."""
     if args.version:
-        from msagent.utils.version import get_version
-
-        console.print(f"[bold cyan]msAgent[/bold cyan] v{get_version()}")
+        render_version_info()
         return 0
 
     command = args.cli_command or DEFAULT_SESSION_COMMAND

@@ -10,6 +10,9 @@ from msagent.cli.bootstrap.legacy import (
     create_session_parser,
     dispatch_legacy_command,
     normalize_argv,
+    render_config_help,
+    render_root_help,
+    render_version_info,
 )
 from msagent.cli.theme import console
 from msagent.core.logging import configure_logging, get_logger
@@ -22,7 +25,18 @@ def create_parser():
 
 async def main() -> int:
     """Main CLI entry point."""
-    argv = normalize_argv(sys.argv[1:])
+    raw_argv = sys.argv[1:]
+    if raw_argv in (["--help"], ["-h"]):
+        render_root_help()
+        return 0
+    if raw_argv in (["config", "--help"], ["config", "-h"]):
+        render_config_help()
+        return 0
+    if raw_argv in (["--version"], ["-V"]):
+        render_version_info()
+        return 0
+
+    argv = normalize_argv(raw_argv)
     if argv and argv[0] == DEFAULT_SESSION_COMMAND:
         parser = create_session_parser()
         args = parser.parse_args(argv[1:])

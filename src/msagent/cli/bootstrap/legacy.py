@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import subprocess
 from pathlib import Path
 
 import yaml
@@ -15,7 +16,7 @@ from msagent.cli.bootstrap.initializer import initializer
 from msagent.cli.theme import console
 from msagent.configs import ApprovalMode
 from msagent.configs.llm import LLMProvider
-from msagent.core.constants import APP_NAME, CONFIG_LLMS_FILE_NAME
+from msagent.core.constants import APP_NAME, APP_VERSION, CONFIG_LLMS_FILE_NAME
 
 LEGACY_PROVIDER_MAP = {
     "openai": LLMProvider.OPENAI,
@@ -32,7 +33,7 @@ DEFAULT_API_ENV_MAP = {
 
 DEFAULT_SESSION_COMMAND = "__session__"
 PUBLIC_COMMANDS = {"config", "web"}
-ROOT_ONLY_FLAGS = {"--version"}
+ROOT_ONLY_FLAGS = {"--help", "-h", "--version", "-V"}
 
 AGENT_HELP = (
     "Agent name. Available agents:\n"
@@ -50,6 +51,113 @@ SESSION_DESCRIPTION = (
     "  config      Configure msAgent\n"
     "  web         Start a LangGraph server for deep-agents-ui"
 )
+
+ROOT_HELP_TEXT = """Description:
+  Start an interactive msagent session, or use subcommands to configure the
+  local project settings.
+
+Usage:
+  msagent [message] [options]
+  msagent config [options]
+
+Optional arguments:
+  -h, --help                               Show help message and exit.
+  -V, --version                            Show version information and exit.
+      --stream                             Stream output.
+      --no-stream                          Render the final reply without token streaming.
+  -v, --verbose                            Enable verbose logging to console and .msagent/app.log.
+  -w, --working-dir <DIR>                  Working directory for the session [default: current directory]
+  -a, --agent <NAME>                       Agent name. Available: Profiler, Accuracy, Quantizer, Modeling, Operator, Minos.
+  -m, --model <NAME>                       LLM model alias.
+      --timer                              Enable startup timing.
+  -am, --approval-mode {semi-active,active,aggressive}
+                                           Tool approval mode [default: active]
+      --trace-jsonl <FILE>                 Write JSONL trace events to this file.
+
+Examples:
+  # Start an interactive session in the current directory
+  msagent
+
+  # Send a message directly to the default agent
+  msagent "analyze profiling"
+
+  # Start a session with a specific agent and model
+  msagent --agent Profiler --model deepseek-v4-flash
+
+  # Show current project-local configuration
+  msagent config --show
+
+Troubleshooting:
+  - "command not found": make sure msagent is installed in the current Python environment.
+  - Missing model response: run `msagent config --show` and verify the configured LLM provider and model.
+  - Permission or path errors: check that --working-dir points to a writable project directory.
+"""
+
+VERSION_BANNER = """=================================================================
+                   >>>>>   MindStudio   <<<<<
+    THE END-TO-END TOOLCHAIN TO UNLEASH HUAWEI ASCEND COMPUTE
+================================================================="""
+
+REPO_URL = "https://gitcode.com/Ascend/msagent"
+
+
+def _run_git_command(args: list[str]) -> str | None:
+    try:
+        result = subprocess.run(
+            ["git", *args],
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+    except Exception:
+        return None
+    return result.stdout.strip() or None
+
+
+def _resolve_cli_version() -> str:
+    project_root = Path(__file__).resolve().parents[4]
+    version_info_path = project_root / "version.info"
+    pyproject_path = project_root / "pyproject.toml"
+
+    if version_info_path.exists():
+        try:
+            for line in version_info_path.read_text(encoding="utf-8").splitlines():
+                if line.startswith("Version="):
+                    return line.split("=", 1)[1].strip()
+        except Exception:
+            pass
+
+    if pyproject_path.exists():
+        try:
+            import tomllib
+
+            with pyproject_path.open("rb") as f:
+                return tomllib.load(f)["project"]["version"]
+        except Exception:
+            pass
+
+    return APP_VERSION
+
+
+def render_root_help() -> None:
+    console.print(ROOT_HELP_TEXT, end="", markup=False)
+
+
+def render_version_info() -> None:
+    commit_hash = _run_git_command(["rev-parse", "--short=7", "HEAD"]) or "unknown"
+    build_date = _run_git_command(["log", "-1", "--format=%cI"]) or "unknown"
+    display_version = _resolve_cli_version()
+    version_text = (
+        f"{VERSION_BANNER}\n"
+        f"{APP_NAME} {display_version} ({commit_hash})\n"
+        "Copyright (C) 2026 Huawei Technologies Co., Ltd.\n"
+        "License: Mulan PSL v2.\n\n"
+        "Build Info:\n"
+        f"  Date : {build_date}\n"
+        f"  Repo : {REPO_URL}\n"
+    )
+    console.print(version_text, end="", markup=False)
 
 
 def normalize_argv(argv: list[str]) -> list[str]:
@@ -69,6 +177,7 @@ def create_legacy_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawTextHelpFormatter,
     )
     parser.add_argument(
+        "-V",
         "--version",
         action="store_true",
         help="Show version information and exit",
@@ -230,9 +339,7 @@ def _add_runtime_options(parser: argparse.ArgumentParser, *, include_timer: bool
 async def dispatch_legacy_command(args: argparse.Namespace) -> int:
     """Dispatch a parsed retained command."""
     if args.version:
-        from msagent.utils.version import get_version
-
-        console.print(f"[bold cyan]msAgent[/bold cyan] v{get_version()}")
+        render_version_info()
         return 0
 
     command = args.cli_command or DEFAULT_SESSION_COMMAND

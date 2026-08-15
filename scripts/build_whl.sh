@@ -14,6 +14,7 @@ SMOKE_IMPORT_MODULE="${SMOKE_IMPORT_MODULE:-}"
 SMOKE_RESOURCE_PATH="${SMOKE_RESOURCE_PATH:-resources/configs/default/config.mcp.json}"
 SMOKE_SKILL_PATH="${SMOKE_SKILL_PATH:-resources/configs/default/skills/README.md}"
 MSAGENT_BUNDLE_WEB_UI="${MSAGENT_BUNDLE_WEB_UI:-0}"
+MSAGENT_REPO_URL="${MSAGENT_REPO_URL:-https://gitcode.com/Ascend/msagent}"
 PROJECT_NAME=""
 REQUIRES_PYTHON=""
 MIN_PYTHON_MAJOR=3
@@ -38,6 +39,24 @@ fail() {
 
 command_exists() {
   command -v "$1" >/dev/null 2>&1
+}
+
+git_value_or_unknown() {
+  local repo_root="$1"
+  shift
+  if command_exists git; then
+    if git -C "${repo_root}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+      local value
+      if value="$(git -C "${repo_root}" "$@" 2>/dev/null)"; then
+        value="${value%$'\r'}"
+        if [[ -n "${value}" ]]; then
+          printf '%s\n' "${value}"
+          return
+        fi
+      fi
+    fi
+  fi
+  printf 'unknown\n'
 }
 
 is_truthy_flag() {
@@ -269,12 +288,19 @@ build_wheel() {
 
 configure_build_flags() {
   export MSAGENT_BUNDLE_WEB_UI
+  export MSAGENT_REPO_URL
+  export MSAGENT_GIT_COMMIT
+  export MSAGENT_BUILD_DATE
+
+  MSAGENT_GIT_COMMIT="$(git_value_or_unknown "${REPO_ROOT}" rev-parse --short=7 HEAD)"
+  MSAGENT_BUILD_DATE="$(git_value_or_unknown "${REPO_ROOT}" log -1 --format=%cI)"
 
   if is_truthy_flag "${MSAGENT_BUNDLE_WEB_UI}"; then
     log "Bundling web UI payload: enabled (MSAGENT_BUNDLE_WEB_UI=${MSAGENT_BUNDLE_WEB_UI})"
   else
     log "Bundling web UI payload: disabled (set MSAGENT_BUNDLE_WEB_UI=1 to include it)"
   fi
+  log "Version metadata: commit=${MSAGENT_GIT_COMMIT}, date=${MSAGENT_BUILD_DATE}"
 }
 
 find_built_wheel() {

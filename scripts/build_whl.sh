@@ -13,6 +13,7 @@ VERIFY_WHEEL_INSTALL="${VERIFY_WHEEL_INSTALL:-0}"
 SMOKE_IMPORT_MODULE="${SMOKE_IMPORT_MODULE:-}"
 SMOKE_RESOURCE_PATH="${SMOKE_RESOURCE_PATH:-resources/configs/default/config.mcp.json}"
 SMOKE_SKILL_PATH="${SMOKE_SKILL_PATH:-resources/configs/default/skills/README.md}"
+MSAGENT_REPO_URL="${MSAGENT_REPO_URL:-https://gitcode.com/Ascend/msagent}"
 PROJECT_NAME=""
 REQUIRES_PYTHON=""
 MIN_PYTHON_MAJOR=3
@@ -39,14 +40,22 @@ command_exists() {
   command -v "$1" >/dev/null 2>&1
 }
 
-is_truthy_flag() {
-  local value
-  value="${1:-}"
-  value="${value,,}"
-  case "${value}" in
-    ""|0|false|no|off) return 1 ;;
-    *) return 0 ;;
-  esac
+git_value_or_unknown() {
+  local repo_root="$1"
+  shift
+  if command_exists git; then
+    if git -C "${repo_root}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+      local value
+      if value="$(git -C "${repo_root}" "$@" 2>/dev/null)"; then
+        value="${value%$'\r'}"
+        if [[ -n "${value}" ]]; then
+          printf '%s\n' "${value}"
+          return
+        fi
+      fi
+    fi
+  fi
+  printf 'unknown\n'
 }
 
 load_project_metadata() {
@@ -264,6 +273,17 @@ build_wheel() {
   log "uv not found, falling back to python -m build..."
   "${python_bin}" -m pip install --upgrade build
   "${python_bin}" -m build --wheel --outdir "${DIST_DIR}" "${REPO_ROOT}"
+}
+
+configure_build_flags() {
+  export MSAGENT_REPO_URL
+  export MSAGENT_GIT_COMMIT
+  export MSAGENT_BUILD_DATE
+
+  MSAGENT_GIT_COMMIT="$(git_value_or_unknown "${REPO_ROOT}" rev-parse --short=7 HEAD)"
+  MSAGENT_BUILD_DATE="$(TZ=UTC git_value_or_unknown "${REPO_ROOT}" log -1 --date=format-local:%Y-%m-%dT%H:%M:%SZ --format=%cd)"
+
+  log "Version metadata: commit=${MSAGENT_GIT_COMMIT}, date=${MSAGENT_BUILD_DATE}"
 }
 
 find_built_wheel() {

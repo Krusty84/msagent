@@ -18,8 +18,20 @@
 
 - 请准备推理运行环境，推荐使用 vllm-ascend 镜像，使用 Docker 安装 vllm-ascend 指导：[vllm-ascend安装](https://docs.vllm.ai/projects/vllm-ascend-cn/zh-cn/latest/installation.html#set-up-using-docker)，推荐在容器内安装 msagent 并使用 Quantizer
 - 请根据模型安装合适的 transformers 版本，特殊说明：如果 msModelSlim 模型量化与推理引擎服务化要求的 transformers 版本不一致，可以将相关信息告知 Agent，让其自行管理使用对应版本。
-- 量化调优需在容器内安装 msModelSlim ；安装指导见 [msModelSlim 安装](https://gitcode.com/Ascend/msmodelslim/blob/master/docs/zh/getting_started/install_guide.md#23-%E6%BA%90%E7%A0%81%E5%AE%89%E8%A3%85)
+- 量化调优需在容器内安装 msModelSlim；安装方式请参考 [msModelSlim 安装指南](https://gitcode.com/Ascend/msmodelslim/blob/master/docs/zh/install_guide/install_guide.md)
 - 调优评测依赖 AISBench 评测服务，安装与使用说明见其 [README](https://github.com/AISBench/benchmark/blob/main/README.md)；测评所需数据集（如 gpqa、aime25 等）须自行准备，可参考 [AISBench 数据集准备指南](https://yh-ais-bench-benchmark.readthedocs.io/zh-cn/latest/base_tutorials/all_params/datasets.html)
+
+## 启动方式
+
+```bash
+msagent --agent Quantizer
+```
+
+源码运行时可使用：
+
+```bash
+uv run msagent --agent Quantizer
+```
 
 ## 推荐使用方式
 
@@ -38,11 +50,11 @@
 
 **示例提示词：**
 
-```
+```text
 帮我把 path/to/Qwen3-32B 进行 W8A8 量化，使用 NPU 0卡，gsm8k 相较于基线精度损失控制在 1% 以内
 ```
 
-```
+```text
 {模型路径} 是新模型，请帮我完成 W8A8 量化调优，gpqa 数据集精度损失不超过 1%
 ```
 
@@ -78,8 +90,14 @@ Quantizer 按以下阶段编排（各阶段经用户确认后进入下一步）�
 - 为超大模型提供逐层加载（懒加载）等解决方案以规避内存瓶颈
 - 严格遵循门禁规则与多步验证流程，确保结论由实际证据（配置、日志、命令输出）支撑
 
+## 输出预期
+
+Quantizer 通常会输出参数确认、环境检查结果、量化配置、评测配置、每轮调优记录和最终交付物位置。若某个阶段失败，应给出失败命令、日志位置、原因判断和下一步处理建议。
+
 ## 使用注意
 
 - 当前模型适配子流程主要支持 LLM 的 W8A8 等线性层量化；离群值抑制与 FA3 等复杂算法暂不支持
 - 模型分析阶段若发现较难适配的风险点，会中断流程并提前告知；需你确认风险并同意继续后，才会进入适配与后续调优
 - 若未提供浮点 baseline 精度，Agent 会先对浮点模型执行评测获取 baseline，再进入调优循环
+- 示例中的模型路径、保存路径和数据集名称需替换为本地真实资源
+- 没有可用 NPU、msModelSlim、AISBench 或评测数据集时，不建议直接执行端到端量化任务，可先让 Agent 做参数梳理和环境检查

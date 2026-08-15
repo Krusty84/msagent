@@ -22,6 +22,40 @@
 - 如果是集群或多卡问题，尽量同时说明异常现象、涉及 rank 或训练阶段
 - 如果目标是做数据提取或导出，可直接给出 DB / CSV 文件路径和目标格式
 
+## 启动方式
+
+```bash
+msagent --agent Profiler
+```
+
+源码运行时可使用：
+
+```bash
+uv run msagent --agent Profiler
+```
+
+## 前置条件和推荐输入
+
+- 已准备 Ascend Profiling 数据目录、`ascend_pytorch_profiler_*.db`、`kernel_details.csv` 或相关 trace 文件
+- 如需调用 `msprof-mcp`，请确认当前环境已安装对应依赖并能访问 profiling 数据
+- 推荐同时提供问题现象、训练阶段、rank / 节点范围、期望输出格式
+
+示例：
+
+```text
+请分析 /path/to/cluster_profiling/ 中是否存在快慢卡问题，定位异常 rank，并给出可能原因和优化建议。
+```
+
+## 输出预期
+
+Profiler 通常会输出数据完整性判断、关键指标、瓶颈位置、根因分析和可执行优化建议。涉及 CSV / DB 导出时，应说明生成文件路径和字段含义。
+
+## 注意事项
+
+- 示例路径均需替换为本地真实 profiling 数据路径
+- 没有真实性能数据时，Profiler 只能给出方法建议，不能证明某个具体瓶颈存在
+- 分析结论应优先以工具输出、数据库查询结果和原始日志为依据
+
 ## 典型效果展示
 
 | 场景 | 示例提示词 | 效果展示 |

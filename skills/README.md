@@ -35,7 +35,6 @@ description: 技能的详细描述，说明它做什么，以及什么时候使�
 - `references/` 放较长的背景材料和细节说明
 - `assets/` 放模板、图表、数据文件等静态资源
 
-
 ## 2. Skill 索引目录
 
 ### 2.1 性能 Skills
@@ -95,7 +94,7 @@ description: 技能的详细描述，说明它做什么，以及什么时候使�
 ## 3. Skill 使用
 
 当用户在对话中输入任务时，Agent 会根据 prompt 的意图自动匹配并触发相应 skill。
-如果已知要用哪个 skill，也可以通过 `/skill` 命令手动加载指定技能。
+如果已知要用哪个 skill，也可以通过 `/skills` 命令手动加载指定技能。
 
 | 命令                              | 说明                                                                           |
 |---------------------------------|------------------------------------------------------------------------------|
@@ -106,7 +105,7 @@ description: 技能的详细描述，说明它做什么，以及什么时候使�
 ![skills_browser](../docs/zh/figures/skills_browser.png)
 
 ## 4. 自定义添加 Skill
- 	 
+
 除了内置 Skill，用户进入`msagent`交互界面后，可通过 `/add-skill` 从本地路径安装自定义 Skill，满足个性化场景需求。支持指定 Skill 目录或 `SKILL.md` 文件，安装后立即生效。
 
 | 命令 | 说明 |
@@ -115,7 +114,6 @@ description: 技能的详细描述，说明它做什么，以及什么时候使�
 | `/add-skill <path>` | 也可直接指定 `SKILL.md` 文件路径。 |
 
 ![add_skill](../docs/zh/figures/add_skill.png)
-
 
 ## 5. 安装 Skill 到其他 Agent
 

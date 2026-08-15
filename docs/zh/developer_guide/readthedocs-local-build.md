@@ -4,13 +4,13 @@
 
 ## 环境准备
 
-确保已安装 Python 3.8+ 和 pip。
+确保已安装 Python 3.11 和 pip，与 `.readthedocs.yaml` 中的构建环境保持一致。
 
 ## 安装依赖
 
 ```bash
-cd <项目根目录>
-pip install -r docs/requirements.txt
+cd /path/to/msagent
+python -m pip install -r docs/requirements.txt
 ```
 
 > 示例：如果项目位于 `D:\code\msagent`，则执行 `cd D:\code\msagent`
@@ -18,18 +18,14 @@ pip install -r docs/requirements.txt
 ## 本地构建
 
 ```bash
-# 构建 HTML 文档
-sphinx-build -b html docs/ docs/_build/html/
-
-# 或者使用 make 命令（Linux/Mac）
-make -C docs html
+python -m sphinx -E -b html docs docs/_build/html
 ```
 
 ## 查看结果
 
 构建完成后，在浏览器中打开：
 
-```
+```text
 <项目根目录>/docs/_build/html/index.html
 ```
 
@@ -54,7 +50,7 @@ python -m http.server 8000
 如果遇到 `ModuleNotFoundError`，请检查 `docs/requirements.txt` 并安装所有依赖：
 
 ```bash
-pip install -r docs/requirements.txt
+python -m pip install -r docs/requirements.txt
 ```
 
 ### 2. 构建警告
@@ -68,16 +64,12 @@ Sphinx 可能会输出一些警告，这些通常不影响构建结果。如果�
 ## 清理构建文件
 
 ```bash
-# Windows
-rmdir /s /q docs\_build
-
-# Linux/Mac
 rm -rf docs/_build
 ```
 
 ## 推送到 ReadTheDocs
 
-本地验证通过后，推送代码到远程仓库，ReadTheDocs 会自动检测代码更新并重新构建文档。
+仓库根目录的 `.readthedocs.yaml` 指定 Python 版本、Sphinx 配置和依赖文件。项目在 ReadTheDocs 中完成导入并配置仓库集成后，推送代码会触发远端构建；本地构建本身不会发布文档。
 
 ## 参考链接
 

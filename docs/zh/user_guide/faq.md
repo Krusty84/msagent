@@ -55,7 +55,7 @@
 - 当前 Agent 的 `skills.patterns` 是否允许该 Skill
 - 是否被更高优先级目录中的同名 Skill 覆盖
 
-加载自定义 Skill，可参考[添加自定义 Skill](configuration-and-extension.md#添加自定义-skill)
+加载自定义 Skill，可参考[配置与扩展](configuration-and-extension.md)。
 
 ## 4. 运行日志在哪里看？
 
@@ -94,3 +94,17 @@ MobaXterm 默认未设置 `COLORTERM`，导致 prompt_toolkit 无法识别真彩
 ```bash
 export COLORTERM=truecolor
 ```
+
+## 7. `.env` 和 `export` 应该怎么选？
+
+`export` 适合当前终端临时使用；`.env` 适合固定项目目录反复使用。`msagent` 会读取当前工作目录下的 `.env`，常见内容为：
+
+```text
+OPENAI_API_KEY=your-key
+```
+
+不同 provider 使用不同环境变量，例如 `ANTHROPIC_API_KEY` 或 `GOOGLE_API_KEY`。`.env` 只用于本地运行，不应提交到 Git 仓库。可通过 `msagent config --show` 确认 `API Key` 是否显示为 `Set`。
+
+## 8. 普通安装和源码运行应该怎么选？
+
+普通用户优先使用 `pip install mindstudio-agent`；源码开发、文档验证或本地调试时，参考 [贡献指南](../developer_guide/contributing.md) 使用 `uv sync --dev` 和 `uv run msagent ...`。

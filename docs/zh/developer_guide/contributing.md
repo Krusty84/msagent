@@ -156,7 +156,7 @@ PR 中建议说明：
 
 ### 文档贡献
 
-文档统一维护在 `docs/zh/` 下，按快速入门、Agent 指南、用户指南、开发指南组织。修改 README、安装步骤或 Quick Start 时，建议：
+中文文档维护在 `docs/zh/`，英文核心入口维护在 `docs/en/`。修改安装、Quick Start、FAQ、接口、Skill 或 Agent 核心页面时，应同步检查另一语言的对应入口。建议：
 
 1. 对照 [快速入门指导](../getting_started/quick_start.md) 走通最小流程
 2. 使用内置 skill [document-ux-review](../user_guide/document-ux-review.md) 做文档上手体验审查

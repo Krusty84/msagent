@@ -1,0 +1,43 @@
+# Accuracy Debugging
+
+`Accuracy` is the Agent for msProbe-based model accuracy debugging. It helps analyze dump data, identify divergence, and produce structured root cause analysis.
+
+## Positioning
+
+- Handles single-card, multi-card, and cluster Ascend accuracy analysis.
+- Focuses on dump data interpretation and tuning suggestions.
+- Fits RL train/inference inconsistency, loss / gnorm NaN, overflow, and deterministic calculation issues.
+
+## Start
+
+```bash
+msagent --agent Accuracy
+```
+
+From source:
+
+```bash
+uv run msagent --agent Accuracy
+```
+
+## Prerequisites and Recommended Input
+
+- Prepare training, inference, repeated-run, dump, md5, or msProbe data.
+- State the issue type: train/inference inconsistency, NaN / overflow, or deterministic calculation difference.
+- For multi-card or cluster scenarios, provide rank, step, layer, API name, and the first observed abnormal location if available.
+
+Example:
+
+```text
+Compare /path/to/train_dump and /path/to/infer_dump, locate the first divergence, and explain possible root causes.
+```
+
+## Expected Output
+
+Accuracy usually returns data alignment steps, divergence paths, the first abnormal point, possible causes, and next verification suggestions. If input is insufficient, it should list the missing dump data or context.
+
+## Notes
+
+- Replace placeholder paths with real local dump data.
+- Without real dump data, Accuracy can only provide workflow guidance or troubleshooting suggestions.
+- If the result is wrong, provide extra code, background knowledge, or a corrected analysis direction.

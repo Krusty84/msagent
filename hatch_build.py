@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import configparser
 import importlib
 import os
 import re
@@ -59,6 +60,10 @@ DEFAULT_SKILLS_TARGET_DIR = "resources/configs/default/skills"
 ENV_BUNDLE_WEB_UI = "MSAGENT_BUNDLE_WEB_UI"
 ENV_UI_ARCHIVE_URL = "MSAGENT_UI_ARCHIVE_URL"
 ENV_UI_REF = "MSAGENT_UI_REF"
+ENV_GIT_COMMIT = "MSAGENT_GIT_COMMIT"
+ENV_BUILD_DATE = "MSAGENT_BUILD_DATE"
+ENV_REPO_URL = "MSAGENT_REPO_URL"
+VERSION_INFO_FILE_NAME = "version.info"
 
 
 def _is_truthy(value: str | None) -> bool:
@@ -73,11 +78,13 @@ class CustomBuildHook(BuildHookInterface):
         generated_dir = Path(self.directory) / "msagent-build"
         shutil.rmtree(generated_dir, ignore_errors=True)
 
-    def initialize(self, version: str, build_data: dict[str, object]) -> None:
-        del version
+    def initialize(self, _version: str, build_data: dict[str, object]) -> None:
         force_include = build_data.setdefault("force_include", {})
         if not isinstance(force_include, dict):
             raise TypeError("build_data.force_include must be a dict[str, str]")
+
+        generated_version_info = self._ensure_version_info_file()
+        force_include[str(generated_version_info)] = self._version_info_distribution_path()
 
         bundled_skills_dir = self._ensure_bundled_skills_dir()
         if bundled_skills_dir is not None:
@@ -90,6 +97,33 @@ class CustomBuildHook(BuildHookInterface):
         standalone_archive = self._ensure_ui_standalone_archive(source_archive)
         force_include[str(source_archive)] = self._distribution_path(DEFAULT_UI_ARCHIVE_NAME)
         force_include[str(standalone_archive)] = self._distribution_path(DEFAULT_UI_STANDALONE_ARCHIVE_NAME)
+
+    def _ensure_version_info_file(self) -> Path:
+        generated_dir = Path(self.directory) / "msagent-build" / "metadata"
+        generated_dir.mkdir(parents=True, exist_ok=True)
+        generated_version_info = generated_dir / VERSION_INFO_FILE_NAME
+
+        parser = configparser.ConfigParser()
+        parser["PACKAGE"] = {
+            "Version": self._read_repo_version_info().get("Version", "").strip() or "unknown",
+            "Commit": os.getenv(ENV_GIT_COMMIT, "").strip() or "unknown",
+            "Date": os.getenv(ENV_BUILD_DATE, "").strip() or "unknown",
+            "Repo": os.getenv(ENV_REPO_URL, "").strip() or "https://gitcode.com/Ascend/msagent",
+        }
+        with generated_version_info.open("w", encoding="utf-8", newline="\n") as f:
+            parser.write(f)
+        return generated_version_info
+
+    def _read_repo_version_info(self) -> dict[str, str]:
+        version_info_path = Path(self.root) / VERSION_INFO_FILE_NAME
+        parser = configparser.ConfigParser()
+        parser.read(version_info_path, encoding="utf-8")
+        return dict(parser["PACKAGE"]) if parser.has_section("PACKAGE") else {}
+
+    def _version_info_distribution_path(self) -> str:
+        if self.target_name == "sdist":
+            return VERSION_INFO_FILE_NAME
+        return f"msagent/{VERSION_INFO_FILE_NAME}"
 
     def _ensure_bundled_skills_dir(self) -> Path | None:
         if self.target_name != "wheel":

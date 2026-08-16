@@ -8,12 +8,11 @@
 
 ## 安装依赖
 
+在仓库根目录执行：
+
 ```bash
-cd /path/to/msagent
 python -m pip install -r docs/requirements.txt
 ```
-
-> 示例：如果项目位于 `D:\code\msagent`，则执行 `cd D:\code\msagent`
 
 ## 本地构建
 
@@ -29,7 +28,7 @@ python -m sphinx -E -b html docs docs/_build/html
 <项目根目录>/docs/_build/html/index.html
 ```
 
-或者在终端中运行（需要安装 Python 3 的 http 模块）：
+或者使用 Python 内置的 HTTP 服务预览：
 
 ```bash
 # 进入构建目录
@@ -55,13 +54,15 @@ python -m pip install -r docs/requirements.txt
 
 ### 2. 构建警告
 
-Sphinx 可能会输出一些警告，这些通常不影响构建结果。如果看到错误（ERROR），则需要修复。
+Sphinx 可能会输出警告。请确认当前改动没有新增断链、缺失的 `toctree` 目标或解析错误；如果命令退出码非 0，则需要修复。
 
 ### 3. 中文显示问题
 
 确保 `docs/conf.py` 中设置了 `language = 'zh_CN'`，并且系统支持中文字体。
 
 ## 清理构建文件
+
+使用 `Ctrl+C` 停止预览服务，然后回到仓库根目录执行：
 
 ```bash
 rm -rf docs/_build

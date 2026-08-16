@@ -29,3 +29,10 @@ Recommend serving auto-tuning parameters for Qwen3-32B on Atlas A3 with vLLM, pr
 ## Expected Output
 
 Modeling usually returns missing parameter checks, command planning, configuration snippets, recommendation rationale, and validation suggestions. Real performance conclusions should still be verified by actual runs.
+
+## Current Boundaries
+
+- Automated workflows are limited to the Skills configured for `Modeling`; unsupported workflows must not be presented as automated.
+- Installation, execution, or environment changes require confirmation before they are performed.
+- Parameter recommendations may use historical experience or heuristic rules, and the source of each recommendation should be identified.
+- Real performance conclusions require actual execution and validation output.

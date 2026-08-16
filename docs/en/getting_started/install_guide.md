@@ -20,6 +20,14 @@ msagent --help
 
 The installation is usable when both commands exit successfully and print version and help information.
 
+An unconstrained install selects the latest stable release. The current `master` documentation describes the 26.1 CLI and built-in Agents. Until a 26.1 stable package is available, install a matching 26.1 package with:
+
+```bash
+python -m pip install --pre --upgrade "mindstudio-agent>=26.1.0a2,<26.2"
+```
+
+Otherwise, use the commands and Agent names shown by the installed release's `msagent --help` output.
+
 ## Run from Source
 
 Install [uv](https://docs.astral.sh/uv/), then run the following commands from a development environment supported by the repository:

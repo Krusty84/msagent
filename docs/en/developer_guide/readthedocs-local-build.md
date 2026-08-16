@@ -31,6 +31,8 @@ Then open `http://localhost:8000/`.
 
 ## Clean Generated Files
 
+Stop the preview server with `Ctrl+C`, then run the cleanup command from the repository root:
+
 ```bash
 rm -rf docs/_build
 ```

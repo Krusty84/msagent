@@ -32,6 +32,14 @@ pip install mindstudio-agent
 msagent --version
 ```
 
+未指定版本时，`pip` 会安装最新稳定版。当前 `master` 文档介绍的是 26.1 CLI 和内置 Agent；在 26.1 稳定版发布前，如需使用与本文档一致的版本，请执行：
+
+```shell
+python -m pip install --pre --upgrade "mindstudio-agent>=26.1.0a2,<26.2"
+```
+
+如果继续使用其他已发布版本，请以该版本的 `msagent --help` 输出为准。
+
 ### 3.2 源码安装
 
 #### 3.2.1 环境准备

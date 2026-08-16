@@ -5,11 +5,11 @@
 ## 1. 环境准备
 
 ```bash
-pip install mindstudio-agent
+python -m pip install --pre --upgrade "mindstudio-agent>=26.1.0a2,<26.2"
 msagent --version
 ```
 
-更多安装方式，具体请参见《[msAgent安装指南](./install_guide.md)》。
+该版本范围与本文介绍的 26.1 CLI 和内置 Agent 一致。安装最新稳定版或使用其他安装方式，请参见《[msAgent安装指南](./install_guide.md)》。
 
 如果你是在源码仓库中参与开发或验证文档，请参考 [贡献指南](../developer_guide/contributing.md)。源码运行时，可将本文后续命令中的 `msagent` 替换为 `uv run msagent`。
 
@@ -26,12 +26,16 @@ msagent --version
 
 2. 配置 LLM。
 
-   包括 LLM 服务的环境变量（*_API_KEY）、通过`msagent config`命令的`--llm-provider`参数配置LLM 服务的协议类型、`--llm-base-url`参数配置模型服务商地址、`--llm-model`参数配置模型名称（模型名称从模型服务商网站的模型广场获取）。
+   根据模型服务配置对应的 API Key 环境变量、provider 和模型名称。只有兼容服务、代理或自部署服务需要通过 `--llm-base-url` 指定地址。
 
    | 配置场景 | 示例                                                                                                                                                                     |
    | --- |------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
    | OpenAI 兼容接口 | `export OPENAI_API_KEY="your-key"`<br>`msagent config --llm-provider openai --llm-base-url "https://api.deepseek.com" --llm-model "deepseek-v4-flash" # 以DeepSeek为例`   |
    | 本地 OpenAI 兼容服务 | `export OPENAI_API_KEY="dummy"  # 如本地模型服务无密钥，可填入任意非空字符串`<br>`msagent config --llm-provider openai --llm-base-url "http://127.0.0.1:8000/v1" --llm-model "your-model"` |
+   | Anthropic 官方服务 | `export ANTHROPIC_API_KEY="your-key"`<br>`msagent config --llm-provider anthropic --llm-base-url "" --llm-model "claude-sonnet-4-5"` |
+   | Google Gemini 官方服务 | `export GOOGLE_API_KEY="your-key"`<br>`msagent config --llm-provider google --llm-base-url "" --llm-model "gemini-2.5-pro"` |
+
+   Anthropic 和 Google Gemini 示例使用仓库内置配置中的模型名称。同一条配置命令中的 `--llm-base-url ""` 用于清除之前可能保存的自定义地址，使客户端使用 provider 的默认端点。
 
    如果不希望每次打开终端都执行 `export`，也可以在运行命令的工作目录创建 `.env` 文件并写入对应环境变量，例如 `OPENAI_API_KEY=your-key`。`.env` 仅用于本地运行，请勿提交到 Git 仓库。更多说明见 [FAQ](../user_guide/faq.md)。
 

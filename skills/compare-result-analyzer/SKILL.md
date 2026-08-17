@@ -20,7 +20,7 @@ argument-hint: "提供待分析精度比对结果文件 (compare_result.csv|xlsx
 - **Read `references/thresholds.md`** 了解自适应阈值算法详情
 
 ### 2. 辅助信息收集
-- **Read `references/aux-info.md`**
+- **Read `references/aux_info.md`**
 - 若用户已在请求中附带辅助信息，直接使用
 - 否则使用 `AskUserQuestion` 询问（「跳过」或 Type something. 自由输入）
 - 无辅助信息时：报告中省略 §0，禁止自行搜索历史报告
@@ -135,8 +135,11 @@ Agent SHALL 读取每张卡的 per-card JSON，按 **`references/multi_card_rule
 - **报告呈现**：取 NRE 最大的至多 5 条 + 族内首脏成员（强制补入），并入 §3 表尾（标注"补充候选"来源）。保留完整 prefix 路径，禁止聚合抹平。纯 forward 场景不触发族内首脏成员逻辑。
 
 ### 5. 结合算子类型修正
-- **Read `references/thresholds.md`**
+- **Read `references/thresholds.md`** 了解自适应阈值算法详情
+- **Read `references/operator_types.md`** 了解特殊算子处理规则（类别 1 / 类别 2）
 - 占位、冗余、无法比对算子仅做说明，不作为根因
+- **无计算算子豁免（类别 1）**：`empty*` / `numpy` / `to` 即便 NRE 超阈值也仅做说明、不作为根因，不进入 §3/§5.1/§5.1a 候选
+- **集合通信算子输入豁免（类别 2）**：`_reduce_scatter_base` / `_all_gather_base` / `all_to_all_single` / `batch_isend_irecv` 禁止用 input 做传播判定，**仅用 output 判定**——按 output NRE 可作为根因候选/首点（跳过 C-ANALYSIS-002 step2 / 003 / 004 / 014 的 input 侧检查）；上游溯源到此停止（跨 rank），标注边界并引导跨卡共识分析（M-002）交叉确认。细则见 `references/operator_types.md`
 
 ### 6. 输出多个候选
 - 按条目上限（C-REPORT-009/C-REPORT-013），在报告 §3（内容 = {首问题点} ∪ §5.1 全部条目 ∪ §5.1a 显著放大算子 ∪ §5.2 全部条目 ∪ §5.3 全部条目，上限 31 行 + 补充候选至多 5 条，不含 INPUT_PROPAGATION 和 ABSORBED）、§5.1（常规 ≤10 + 保底 ≤5 = ≤15 条，整表不区分方向）、§5.1a（≤5 条）、§5.2~§5.5（各 ≤5 条）、§5.6（不限制，汇总所有）中列出候选节点

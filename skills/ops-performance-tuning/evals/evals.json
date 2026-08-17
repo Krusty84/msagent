@@ -1,0 +1,60 @@
+{
+  "skill_name": "ops-performance-tuning",
+  "eval_mode": "text",
+  "evals": [
+    {
+      "id": 1,
+      "title": "A5 Ascend C 完整调优路由",
+      "config": {"disabled": true, "eval_mode": "text", "ascend_platforms": ["A5"], "timeout": 900, "max_tokens": 12000},
+      "prompt": "已有一个在 Ascend 950 上精度通过的 Ascend C Add 算子，请说明如何编译、用 msprof op 采集、判定瓶颈并完成前后性能对比。",
+      "expected_output": "先固定 CANN、SoC、shape、dtype、频率和 benchmark，加载 Ascend C 编译指南；按本机帮助探测 msprof op 参数；保存基础与 Pipe/Memory 指标；结合 busy 和带宽判定；按 Bound 选择优化资料与最多三个案例；单变量修改后重做精度和同口径性能验证。",
+      "files": [],
+      "expectations": []
+    },
+    {
+      "id": 2,
+      "title": "A2 与 A5 采集能力区分",
+      "config": {"disabled": true, "eval_mode": "text", "ascend_platforms": ["A2", "A5"], "timeout": 900, "max_tokens": 8000},
+      "prompt": "同一个算子在 A2 和 A5 上采集 msOpProf，命令和指标是否可以完全照搬？",
+      "expected_output": "不能照搬；两套环境分别探测 msprof op 或 msopprof 的帮助与指标。每个平台独立建立基线，禁止跨 SoC 直接比较。",
+      "files": [],
+      "expectations": []
+    },
+    {
+      "id": 3,
+      "title": "多 kernel 采集完整性",
+      "config": {"disabled": true, "eval_mode": "text", "ascend_platforms": ["A2"], "timeout": 900, "max_tokens": 8000},
+      "prompt": "Triton-Ascend 用例启动三个 kernel，但结果只有第一个 kernel，下一步如何处理？",
+      "expected_output": "不得基于部分结果调优；枚举真实 kernel 名并逐个采集或使用当前版本支持的完整过滤方式，核对结果齐全，将 JIT 首轮与稳态执行分开。",
+      "files": [],
+      "expectations": []
+    },
+    {
+      "id": 4,
+      "title": "精度失败门禁",
+      "config": {"disabled": true, "eval_mode": "text", "ascend_platforms": ["A2"], "timeout": 900, "max_tokens": 6000},
+      "prompt": "算子比标杆慢，但仍有精度用例失败，能否先调性能？",
+      "expected_output": "不能进入性能优化；记录失败用例、容差和误差并转入精度调试。全部通过后重新建立不可变基线。",
+      "files": [],
+      "expectations": []
+    },
+    {
+      "id": 5,
+      "title": "kernel-name 过滤采空",
+      "config": {"disabled": true, "eval_mode": "text", "ascend_platforms": ["A5"], "timeout": 900, "max_tokens": 6000},
+      "prompt": "用 msopprof --kernel-name=<源码函数名> 采集 Ascend C 算子，应用正常跑完但结果目录为空，下一步？",
+      "expected_output": "kernel 名是 C++ mangled 符号（匿名命名空间为 _ZN12_GLOBAL__N_1...），过滤条件不匹配导致静默采空；先无过滤全量采集，从 OpBasicInfo.csv 抄回真实 kernel 名再过滤；不能凭应用跑完就判采集成功。",
+      "files": [],
+      "expectations": []
+    },
+    {
+      "id": 6,
+      "title": "分核优化与对比口径",
+      "config": {"disabled": true, "eval_mode": "text", "ascend_platforms": ["A5"], "timeout": 900, "max_tokens": 6000},
+      "prompt": "优化把 blockDim 从 4 提到 48，delta_report 以口径不一致拒绝比较，处理是否合规？",
+      "expected_output": "block_dim/tiling_key 是分核类优化的机制变量，差异应降级为 WARN 并写入报告；shape/dtype/SoC/设备/warmup/repeat/计时法等硬口径仍必须一致；可用 --strict 恢复全字段强校验。",
+      "files": [],
+      "expectations": []
+    }
+  ]
+}

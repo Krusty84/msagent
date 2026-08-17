@@ -1,5 +1,5 @@
 ---
-name: torch-npu-profiler-adaptation
+name: ascend-profiler-collect-adaption
 description: >
   Adapt torch_npu.profiler interface for AI frameworks and training/inference code on Ascend NPU.
   Use this skill whenever users need to integrate profiling, add performance data collection,

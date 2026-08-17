@@ -42,6 +42,7 @@ description: 技能的详细描述，说明它做什么，以及什么时候使�
 
 | Skill | 作用 | 示例 prompt |
 | --- | --- | --- |
+| `ascend-profiler-collect-adaption` | 为训练、推理、强化学习场景适配 `torch_npu.profiler` 采集接口 | `帮我给这个训练框架接入 torch_npu.profiler` |
 | `ascend-profiler-data-validation` | 检查 profiling 数据是否完整、可分析 | `帮我检查这个 profiler 目录能不能进入后续分析` |
 | `ascend-profiler-db-explorer` | 分析 Ascend profiler 数据库 | `查一下这个 db 里 TopK 算子和通信耗时` |
 | `ascend-cluster-fast-slow-rank-detector` | 做集群快慢卡分析 | `分析这个集群 profiling 目录里的快慢卡原因` |

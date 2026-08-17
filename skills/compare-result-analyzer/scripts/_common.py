@@ -1,6 +1,47 @@
 """公共工具函数 — NPU Name 解析、安全数值转换、自然排序"""
 
 import re
+import sys
+
+# 跟踪无法按 Module./API 约定解析的 NPU Name（命名格式不兼容时用于告警）
+_UNPARSEABLE_SEEN = set()        # 去重成员（用于精确去重计数）
+_UNPARSEABLE_SAMPLES = []        # 首次命中顺序的样例，cap 在 MAX
+_UNPARSEABLE_WARNED = False
+_UNPARSEABLE_MAX_SAMPLES = 5
+
+
+def _record_unparseable(name):
+    """记录无法解析的 NPU Name；首次命中即时告警，便于用户立刻发现命名格式不兼容。"""
+    global _UNPARSEABLE_WARNED
+    if not name or not name.strip():
+        return
+    if name in _UNPARSEABLE_SEEN:
+        return
+    _UNPARSEABLE_SEEN.add(name)
+    if len(_UNPARSEABLE_SAMPLES) < _UNPARSEABLE_MAX_SAMPLES:
+        _UNPARSEABLE_SAMPLES.append(name)
+    if not _UNPARSEABLE_WARNED:
+        _UNPARSEABLE_WARNED = True
+        print("⚠ [命名格式告警] 检测到无法按 Module./API 约定解析的 NPU Name，"
+              "可能来自不兼容的 msprobe compare 版本。首条样例: {!r}".format(name),
+              file=sys.stderr)
+
+
+def flush_unparseable_names():
+    """汇总输出无法解析的 NPU Name 告警（分析末尾调用，无则静默）。"""
+    n = len(_UNPARSEABLE_SEEN)
+    if n == 0:
+        return
+    samples = _UNPARSEABLE_SAMPLES[:_UNPARSEABLE_MAX_SAMPLES]
+    print("⚠ [命名格式告警] 共 {} 个无法解析的 NPU Name（已去重），"
+          "相关节点方向被判为 'unknown'，传播跳变分析可能缺数据。样例:".format(n),
+          file=sys.stderr)
+    for s in samples:
+        print("    - {!r}".format(s), file=sys.stderr)
+    if n > len(samples):
+        print("    ... 其余 {} 个已省略".format(n - len(samples)),
+              file=sys.stderr)
+
 
 
 def safe_float(val):
@@ -79,6 +120,7 @@ def extract_op_prefix(name):
                 return (prefix, kw)
 
     # 3. 无法识别
+    _record_unparseable(name)
     return (name, 'unknown')
 
 

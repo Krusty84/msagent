@@ -557,6 +557,8 @@ def main():
             with open(_out_path, 'w', encoding='utf-8') as f:
                 json.dump(_empty_result, f, ensure_ascii=False, indent=2)
             print("空结果已写入: {}".format(_out_path), file=sys.stderr)
+            from _common import flush_unparseable_names as _flush_unparseable
+            _flush_unparseable()
             return
 
     if not rows:
@@ -969,6 +971,10 @@ def main():
     print("[4/4] Writing JSON... ({:.1f}s)".format(_elapsed), file=sys.stderr)
     _total_elapsed = _time.time() - _t0
     print("JSON written to: {} (total: {:.1f}s)".format(output_path, _total_elapsed))
+
+    # 汇总无法解析的 NPU Name 命名格式告警
+    from _common import flush_unparseable_names as _flush_unparseable
+    _flush_unparseable()
 
 if __name__ == '__main__':
     try:

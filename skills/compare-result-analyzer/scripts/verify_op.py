@@ -30,12 +30,11 @@ def main():
     if not tensors:
         print("  ⚠ 未发现 API 算子")
         if args.output:
-            import os as _os
-            _out = args.output or _os.path.join(
-                _os.path.dirname(_os.path.abspath(args.csv)),
+            _out = args.output or os.path.join(
+                os.path.dirname(os.path.abspath(args.csv)),
                 '.compare_result_analyzer',
-                f'{_os.path.splitext(_os.path.basename(args.csv))[0]}_verify.json')
-            _os.makedirs(_os.path.dirname(_out), exist_ok=True)
+                f'{os.path.splitext(os.path.basename(args.csv))[0]}_verify.json')
+            os.makedirs(os.path.dirname(_out), exist_ok=True)
             output_json([], _out, atol=1e-4, rtol=1e-3)
         sys.exit(0)
 
@@ -71,15 +70,14 @@ def main():
 
     print_results(all_results)
 
-    import os as _os
     if args.output:
         output_json(all_results, args.output, atol=1e-4, rtol=1e-3)
     else:
-        d = _os.path.join(_os.path.dirname(_os.path.abspath(args.csv)),
+        d = os.path.join(os.path.dirname(os.path.abspath(args.csv)),
                          '.compare_result_analyzer')
-        _os.makedirs(d, exist_ok=True)
+        os.makedirs(d, exist_ok=True)
         output_json(all_results,
-                    _os.path.join(d, f'{_os.path.splitext(_os.path.basename(args.csv))[0]}_verify.json'),
+                    os.path.join(d, f'{os.path.splitext(os.path.basename(args.csv))[0]}_verify.json'),
                     atol=1e-4, rtol=1e-3)
 
     failed = sum(1 for r in all_results if not r.passed)

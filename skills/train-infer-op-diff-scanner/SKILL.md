@@ -1,0 +1,311 @@
+---
+name: train-infer-op-diff-scanner
+description: RL 强化学习训练与推理（rollout）路径的算子差异性扫描。当用户提供训练启动脚本路径，要求对比 Megatron 训练路径与 vLLM 推理路径的算子差异（尤其是融合算子 vs 单算子不一致）时使用此 skill。典型触发词包括"训推算子扫描"、"训推差异性"、"算子差异报告"、"融合算子对比"、"train vs infer op diff"。注意：本 skill 通过运行完整 RL 训练脚本（集成 profiling）来采集真实运行时算子（非静态源码扫描，非独立分离运行）。
+---
+
+# Train-Infer Operator Diff Scanner（RL 训推算子一致性扫描 ）
+
+面向 Ascend NPU 的 RL 训推算子差异性**运行时扫描**技能。
+
+## 核心原则
+
+1. **必须运行完整 RL 脚本**：算子采集必须通过运行完整 RL 训练脚本（集成 verl profiler）完成。**禁止**编写独立脚本分离运行 Megatron 训练和 vLLM 推理来分别采集算子数据
+2. **运行时采集（非静态扫描）**：所有算子信息必须来自真实 NPU 运行时 profiling，静态源码扫描结果不作为最终结论
+3. **profiler 集成到 RL 脚本**：通过 `global_profiler` + 各组件 profiler 配置在 RL 脚本中开启 profiling（训练路径用 e2e profiler，推理路径用 `discrete=True` 分离采集）
+4. **代码栈贴入报告**：每个差异算子需附对应的代码调用栈（从 profiler DB 的 MSTX/CPU callstack 提取或从源码路径标注）
+
+## 触发条件
+
+- 对比 RL 训练（Megatron）和推理（vLLM）的算子差异
+- 扫描训练和推理路径中的融合算子差异
+- 生成训推算子一致性报告
+- 用户提供了 RL 训练启动脚本路径
+
+## 不适用场景
+
+- 运行时 dump 数据的逐值对比（应使用 `rl-consistency-analysis` skill）
+- 纯性能 profiling 分析（应使用 msprof-analyze-cli skill）
+- 无法执行脚本或 NPU 不可用的环境
+
+---
+
+## 工作流程（6 阶段）
+
+### 阶段 1：环境与配置解析（预计 2-3 分钟）
+
+#### 1.1 解析训练脚本
+
+**必须先读取用户提供的 RL 脚本**，提取以下配置项：
+
+| 解析项 | 脚本字段 | 示例 |
+|--------|---------|-----|
+| 训练后端 | `actor_rollout_ref.actor.strategy` | `megatron` |
+| 推理引擎 | `actor_rollout_ref.rollout.name` | `vllm` |
+| 模型路径 | `MODEL_PATH` 或 `actor_rollout_ref.model.path` | `/workspace/models/Qwen3-0.6B` |
+| 模型 ID | `MODEL_ID` | `Qwen/Qwen3-0.6B` |
+| TP/PP/EP | `tensor_model_parallel_size` 等 | `1` |
+| max_prompt_length | `data.max_prompt_length` | `512` |
+| max_response_length | `data.max_response_length` | `1` |
+| train_batch_size | `data.train_batch_size` | `4` |
+| total_training_steps | `trainer.total_training_steps` | `1` |
+| NPU 设备 | `ASCEND_RT_VISIBLE_DEVICES` | `1` |
+| rollout 配置 | `enforce_eager`, `calculate_log_probs`, `n` | `True`, `True`, `2` |
+
+#### 1.2 环境检查（必须全部通过，失败则告知用户并停止）
+
+```bash
+python -c "import torch; import torch_npu; print(torch.npu.device_count(), 'NPUs available')"
+which msprof
+pip show megatron-core vllm vllm-ascend mbridge 2>/dev/null | grep -E "^(Name|Version):"
+ls -la ${MODEL_PATH}/config.json
+```
+
+#### 1.3 备份原始脚本
+
+```bash
+cp <script_path> <script_path>.bak_$(date +%Y%m%d_%H%M)
+```
+
+---
+
+### 阶段 2：集成 Profiler 到 RL 脚本（预计 2-3 分钟）
+
+**目的**：修改 RL 训练脚本，嵌入 profiling 配置，使单次运行即可同时采集训练和推理路径的 NPU 算子。
+
+#### 2.1 检查脚本是否已含 profiler 配置
+
+搜索脚本中是否存在 `global_profiler` 或 `PROFILER` 相关配置块。若已存在则跳过 2.2。
+
+#### 2.2 在脚本中添加 Profiler 配置块
+
+在脚本中 `launch` 命令之前插入以下配置,（参考 `references/run_qwen3_0_6b_megatron_vllm_ascend.sh` 的实际实现）：
+
+```bash
+PROFILER_OUTPUT_DIR=${PROFILER_OUTPUT_DIR:-<脚本目录>/profiler_output}
+rm -rf ${PROFILER_OUTPUT_DIR} 2>/dev/null || true
+mkdir -p ${PROFILER_OUTPUT_DIR}
+
+# 关键：训练路径用 e2e profiler，推理路径用 discrete=True 分离采集
+PROFILER=(
+    global_profiler.tool=npu
+    global_profiler.steps=[1]
+    global_profiler.save_path=${PROFILER_OUTPUT_DIR}
+    actor_rollout_ref.actor.profiler.enable=True
+    actor_rollout_ref.actor.profiler.tool_config.npu.contents="['npu','cpu','shapes']"
+    actor_rollout_ref.actor.profiler.tool_config.npu.level=level1
+    actor_rollout_ref.ref.profiler.enable=True
+    actor_rollout_ref.ref.profiler.tool_config.npu.contents="['npu','cpu','shapes']"
+    actor_rollout_ref.ref.profiler.tool_config.npu.level=level1
+    actor_rollout_ref.rollout.profiler.enable=True
+    actor_rollout_ref.rollout.profiler.tool=npu
+    actor_rollout_ref.rollout.profiler.tool_config.npu.contents="['npu','cpu','shapes']"
+    actor_rollout_ref.rollout.profiler.tool_config.npu.level=level1
+    actor_rollout_ref.rollout.profiler.tool_config.npu.discrete=True
+)
+```
+
+在 launch 命令参数末尾追加 `"${PROFILER[@]}"`。
+
+#### 2.3 配置说明
+
+| 配置项 | 说明 |
+|--------|------|
+| `global_profiler.tool=npu` | 全局开启 NPU profiling |
+| `global_profiler.steps=[1]` | 仅采集 step 1（节省时间） |
+| `actor.profiler.enable=True` | 训练 actor 路径采集 |
+| `ref.profiler.enable=True` | 训练 ref 路径采集 |
+| `rollout.profiler.enable=True` | 推理 rollout 路径采集 |
+| `rollout.profiler.tool_config.npu.discrete=True` | **关键**：rollout 的 vLLM 算子单独存 DB，与训练路径分离 |
+| `level=level1` | 采集 CANN 算子级别数据 |
+
+#### 2.4 DB 输出路径约定
+
+运行完成后，profiler 输出目录结构如下（**必须先确认此结构存在，再进行阶段 4 提取**）：
+
+```
+profiler_output/
+├── e2e/                                         # 训练路径（Megatron actor+ref）
+│   └── <timestamp>/
+│       └── ascend_pytorch_profiler_0.db         # ← 训练算子数据
+└── agent_loop_rollout_replica_0/                # 推理路径（vLLM rollout）
+    └── <timestamp>/
+        └── ascend_pytorch_profiler_0.db          # ← 推理算子数据
+```
+
+---
+
+### 阶段 3：运行 RL 脚本采集算子数据（预计 5-15 分钟）
+
+#### 3.1 运行完整 RL 训练脚本
+
+```bash
+cd <脚本所在目录>
+bash <脚本名> 2>&1 | tee profiler_output/run.log
+```
+
+**注意**：必须等待脚本完整执行完毕。此脚本同时运行 Megatron 训练和 vLLM rollout，运行时间取决于模型大小（0.6B 模型约 5-10 分钟）。
+
+#### 3.2 验证 DB 文件生成
+
+```bash
+find profiler_output -name "ascend_pytorch_profiler_0.db" -type f
+```
+
+**必须**确认以下两个 DB 文件都存在：
+- `profiler_output/e2e/*/ascend_pytorch_profiler_0.db`（训练路径）
+- `profiler_output/agent_loop_rollout_replica_0/*/ascend_pytorch_profiler_0.db`（推理路径）
+
+如果推理路径 DB 缺失（vLLM 在 Ascend 上 device-side 数据可能为空），检查 `api_statistic_*.csv` 作为备选，并在报告中标注。
+
+
+### 阶段 4：算子提取与对比分析（预计 3-5 分钟）
+
+#### 4.1 从 Profiler DB 提取算子列表
+
+使用 `ascend_pytorch_profiler_db_explorer` skill 或直接 SQL 查询 DB。
+
+**训练路径算子提取**（从 `profiler_output/e2e/*/ascend_pytorch_profiler_0.db`）：
+
+```sql
+-- 提取训练路径所有唯一 CANN 算子名及调用次数
+SELECT DISTINCT task_name, COUNT(*) as cnt
+FROM COMPUTE_TASK_INFO
+GROUP BY task_name
+ORDER BY cnt DESC;
+```
+
+**推理路径算子提取**（从 `profiler_output/agent_loop_rollout_replica_0/*/ascend_pytorch_profiler_0.db`）：
+
+```sql
+-- 同上，提取推理路径所有唯一 CANN 算子
+SELECT DISTINCT task_name, COUNT(*) as cnt
+FROM COMPUTE_TASK_INFO
+GROUP BY task_name
+ORDER BY cnt DESC;
+```
+
+将结果分别保存为：
+- `profiler_output/megatron_runtime_ops.json`
+- `profiler_output/vllm_runtime_ops.json`
+
+#### 4.2 构建算子全量对比表
+
+按 Transformer 层结构逐模块对比，生成标准对比表：
+
+| 维度 | 训练路径 (Megatron) | 推理路径 (vLLM) | 差异类型 | 差异等级 |
+|------|---------------------|-----------------|----------|:--------:|
+| 注意力 | 列出运行时算子（如 `FlashAttentionScore`） | 列出运行时算子（如 `FusedInferAttentionScore`） | 算子不同 / 融合vs非融合 | 🔴 |
+| 残差+归一化 | `Add` + `RmsNorm` | `AddRmsNormBias` | 融合程度不同 | 🟠 |
+| 激活函数 | `Swish`（独立 SiLU） | `SwiGlu`（SiLU+Gate 融合） | 融合程度不同 | 🟠 |
+| RoPE | `Sin` + `Cos`（独立） | `_triton_rope`（融合） | 后端实现不同 | 🟠 |
+| MatMul（线性层） | `MatMulV2` | `MatMulV2` | 相同 | 🟢 |
+| KV Cache | 无 | `ReshapeAndCacheNdKernel` | 推理独有 | 🟡 |
+| 反向传播 | `RmsNormGrad`, `FlashAttentionScoreGrad` 等 | 无 | 训练独有 | 🟡 |
+
+#### 4.3 差异等级判定规则
+
+| 标记 | 颜色 | 判定条件 | 精度风险 |
+|:----:|:----:|---------|:--------:|
+| 🔴 | 红 | 一方使用融合 kernel，另一方使用多个独立 kernel（如 Attention：分离 MatMul+Softmax+MatMul vs 单 kernel FusedInferAttentionScore） | 高 |
+| 🟠 | 橙 | 同类操作但融合程度不同（如 Add+RMSNorm vs AddRmsNormBias），或不同后端实现同一数学运算（如 NPU RoPE vs Triton RoPE） | 中 |
+| 🟡 | 黄 | 实现方式不同但数学语义等价，或仅单侧存在且另一侧有等价替代 | 低 |
+| 🟢 | 绿 | 相同基本算子，或训练/推理单侧独占且无等价替代 | 极低 |
+
+#### 4.4 提取代码调用栈（关键）
+
+对每个 🔴 和 🟠 差异算子，从以下源码路径标注代码调用栈：
+
+| 算子类别 | 训练路径关键源码 | 推理路径关键源码 |
+|---------|----------------|----------------|
+| Attention | `megatron/core/transformer/dot_product_attention.py` → `FlashAttentionScore` | `vllm_ascend/attention/` → `FusedInferAttentionScore` |
+| RMSNorm | `megatron/core/transformer/torch_norm.py` | `vllm_ascend/layers/layernorm.py` → `AscendRMSNorm` |
+| SwiGLU | `megatron/core/transformer/mlp.py` | `vllm_ascend/layers/activation.py` → `AscendSiluAndMul` |
+| RoPE | `megatron/core/transformer/attention.py` → `Sin`/`Cos` | `vllm_ascend/layers/rotary_embedding.py` → `_triton_rope` |
+
+**提取方式**（优先使用 MSTX 标记）：
+1. 查询 DB 中 `MSTX` 表获取算子与 Python 调用栈的对应关系
+2. 若 MSTX 不可用，则标注算子对应的源码文件路径和关键函数名
+3. 在报告中以 call stack 形式展示：`上层调用路径 → 算子类/函数 → CANN 算子名`
+
+---
+
+### 阶段 5：生成最终产物（预计 3-5 分钟）
+
+必须生成以下 **2 个文件**：
+
+#### 产物 1：完整报告 (Markdown) → `<工作目录>/train_infer_op_diff_report.md`
+
+**必须包含**以下章节（参考 `references/final_train_infer_op_analysis.md` 结构，并在此基础上扩展代码调用栈）：
+
+1. **标题 + 元信息**（模型名、配置、脚本路径、采集方式、生成时间）
+2. **算子证据来源**（表格：路径、数据源、DB 文件、算子数）
+3. **训练路径算子全量列表**（运行时采集的 CANN 算子 TOP30+，含调用次数和用途分类）
+4. **推理路径算子全量列表**（同上）
+5. **核心差异：训练 vs 推理算子对比表**（含差异类型和 🔴🟠🟡🟢 等级标记）
+6. **代码调用栈**（每个 🔴🟠 差异算子附源码路径和调用链）
+7. **结论与建议**（P0-P3 优先级，含具体操作）
+
+格式要求：
+- 使用 HTML 颜色标记差异等级：`<span style="color:red">🔴 高差异</span>`、`<span style="color:orange">🟠 中差异</span>`、`<span style="color:gold">🟡 低差异</span>`、`<span style="color:green">🟢 无差异</span>`
+- 代码调用栈使用折叠块 `<details><summary>调用栈详情</summary>...</details>`
+
+#### 产物 2：算子对比表 (CSV UTF-8 BOM) → `<工作目录>/operator_diff_table.csv`
+
+```csv
+操作,训练算子,推理算子,训练调用次数,推理调用次数,差异类型,差异等级,训练代码路径,推理代码路径
+注意力,FlashAttentionScore,FusedInferAttentionScore,672,224,算子不同,🔴,megatron/core/transformer/dot_product_attention.py,vllm_ascend/attention/ascend_attention.py
+残差+归一化,Add(6484)+RmsNorm(2712),AddRmsNormBias(448),6484+2712,448,融合vs非融合,🟠,megatron/core/transformer/transformer_layer.py,vllm_ascend/layers/layernorm.py
+```
+
+**保存格式**：文件开头写入 UTF-8 BOM `\xef\xbb\xbf`
+
+
+---
+
+## 执行顺序约束
+
+```
+阶段 1 (配置解析 + 备份脚本)
+  └─→ 阶段 2 (集成 Profiler 到脚本)
+        └─→ 阶段 3 (运行 RL 脚本采集算子)  ← 最耗时
+              └─→ 阶段 4 (提取算子 + 对比分析)
+                    └─→ 阶段 5 (生成报告)
+```
+
+- 各阶段严格串行，不可跳过
+- 阶段 3 运行期间需等待脚本执行完成
+- 每个阶段完成后立即整理中间结果，避免丢失
+
+---
+
+## 时间控制
+
+| 阶段   | 预计耗时 | 说明 |
+|------|---------|------|
+| 阶段 1 | 2-3 min | 纯文本解析 + 环境检查 |
+| 阶段 2 | 2-3 min | 修改脚本（文本操作） |
+| 阶段 3 | 5-15 min | 运行 RL 脚本（取决于模型大小） |
+| 阶段 4 | 3-5 min | SQL 查询 + 对比分析 |
+| 阶段 5 | 3-5 min | 生成报告和 CSV |
+
+---
+
+## 重要约束
+
+1. **绝对禁止独立分离运行**：不允许编写独立脚本分别运行 Megatron 训练和 vLLM 推理来采集算子数据
+2. **绝对禁止跳过运行时采集**：不允许仅凭源码静态扫描生成最终对比表
+3. **备份优先**：修改脚本前必须先备份
+4**证据闭环**：每个结论必须附 profiler DB 提取的运行时算子证据
+
+## 注意事项
+
+- 脚本运行时间可能较长（0.6B 模型约 5-10 分钟），需在开始前告知用户预计等待时间
+- 如果 profiler DB 表结构不同（如 `ge_task_merge` vs `ge_summary`），需先查询 schema
+- vLLM rollout 的 device-side 算子数据在 Ascend 上可能不完整（`device_1/data` 为空），此时使用 `api_statistic_*.csv` 作为备选，在报告中标注
+- CSV 文件必须使用 UTF-8 with BOM 编码（`\xef\xbb\xbf` 文件头）
+
+## References
+
+- `references/report_template.md` — 报告模板
+- `references/final_train_infer_op_analysis.md` — 实际操作产出的完整报告范例
+

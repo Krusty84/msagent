@@ -118,19 +118,29 @@ PROFILER=(
 | `rollout.profiler.tool_config.npu.discrete=True` | **关键**：rollout 的 vLLM 算子单独存 DB，与训练路径分离 |
 | `level=level1` | 采集 CANN 算子级别数据 |
 
-#### 2.4 DB 输出路径约定
+#### 2.4 输出路径约定（训练/推理采集后端不同，产物形态不同）
 
-运行完成后，profiler 输出目录结构如下（**必须先确认此结构存在，再进行阶段 4 提取**）：
+运行完成后，profiler 输出目录结构如下。**关键：训练与推理两条路径的 profiler 后端不同，产物形态也不同**：
 
 ```
 profiler_output/
-├── e2e/                                         # 训练路径（Megatron actor+ref）
-│   └── <timestamp>/
-│       └── ascend_pytorch_profiler_0.db         # ← 训练算子数据
-└── agent_loop_rollout_replica_0/                # 推理路径（vLLM rollout）
-    └── <timestamp>/
-        └── ascend_pytorch_profiler_0.db          # ← 推理算子数据
+├── e2e/                                              # 训练路径（Megatron actor+ref）
+│   └── <hostname>_<pid>_<ts>_ascend_pt/
+│       └── ASCEND_PROFILER_OUTPUT/
+│           └── ascend_pytorch_profiler_0.db          # ← 训练算子（msprof，已自动解析）
+└── agent_loop_rollout_replica_0/                     # 推理路径（vLLM rollout）
+    └── <hostname>_<pid>_<ts>_ascend_pt/              # ← vllm-ascend torch_npu profiler 原始目录
+        └── （需执行 analyse() 离线解析后才生成 ASCEND_PROFILER_OUTPUT/*.db）
 ```
+
+**机制差异（决定后续流程）**：
+
+| 路径 | profiler 后端 | export_type | 是否自动解析 | 产物 |
+|------|--------------|-------------|:---:|------|
+| 训练（e2e） | CANN msprof（verl） | Db | ✅ 自动 | 直接生成 `ascend_pytorch_profiler_0.db` |
+| 推理（discrete=True） | `torch_npu.profiler`（vllm-ascend） | Text | ❌ 需手动 | 只落 `*_ascend_pt` 目录，须 `analyse()` 后才有 DB |
+
+> 推理侧的 `discrete=True` 由 vLLM 引擎触发 profiler，走 `vllm_ascend/worker/worker.py` 的 `_init_profiler()`（`export_type=ExportType.Text`），不会像训练侧那样自动解析出 DB。
 
 ---
 
@@ -145,17 +155,39 @@ bash <脚本名> 2>&1 | tee profiler_output/run.log
 
 **注意**：必须等待脚本完整执行完毕。此脚本同时运行 Megatron 训练和 vLLM rollout，运行时间取决于模型大小（0.6B 模型约 5-10 分钟）。
 
-#### 3.2 验证 DB 文件生成
+#### 3.2 验证采集产物
+
+**训练路径**（已自动解析为 DB）：
+```bash
+find profiler_output/e2e -name "ascend_pytorch_profiler_0.db" -type f
+```
+确认存在 `profiler_output/e2e/*/ASCEND_PROFILER_OUTPUT/ascend_pytorch_profiler_0.db`。
+
+**推理路径**（原始目录，尚未解析）：
+```bash
+find profiler_output/agent_loop_rollout_replica_0 -maxdepth 2 -type d -name "*_ascend_pt"
+```
+确认存在 `profiler_output/agent_loop_rollout_replica_0/<hostname>_<pid>_<ts>_ascend_pt/` 目录（这是 vllm-ascend `torch_npu.profiler` 的原始输出，**不是 DB**，目录内含 `FRAMEWORK/torch.op_range` 与 `PROF_*/host/data`）。
+
+#### 3.3 对推理侧 ascend_pt 目录执行离线解析（关键步骤，不可跳过）
+
+推理侧 profiler 走 vLLM-Ascend 的 `torch_npu.profiler`（`export_type=Text`），**默认不自动解析**。必须手动调用 `analyse()` 生成 DB，否则推理侧拿不到 device 算子：
 
 ```bash
-find profiler_output -name "ascend_pytorch_profiler_0.db" -type f
+INFER_PT_DIR=$(find profiler_output/agent_loop_rollout_replica_0 -maxdepth 2 -type d -name "*_ascend_pt" | head -1)
+python3 -c "
+from torch_npu.profiler.profiler import analyse
+analyse('${INFER_PT_DIR}')
+"
 ```
 
-**必须**确认以下两个 DB 文件都存在：
-- `profiler_output/e2e/*/ascend_pytorch_profiler_0.db`（训练路径）
-- `profiler_output/agent_loop_rollout_replica_0/*/ascend_pytorch_profiler_0.db`（推理路径）
+解析完成后，推理侧会生成 `ASCEND_PROFILER_OUTPUT/ascend_pytorch_profiler_0.db`（含 `COMPUTE_TASK_INFO` 表 = device 侧 AI Core 真实执行算子）。验证：
 
-如果推理路径 DB 缺失（vLLM 在 Ascend 上 device-side 数据可能为空），检查 `api_statistic_*.csv` 作为备选，并在报告中标注。
+```bash
+find profiler_output/agent_loop_rollout_replica_0 -name "ascend_pytorch_profiler_0.db" -type f
+```
+
+> **说明**：analyse 过程中出现的 `Failed to get acl to npu flow events`、`no such table: TASK` 等告警是 `export_type=Text` 模式的正常现象（推理侧 msprof 格式的 device 二进制为空），**不影响**最终 `COMPUTE_TASK_INFO` 中 device 算子的解析——真实算子来自 host 侧 CANN api_event 记录，analyse 会将其还原为 device 侧算子。
 
 
 ### 阶段 4：算子提取与对比分析（预计 3-5 分钟）
@@ -164,23 +196,27 @@ find profiler_output -name "ascend_pytorch_profiler_0.db" -type f
 
 使用 `ascend_pytorch_profiler_db_explorer` skill 或直接 SQL 查询 DB。
 
-**训练路径算子提取**（从 `profiler_output/e2e/*/ascend_pytorch_profiler_0.db`）：
+**重要**：`COMPUTE_TASK_INFO` 表中算子名字段是 `name`（INTEGER 外键），真实算子名字符串在 `STRING_IDS` 字典表中，必须 JOIN 查询，不能直接查 `task_name`（该列不存在）。
+
+**训练路径算子提取**（从 `profiler_output/e2e/*/ASCEND_PROFILER_OUTPUT/ascend_pytorch_profiler_0.db`）：
 
 ```sql
--- 提取训练路径所有唯一 CANN 算子名及调用次数
-SELECT DISTINCT task_name, COUNT(*) as cnt
-FROM COMPUTE_TASK_INFO
-GROUP BY task_name
+-- 提取训练路径所有唯一 CANN 算子名及调用次数（device 侧真实执行算子）
+SELECT s.value AS task_name, COUNT(*) AS cnt
+FROM COMPUTE_TASK_INFO t
+JOIN STRING_IDS s ON t.name = s.id
+GROUP BY s.value
 ORDER BY cnt DESC;
 ```
 
-**推理路径算子提取**（从 `profiler_output/agent_loop_rollout_replica_0/*/ascend_pytorch_profiler_0.db`）：
+**推理路径算子提取**（从 `profiler_output/agent_loop_rollout_replica_0/*/ASCEND_PROFILER_OUTPUT/ascend_pytorch_profiler_0.db`，即 3.3 解析后产物）：
 
 ```sql
--- 同上，提取推理路径所有唯一 CANN 算子
-SELECT DISTINCT task_name, COUNT(*) as cnt
-FROM COMPUTE_TASK_INFO
-GROUP BY task_name
+-- 同上，提取推理路径所有唯一 CANN 算子（device 侧真实执行算子）
+SELECT s.value AS task_name, COUNT(*) AS cnt
+FROM COMPUTE_TASK_INFO t
+JOIN STRING_IDS s ON t.name = s.id
+GROUP BY s.value
 ORDER BY cnt DESC;
 ```
 
@@ -231,7 +267,7 @@ ORDER BY cnt DESC;
 
 ### 阶段 5：生成最终产物（预计 3-5 分钟）
 
-必须生成以下 **2 个文件**：
+必须生成以下 **3 个文件**：
 
 #### 产物 1：完整报告 (Markdown) → `<工作目录>/train_infer_op_diff_report.md`
 
@@ -301,7 +337,7 @@ ORDER BY cnt DESC;
 
 - 脚本运行时间可能较长（0.6B 模型约 5-10 分钟），需在开始前告知用户预计等待时间
 - 如果 profiler DB 表结构不同（如 `ge_task_merge` vs `ge_summary`），需先查询 schema
-- vLLM rollout 的 device-side 算子数据在 Ascend 上可能不完整（`device_1/data` 为空），此时使用 `api_statistic_*.csv` 作为备选，在报告中标注
+- **推理侧必须先 `analyse()` 离线解析**：推理 profiler 产物是 `*_ascend_pt` 目录（vllm-ascend `torch_npu.profiler`，`export_type=Text`），不解析就没有 DB。`device_1/data` 为空是该模式的正常现象，不影响解析后 `COMPUTE_TASK_INFO` 中 device 算子的提取
 - CSV 文件必须使用 UTF-8 with BOM 编码（`\xef\xbb\xbf` 文件头）
 
 ## References

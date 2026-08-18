@@ -115,7 +115,7 @@ PROFILER=(
 | `actor.profiler.enable=True` | 训练 actor 路径采集 |
 | `ref.profiler.enable=True` | 训练 ref 路径采集 |
 | `rollout.profiler.enable=True` | 推理 rollout 路径采集 |
-| `rollout.profiler.tool_config.npu.discrete=True` | **关键**：rollout 的 vLLM 算子单独存 DB，与训练路径分离 |
+| `rollout.profiler.tool_config.npu.discrete=True` | **关键**：触发 vLLM 侧独立 `torch_npu.profiler` 采集，产出 raw `*_ascend_pt` 目录（**非 DB**），须事后 `analyse()` 才落 DB（见阶段 3.3） |
 | `level=level1` | 采集 CANN 算子级别数据 |
 
 #### 2.4 输出路径约定（训练/推理采集后端不同，产物形态不同）
@@ -181,13 +181,45 @@ analyse('${INFER_PT_DIR}')
 "
 ```
 
-解析完成后，推理侧会生成 `ASCEND_PROFILER_OUTPUT/ascend_pytorch_profiler_0.db`（含 `COMPUTE_TASK_INFO` 表 = device 侧 AI Core 真实执行算子）。验证：
+解析完成后，推理侧会生成 `ASCEND_PROFILER_OUTPUT/ascend_pytorch_profiler_0.db`（含 `COMPUTE_TASK_INFO` 表 = device 侧 AI Core 真实执行算子），同时 text 模式还会额外产出 `api_statistic.csv` / `operator_details.csv` / `trace_view.json`（host 侧备选）。验证 DB 已生成：
 
 ```bash
 find profiler_output/agent_loop_rollout_replica_0 -name "ascend_pytorch_profiler_0.db" -type f
 ```
 
-> **说明**：analyse 过程中出现的 `Failed to get acl to npu flow events`、`no such table: TASK` 等告警是 `export_type=Text` 模式的正常现象（推理侧 msprof 格式的 device 二进制为空），**不影响**最终 `COMPUTE_TASK_INFO` 中 device 算子的解析——真实算子来自 host 侧 CANN api_event 记录，analyse 会将其还原为 device 侧算子。
+> **机制说明（关键）**：`analyse()` 不带 `export_type` 时，会从 `profiler_info_*.json` 读取采集时的 `_export_type`。由于 vllm-ascend 采集时是 `["text"]`，本应只走 text 解析；但 **CANN 8.5.0 的 msprof 支持 `text(which will also export the database)` 默认行为**（`torch_npu` 内部 `CannPackageManager.is_support_default_export_db()` 检测），因此会自动补上 db parser，从而同时产出 DB 与 CSV。**若某 CANN 版本不支持该默认行为**（`msprof --help` 输出无 `text(which will also export the database)`），则须显式传 `export_type=['db']`：
+>
+> ```bash
+> python3 -c "
+> from torch_npu.profiler.profiler import analyse
+> analyse('${INFER_PT_DIR}', export_type=['db'])
+> "
+> ```
+>
+> **告警说明**：analyse 过程中出现的 `Failed to get acl to npu flow events`、`Failed to get task data from db`、`no such table: TASK` 等告警是 `export_type=Text` 模式的正常现象（推理侧 msprof 格式的 device 二进制 `device_*/data/` 为空），**不影响**最终 `COMPUTE_TASK_INFO` 中 device 算子的解析——真实算子来自 host 侧 CANN api_event 记录（`CANN_API` 表），analyse 会将其还原为 device 侧算子。
+
+#### 3.4 验证推理侧 device 算子已落地（证据闭环）
+
+解析完成后，必须用 SQL 确认 `COMPUTE_TASK_INFO` 表非空（该表 = device 侧 AI Core 真实执行算子），**不能只确认 DB 文件存在**：
+
+```bash
+python3 -c "
+import sqlite3, glob
+dbs = glob.glob('profiler_output/agent_loop_rollout_replica_0/*/ASCEND_PROFILER_OUTPUT/ascend_pytorch_profiler_0.db')
+assert dbs, '推理侧 DB 缺失'
+c = sqlite3.connect(dbs[0])
+n = c.execute('SELECT COUNT(*) FROM COMPUTE_TASK_INFO').fetchone()[0]
+print('COMPUTE_TASK_INFO rows =', n)
+"
+```
+
+- ✅ `n > 0`：推理侧 device 算子已落地，进入阶段 4。
+- ❌ DB 缺失或 `n == 0`：按以下顺序兜底：
+
+| 兜底 | 触发条件 | 操作 |
+|------|---------|------|
+| 1. 显式导出 DB | `analyse()` 后无 `ascend_pytorch_profiler_0.db`（CANN 不支持默认 `text` 同时导 db） | `analyse('${INFER_PT_DIR}', export_type=['db'])` 后重新验证 |
+| 2. host 侧 CSV 备选 | DB 存在但 `COMPUTE_TASK_INFO` 为空 | 改用 `ASCEND_PROFILER_OUTPUT/api_statistic.csv`（或 `operator_details.csv`）中的 CANN 算子名统计，报告中标注「host 侧备选，非 device 侧」 |
 
 
 ### 阶段 4：算子提取与对比分析（预计 3-5 分钟）
@@ -331,13 +363,13 @@ ORDER BY cnt DESC;
 1. **绝对禁止独立分离运行**：不允许编写独立脚本分别运行 Megatron 训练和 vLLM 推理来采集算子数据
 2. **绝对禁止跳过运行时采集**：不允许仅凭源码静态扫描生成最终对比表
 3. **备份优先**：修改脚本前必须先备份
-4**证据闭环**：每个结论必须附 profiler DB 提取的运行时算子证据
+4. **证据闭环**：每个结论必须附 profiler DB 提取的运行时算子证据
 
 ## 注意事项
 
 - 脚本运行时间可能较长（0.6B 模型约 5-10 分钟），需在开始前告知用户预计等待时间
 - 如果 profiler DB 表结构不同（如 `ge_task_merge` vs `ge_summary`），需先查询 schema
-- **推理侧必须先 `analyse()` 离线解析**：推理 profiler 产物是 `*_ascend_pt` 目录（vllm-ascend `torch_npu.profiler`，`export_type=Text`），不解析就没有 DB。`device_1/data` 为空是该模式的正常现象，不影响解析后 `COMPUTE_TASK_INFO` 中 device 算子的提取
+- **推理侧必须先 `analyse()` 离线解析**：推理 profiler 产物是 `*_ascend_pt` 目录（vllm-ascend `torch_npu.profiler`，`export_type=Text`），不解析就没有 DB。`device_*/data` 为空（无 `ffts_profile.data`/`stars_soc.data`）是该模式的正常现象，**不影响** device 算子提取——`analyse()` 会从 host 侧 `CANN_API`（api_event 记录）还原出 `COMPUTE_TASK_INFO`（device 侧算子）；仅在 `COMPUTE_TASK_INFO` 仍为空时才需要走 3.4 的兜底（`export_type=['db']` 或 `api_statistic.csv`）
 - CSV 文件必须使用 UTF-8 with BOM 编码（`\xef\xbb\xbf` 文件头）
 
 ## References

@@ -13,7 +13,6 @@ VERIFY_WHEEL_INSTALL="${VERIFY_WHEEL_INSTALL:-0}"
 SMOKE_IMPORT_MODULE="${SMOKE_IMPORT_MODULE:-}"
 SMOKE_RESOURCE_PATH="${SMOKE_RESOURCE_PATH:-resources/configs/default/config.mcp.json}"
 SMOKE_SKILL_PATH="${SMOKE_SKILL_PATH:-resources/configs/default/skills/README.md}"
-MSAGENT_BUNDLE_WEB_UI="${MSAGENT_BUNDLE_WEB_UI:-0}"
 PROJECT_NAME=""
 REQUIRES_PYTHON=""
 MIN_PYTHON_MAJOR=3
@@ -267,16 +266,6 @@ build_wheel() {
   "${python_bin}" -m build --wheel --outdir "${DIST_DIR}" "${REPO_ROOT}"
 }
 
-configure_build_flags() {
-  export MSAGENT_BUNDLE_WEB_UI
-
-  if is_truthy_flag "${MSAGENT_BUNDLE_WEB_UI}"; then
-    log "Bundling web UI payload: enabled (MSAGENT_BUNDLE_WEB_UI=${MSAGENT_BUNDLE_WEB_UI})"
-  else
-    log "Bundling web UI payload: disabled (set MSAGENT_BUNDLE_WEB_UI=1 to include it)"
-  fi
-}
-
 find_built_wheel() {
   find "${DIST_DIR}" -maxdepth 1 -type f -name '*.whl' | sort | tail -n 1
 }
@@ -363,7 +352,6 @@ main() {
   load_project_metadata "${python_bin}"
   ensure_supported_python "${python_bin}"
   detect_skills_path
-  configure_build_flags
 
   if [[ -n "${SMOKE_RESOURCE_PATH}" ]] && [[ ! -f "${REPO_ROOT}/${SMOKE_RESOURCE_PATH}" ]]; then
     log "Smoke resource path ${SMOKE_RESOURCE_PATH} does not exist in repository; skipping resource check."

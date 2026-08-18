@@ -32,7 +32,7 @@ Ascend生态下利用Agent调试调优存在几个典型难点：
 
 | 价值点 | 说明 |
 | -- | -- |
-| 统一入口 | 通过 `msagent` CLI 与 Web 模式暴露统一入口，降低学习和切换成本。 |
+| 统一入口 | 通过 `msagent` CLI 暴露统一入口，降低学习和切换成本。 |
 | 领域分治 | 用 Agent + SubAgent + Skill 的组合承载不同领域知识，而不是把所有逻辑塞进一个 Prompt。 |
 | 配置驱动 | LLM、Agent、Checkpointer、MCP、Sandbox、Approval 均通过 `.msagent/` 本地配置驱动。 |
 | 可控扩展 | Tool Pattern、Skill Pattern、MCP include/exclude 共同限定能力边界。 |
@@ -44,7 +44,7 @@ Ascend生态下利用Agent调试调优存在几个典型难点：
 
 - 支持多专业 Agent 并保持统一运行时模型。
 - 支持本地配置、默认模板、版本迁移和目录式扩展。
-- 支持 CLI/TUI 与 Web 两种交互形式共用同一套图运行时。
+- 支持 CLI/TUI 交互使用统一的图运行时。
 - 支持 Tool、Skill、MCP 的可组合装配与精细过滤。
 - 支持长会话上下文治理，包括检查点、记忆注入、压缩卸载与大结果外置。
 - 为测试、打包、文档发布提供稳定边界。
@@ -60,7 +60,7 @@ Ascend生态下利用Agent调试调优存在几个典型难点：
 ### 1. 设计原则
 
 - **配置优先**：模型、Agent、MCP、审批、检查点都通过配置解析，不将策略写死在业务逻辑中。
-- **装配集中**：通过 `Initializer` 统一装配图运行时，避免 CLI、Web、测试各自拼装依赖。
+- **装配集中**：通过 `Initializer` 统一装配图运行时，避免 CLI、测试各自拼装依赖。
 - **边界清晰**：CLI 负责交互，`ConfigRegistry` 负责配置，`AgentFactory` 负责图构建，`MessageDispatcher` 负责消息流。
 - **渐进扩展**：新增 Agent、Skill、MCP 服务时优先沿现有目录结构和过滤规则扩展，而不是修改核心主流程。
 - **运行时可控**：通过审批、超时、重试、上下文压缩和工具结果外置来控制复杂场景风险。
@@ -72,10 +72,8 @@ Ascend生态下利用Agent调试调优存在几个典型难点：
 ```mermaid
 flowchart TB
     User["用户 / 调优工程师"] --> CLI["CLI / TUI 会话层<br/>app.py + chat.py + Session"]
-    User --> WEB["Web 模式<br/>LangGraph Server + deep-agents-ui"]
 
     CLI --> INIT["Initializer<br/>运行时装配与缓存中心"]
-    WEB --> INIT
 
     INIT --> REG["ConfigRegistry<br/>.msagent 配置加载/迁移"]
     INIT --> AF["AgentFactory<br/>deepagents 图构建"]
@@ -106,7 +104,7 @@ flowchart TB
 
 整体上，`msAgent` 采用“**入口层统一、运行时集中装配、能力模块解耦**”的方案：
 
-- CLI 与 Web 不是两套不同产品，而是两种前端入口，最终都依赖 `Initializer.create_graph()` 组装同一类图运行时。
+- CLI/TUI 作为统一入口，所有交互最终都依赖 `Initializer.create_graph()` 组装同一类图运行时。
 - `ConfigRegistry` 负责把模板资源、工作目录配置和历史兼容迁移整理为强类型配置对象。
 - `AgentFactory` 负责把 LLM、工具、技能、中间件、后端和检查点真正拼成一个 `CompiledStateGraph`。
 - `MessageDispatcher` 负责运行时阶段的消息流、流式渲染、审批恢复、自动压缩和 token 统计。
@@ -116,7 +114,7 @@ flowchart TB
 
 | 模块 | 代表路径 | 主要职责 | 设计要点 |
 | -- | -- | -- | -- |
-| CLI 启动层 | `src/msagent/cli/bootstrap/` | 解析命令、启动会话、路由到 chat/config/web 模式 | `normalize_argv()` 将裸调用自动路由到默认交互会话。 |
+| CLI 启动层 | `src/msagent/cli/bootstrap/` | 解析命令、启动会话、路由到 chat/config 模式 | `normalize_argv()` 将裸调用自动路由到默认交互会话。 |
 | 会话层 | `src/msagent/cli/core/` | 保存线程上下文、会话状态、热切换 Agent/Model、工具输出记忆 | `Context` 与 `Session` 将运行期 UI 状态与图生命周期隔离。 |
 | 消息分发层 | `src/msagent/cli/dispatchers/` | 处理 slash 命令、普通消息、流式输出、审批恢复 | `MessageDispatcher` 是单轮对话执行主入口。 |
 | 配置层 | `src/msagent/configs/` | 定义 Agent/LLM/MCP/Approval/Checkpointer 等配置模型 | 通过 Pydantic 建模，并保留版本迁移逻辑。 |
@@ -126,7 +124,6 @@ flowchart TB
 | MCP 层 | `src/msagent/mcp/` | 解析 MCP 连接、获取 MCP 工具、附加超时包装 | 默认使用 `tool_name_prefix=True` 解决工具命名空间问题。 |
 | Tool/Skill 层 | `src/msagent/tools/`, `src/msagent/skills/` | 统一 Tool 包装、能力目录化、Skill 扫描与读取 | `fetch_tools/get_tool/run_tool` 与 `fetch_skills/get_skill` 形成自描述能力接口。 |
 | 中间件层 | `src/msagent/middlewares/` | 工具结果外置、token 统计、审批等横切能力 | 让运行时功能增强不侵入核心业务链路。 |
-| Web 层 | `src/msagent/web/` | 导出 LangGraph Graph，拉起并定制官方 deep-agents-ui | 复用同一运行时，同时做品牌化封装。 |
 
 ### 4. 启动与装配设计
 
@@ -164,7 +161,7 @@ sequenceDiagram
 #### 4.2 启动链路关键点
 
 1. **CLI 兼容路由**
-   `legacy.py` 将命令表面收敛为 `config`、`web` 与默认会话三类，同时保留 `--agent`、`--model`、`--approval-mode` 等运行参数。
+   `legacy.py` 将命令表面收敛为 `config` 与默认会话两类，同时保留 `--agent`、`--model`、`--approval-mode` 等运行参数。
 
 2. **工作目录本地化配置**
    `ConfigRegistry.ensure_config_dir()` 在首次运行时把 `resources/configs/default/` 复制到 `<working-dir>/.msagent/`，并尽量将其加入 `.git/info/exclude`，保证配置本地化、避免误提交。
@@ -177,9 +174,6 @@ sequenceDiagram
    - `cached_mcp_server_names`
 
    这些缓存既服务于 `/tools`、`/skills`、`/mcp` 等交互命令，也服务于后续 Prompt 模板渲染。
-
-4. **CLI/Web 共用图构造**
-   Web 模式通过 `src/msagent/web/runtime.py` 读取环境变量后，同样调用 `initializer.create_graph()`；因此文档、测试和维护上只需要守住一套核心运行时行为。
 
 ### 5. Agent 体系设计
 
@@ -577,19 +571,6 @@ CLI 层由 `Session + InteractivePrompt + Renderer + Dispatcher/Handler` 组成�
 - 键盘快捷键：审批模式切换、bash mode、工具输出查看器、快捷帮助。
 - SIGINT 行为统一：第一下优先中断当前流，之后才退出会话。
 
-#### 10.2 Web 模式设计
-
-Web 模式并不实现独立推理链路，而是：
-
-- 通过 `msagent web` 启动 LangGraph 服务。
-- 导出同一个 graph 给 Web 前端消费。
-- 通过 `src/msagent/web/ui.py` 对官方 `deep-agents-ui` 做本地缓存、依赖安装、默认配置注入和品牌化修改。
-
-这让 `msAgent` 可以同时保有：
-
-- 面向开发者的 CLI 原生体验。
-- 面向演示、可视化和远程接入的 Web 体验。
-
 ### 11. 安全、可靠性与可维护性设计
 
 #### 11.1 安全设计
@@ -611,7 +592,7 @@ Web 模式并不实现独立推理链路，而是：
 - 核心装配逻辑集中在 `Initializer`，降低多入口重复实现。
 - 配置模型独立于运行时逻辑，便于增量演进和迁移。
 - 目录化资源组织（Agent/Prompt/Skill/MCP）降低维护者理解成本。
-- CLI、Web、测试共用同一套 graph 构造逻辑，减少行为分叉。
+- CLI、测试共用同一套 graph 构造逻辑，减少行为分叉。
 
 ## 使用说明
 
@@ -754,25 +735,10 @@ MCP 配置位于 `.msagent/config.mcp.json`。默认服务如下：
 
 新增后即可通过 `/agents` 或 `-a <agent>` 使用。
 
-#### 3.3 Web 模式
-
-启动 Web 运行模式：
-
-```bash
-msagent web --host 127.0.0.1 --port 2024 --ui-port 3000
-```
-
-如果只需要 API Server：
-
-```bash
-msagent web --no-ui
-```
-
 ### 4. 使用约束与限制
 
 - `msAgent` 的核心能力边界依赖本地配置与工作目录，切换目录相当于切换项目级上下文。
 - MCP 工具是否可用不仅由配置决定，还取决于本地命令、网络与远端服务状态。
-- Web UI 启动依赖 Node.js/npm 或预打包的 standalone 资源。
 - 长会话虽然支持压缩与检查点，但外部工具输出异常巨大时，仍需通过 Tool Pattern 和问题分解控制范围。
 
 ## 测试设计
@@ -784,7 +750,7 @@ msagent web --no-ui
 - 配置兼容性与模板迁移是否稳定。
 - 运行时 graph 装配是否符合预期。
 - Tool / Skill / MCP 过滤边界是否正确。
-- CLI 交互、审批恢复、上下文压缩、Web 导出等关键链路是否可工作。
+- CLI 交互、审批恢复、上下文压缩等关键链路是否可工作。
 - 多 Provider / 多后端兼容逻辑在回归后是否仍能运行。
 
 截至当前仓库状态，本地测试目录包含 129 个测试文件、约 293 个测试用例，已经形成“单元为主、集成补强、E2E 兜底”的测试体系。
@@ -794,7 +760,7 @@ msagent web --no-ui
 | 层级 | 目标 | 代表对象 | 典型测试文件 |
 | -- | -- | -- | -- |
 | 单元测试 | 验证纯逻辑、配置解析、工具适配、辅助函数行为 | Config Model、LLM/MCP/Tool Factory、UI 组件、工具辅助函数 | `test_llm_factory.py`、`test_mcp_client.py`、`test_path_utils.py` |
-| 集成测试 | 验证多模块协同、graph 装配、上下文注入、CLI handler 行为 | `Initializer`、`AgentFactory`、Dispatcher/Handler、Web runtime | `test_agent_factory_runtime.py`、`test_initializer_runtime_context.py`、`test_web_runtime.py` |
+| 集成测试 | 验证多模块协同、graph 装配、上下文注入、CLI handler 行为 | `Initializer`、`AgentFactory`、Dispatcher/Handler | `test_agent_factory_runtime.py`、`test_initializer_runtime_context.py` |
 | 端到端测试 | 验证真实入口命令、stdout 呈现、fake backend 下的用户路径 | `msagent` 可执行入口 | `tests/e2e/test_msagent_entrypoint_e2e.py` |
 | 文档/打包验证 | 保证资源打包、版本号与文档工程可持续构建 | `hatch_build`、包导入与版本兼容 | `test_hatch_build.py`、`test_package_imports.py`、`test_config_versions.py` |
 
@@ -904,24 +870,7 @@ msagent web --no-ui
 - `tests/ut/middlewares/test_token_cost_extraction.py`
 - `tests/ut/configs/test_timeout_controls.py`
 
-#### 3.6 Web 模式与导出测试
-
-**目标**：保证 Web graph 复用与缓存语义稳定，避免不同入口行为分叉。
-
-重点用例：
-
-- `load_web_graph()` 只构造一次 graph。
-- graph 导出失败时能正确回抛异常。
-- cleanup 在正常循环和 fallback 新事件循环下都可执行。
-- UI 品牌化与默认配置注入逻辑可通过单元测试补充验证。
-
-现有代表测试：
-
-- `tests/ut/web/test_web_runtime.py`
-- `tests/ut/web/test_web_launcher.py`
-- `tests/ut/tools/test_web_search_tool.py`
-
-#### 3.7 端到端测试
+#### 3.6 端到端测试
 
 **目标**：从真实入口验证用户能否走通关键最短路径。
 
@@ -955,7 +904,6 @@ msagent web --no-ui
 | 配置模型与模板 | `ConfigRegistry`、版本兼容、模板迁移相关测试 |
 | 运行时装配 | `AgentFactory`、`Initializer`、`MCPClient` 相关测试 |
 | CLI/TUI 交互 | command、renderer、completer、interrupt 相关测试 |
-| Web 导出与前端接入 | `test_web_runtime.py`、`test_web_launcher.py`、`test_web_search_tool.py` |
 | 发布入口兜底 | E2E 入口测试 |
 
 ## 附录

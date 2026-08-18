@@ -62,10 +62,8 @@ async def test_context_create_keeps_alias_and_exposes_resolved_model(
     assert context.model_display == "deepseek-chat (openai)"
 
 
-def test_agent_context_defaults_support_web_runtime(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("MSAGENT_WEB_WORKING_DIR", str(tmp_path))
-
+def test_agent_context_defaults_to_cwd() -> None:
     context = AgentContext()
 
     assert context.approval_mode == ApprovalMode.ACTIVE
-    assert context.working_dir == tmp_path.resolve()
+    assert context.working_dir == Path.cwd().resolve()

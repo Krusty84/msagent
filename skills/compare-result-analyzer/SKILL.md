@@ -195,7 +195,7 @@ Agent SHALL 读取每张卡的 per-card JSON，按 **`references/multi_card_rule
 - 验证结果含义：
   - ✅ 通过：CPU vs NPU 结果一致（dtype 自适应容差下）→ 算子实现无问题，可排除嫌疑
   - ❌ 失败：CPU vs NPU 结果有差异 → 确认问题，标记为已知根因
-  - ⚠️ 未注册：`verify_op.py` 自动注册失败（非"不在注册表中"）→ 无法自动验证，需手动排查或 `--register` 注册
+  - ⚠️ 未注册：`verify_op.py` 自动注册失败（非"不在注册表中"）→ 无法自动验证，需手动排查或在 `_verify_core.py` 中通过 `@register_op` 装饰器手动注册
   - 构造质量差：输入 tensor 构造时 l2norm 偏差或 clamp 比例超标 → 验证结论置信度降低，仅供参考
 - 反向验证时，`verify_op.py` 自动使用同调用序号（instance）的前向数据构造计算图。若该 instance 无前向数据，验证失败并报错"未找到同调用序号的前向数据"。
 - **Read `assets/verify_report_template.md`** 获取完整报告模板
@@ -206,7 +206,7 @@ Agent SHALL 读取每张卡的 per-card JSON，按 **`references/multi_card_rule
 - **verify 语义边界**：verify 用 NPU 统计值自构造输入，只能证明实现一致性，**无法覆盖「weight/bias 参数值在两侧真实不同」的根因类型**——当根因模式为「参数行脏 + 输出放大」时，验证报告须标注「✅ 通过仅证明实现一致，不排除参数值差异」；verify 通过 ≠ 根因排除
 - **验证受限说明**：当验证流程无法正常完成（或结论不可靠）时，agent SHALL 在验证报告中说明原因（标准化模板详见 `references/verify_op.md`「验证未能正常完成的情况」章节），区分以下场景：
   - **NPU 环境不可用**：「⚠️ 验证环境不可用——NPU 设备未授权/不可达，跳过单算子验证」
-  - **自动注册失败**：「⚠️ 自动注册失败——算子 `<name>` 三层递进注册均未命中，需手动 `--register` 注册」
+  - **自动注册失败**：「⚠️ 自动注册失败——算子 `<name>` 三层递进注册均未命中，需在 `_verify_core.py` 中通过 `@register_op` 装饰器手动注册」
   - **混合 dtype 跳过**：「⚠️ 跳过——算子 `<name>` 输入/输出含混合 dtype，verify_op.py 不支持」
   - **构造质量差**：「⚠️ 构造质量差——l2norm 偏差 X%，clamp 比例 Y%，验证结论置信度降低，仅供参考」
   - **无法重建计算图**：「⚠️ 无法重建——未找到同调用序号的前向数据，反向验证不可用」

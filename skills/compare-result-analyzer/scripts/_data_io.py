@@ -206,6 +206,9 @@ def meta_errors(rows):
 # Built once at analysis start, used by get_input_nres_for_op to avoid
 # O(N) full-table scans on every call (especially in DOWNSTREAM_ABSORBED).
 _row_index_cache = {}
+# 记录构建 cache 的数据源 id(rows)，用于校验调用方传入的 rows 是否与 cache 一致。
+# 不一致时回退全扫描，避免 cache 被静默套用到错误数据源（防 footgun）。
+_cache_source_id = None
 
 
 def _build_row_index(rows):
@@ -214,7 +217,9 @@ def _build_row_index(rows):
     Called once before propagation analysis. Eliminates O(N²) behavior
     in get_input_nres_for_op which previously scanned all rows per call.
     """
+    global _cache_source_id
     _row_index_cache.clear()
+    _cache_source_id = id(rows)
     for r in rows:
         name = r.get('NPU Name', '')
         if not name:
@@ -232,12 +237,14 @@ def get_input_nres_for_op(rows, prefix, direction='forward'):
     """获取算子的所有输入行的指标值（NRE、MeanRE、MeanBias、shape、dtype）。
 
     Task 7.1: Uses row index cache for O(1) lookup when available.
-    Falls back to full O(N) scan if cache is empty (backward compatible).
+    Falls back to full O(N) scan if cache is empty or rows 与 cache 数据源
+    不一致（防 footgun：cache 是按某一 rows 构建的，传入不同 rows 时
+    必须降级全扫描，否则会静默返回错结果）。
 
     返回 [(param_key, nre, mean_re, max_re, shape, dtype, mean_bias), ...]，按 param 排序。
     """
-    # Use cache when available (Task 7.1)
-    if _row_index_cache:
+    # Use cache only when data source matches (Task 7.1)
+    if _row_index_cache and id(rows) == _cache_source_id:
         full_prefix = prefix + '.'
         input_nres = []
         cached_rows = _row_index_cache.get((prefix, direction), [])
@@ -344,4 +351,3 @@ def all_bad_nodes_detail(nodes, threshold):
         })
 
     return bad, result
-

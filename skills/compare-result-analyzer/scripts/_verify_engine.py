@@ -73,7 +73,7 @@ def verify_operator(op_group: OpGroup,
     if fn is None:
         err_dir = direction if direction else "forward"
         results.append(VerifyResult(
-            op_name=op_group.op_name,
+            op_name=f"{op_group.op_name}.{op_group.instance}.{err_dir}",
             instance=op_group.instance,
             direction=err_dir,
             tensor_name="N/A",
@@ -81,17 +81,14 @@ def verify_operator(op_group: OpGroup,
             max_diff=0, l2norm_diff=0, mean_diff=0,
             max_rel_err=0, mean_rel_err=0,
             passed=False,
-            error=f"算子 '{op_group.op_name}' 未在注册表中找到且自动注册失败，请使用 --register 注册"
+            error=f"算子 '{op_group.op_name}' 未注册（未在注册表中找到且自动注册失败），请在 _verify_core.py 中通过 @register_op 装饰器手动注册"
         ))
-        # 统一 op_name 格式
-        for r in results:
-            r.op_name = f"{op_group.op_name}.{op_group.instance}.{r.direction}"
         return results
 
     # ---- 反向验证守卫：当前组无前向数据时直接报错，不尝试空参数调用 ----
     if direction == "backward" and not op_group.fwd_inputs:
         results.append(VerifyResult(
-            op_name=op_group.op_name,
+            op_name=f"{op_group.op_name}.{op_group.instance}.backward",
             instance=op_group.instance,
             direction="backward",
             tensor_name="N/A",
@@ -101,8 +98,6 @@ def verify_operator(op_group: OpGroup,
             passed=False,
             error=f"未找到同调用序号({op_group.instance})的前向数据，无法验证反向"
         ))
-        for r in results:
-            r.op_name = f"{op_group.op_name}.{op_group.instance}.{r.direction}"
         return results
 
     # ---- 前向验证 (direction="backward" 时仍需执行以构造计算图，但不在最终结果中暴露) ----
@@ -157,9 +152,6 @@ def _to_comparison_dtype(t: torch.Tensor) -> torch.Tensor:
 def _verify_forward(op_group, fn, atol, rtol, results):
     """验证前向传播
 
-    P1-6: 混合 dtype 提前检测——构造前检查 input dtype 不一致，
-    跳过并标注 ⚠️（不 wrap autocast，不报 FAIL）。
-
     步骤:
       1. 遍历 op_group.fwd_inputs，对每个 input tensor:
          - 读取其 NPU 统计值 (shape/dtype/mean/l2norm/min/max)
@@ -167,29 +159,13 @@ def _verify_forward(op_group, fn, atol, rtol, results):
          - 生成一次数据 → 创建 cpu_t 和 npu_t 两个 leaf tensor
       2. 把构造好的输入传给 fn，分别在 CPU 和 NPU 上计算
       3. 遍历 op_group.fwd_outputs，比对每个输出的 NPU vs CPU 结果
-    """
-    # P1-6: 混合 dtype 提前检测
-    _input_dtypes = []
-    for ti in op_group.fwd_inputs:
-        dt = ti.npu_dtype.lower().strip() if ti.npu_dtype else ''
-        if dt:
-            _input_dtypes.append(dt)
-    _unique_dtypes = list(set(_input_dtypes))
-    if len(_unique_dtypes) > 1:
-        for ti in op_group.fwd_outputs:
-            results.append(VerifyResult(
-                op_name=op_group.op_name, instance=op_group.instance,
-                direction="forward",
-                tensor_name=f"output.{ti.idx}",
-                shape_match=False,
-                max_diff=0, l2norm_diff=0, mean_diff=0,
-                max_rel_err=0, mean_rel_err=0,
-                passed=False,
-                error=f"⚠️ 混合 dtype 无法验证——input dtypes: {', '.join(_unique_dtypes)}",
-                construct_l2norm_err=0,
-            ))
-        return
 
+    dtype 一致性说明: 不再做"混合 dtype 预检测/跳过"。torch 算子带 bool
+    mask、int64 索引与不同 dtype 数据共存（where/masked_fill/index/gather）
+    是正常签名，类型提升规则与设备无关，NPU/CPU 一致；真正不兼容的组合
+    会在 fn(*inputs) 执行时报错，由下方 try/except 捕获并标注"dtype不匹配"，
+    不需要也无法在构造前精确预判。
+    """
     # 构造前向输入 (一次数据，CPU/NPU 对) + 收集构造质量
     cpu_inputs, npu_inputs = [], []
     fwd_qualities: List[ConstructQuality] = []
@@ -217,10 +193,10 @@ def _verify_forward(op_group, fn, atol, rtol, results):
         # Task 2.1: Detect dtype mismatch and report it specifically,
         # not as a generic FAIL. Mixed-dtype (e.g., fp32 input + bf16 weight)
         # is a reportable conclusion, not a tool error.
+        # 只按 'dtype' 关键词判定：避免 'type' 子串在普通 TypeError 消息
+        # （如 "unsupported operand type(s) ... 'float'"）中误命中。
         error_msg = str(e)
-        is_dtype_error = ('dtype' in error_msg.lower() or
-                          'type' in error_msg.lower() and
-                          ('float' in error_msg.lower() or 'bf16' in error_msg.lower()))
+        is_dtype_error = 'dtype' in error_msg.lower()
         if is_dtype_error:
             error_msg = f"dtype不匹配: {error_msg}"
         else:
@@ -462,10 +438,10 @@ def _verify_backward(op_group, fn, atol, rtol, results):
             npu_out = (npu_out,)
     except Exception as e:
         # Task 2.1: Detect dtype mismatch for backward reconstruction too
+        # 只按 'dtype' 关键词判定：避免 'type' 子串在普通 TypeError 消息
+        # （如 "unsupported operand type(s) ... 'float'"）中误命中。
         error_msg = str(e)
-        is_dtype_error = ('dtype' in error_msg.lower() or
-                          'type' in error_msg.lower() and
-                          ('float' in error_msg.lower() or 'bf16' in error_msg.lower()))
+        is_dtype_error = 'dtype' in error_msg.lower()
         if is_dtype_error:
             error_msg = f"dtype不匹配 (反向重建): {error_msg}"
         else:
@@ -516,15 +492,38 @@ def _verify_backward(op_group, fn, atol, rtol, results):
     bwd_quality = _merge_construct_quality(bwd_fwd_qualities)
 
     # ---- 执行反向传播 ----
-    try:
-        if bwd_out_idx < len(cpu_out) and cpu_out[bwd_out_idx] is not None:
+    # 两侧匹配输出都必须有效：cpu_out/npu_out 来自同一次 fn 调用，结构通常一致，
+    # 但 NPU 算子实现可能与 CPU 不等价（某侧输出为 None）。任一侧无效都应走 else
+    # 记录"匹配的 forward output 无效"，而非让 .backward() 抛泛化异常。
+    if (bwd_out_idx < len(cpu_out) and cpu_out[bwd_out_idx] is not None
+            and bwd_out_idx < len(npu_out) and npu_out[bwd_out_idx] is not None):
+        try:
             cpu_out[bwd_out_idx].backward(grad_cpu)
             npu_out[bwd_out_idx].backward(grad_npu)
-        else:
-            # 匹配到的输出无效，兜底用 output.0
-            cpu_out[0].backward(grad_cpu)
-            npu_out[0].backward(grad_npu)
-    except Exception as e:
+        except Exception as e:
+            for ti in op_group.bwd_outputs:
+                if not ti.is_none:
+                    results.append(VerifyResult(
+                        op_name=op_group.op_name, instance=op_group.instance,
+                        direction="backward",
+                        tensor_name=f"output.{ti.idx}",
+                        shape_match=False,
+                        max_diff=0, l2norm_diff=0, mean_diff=0,
+                        max_rel_err=0, mean_rel_err=0,
+                        passed=False,
+                        error=f"反向执行异常: {e}",
+                        construct_l2norm_err=bwd_quality.l2norm_err,
+                        construct_clamp_ratio=bwd_quality.clamp_ratio,
+                        construct_degraded=bwd_quality.degraded,
+                    ))
+            return
+    else:
+        # 匹配到的 forward output 无效（越界或为 None），无法执行反向：
+        # 不能兜底用 output.0，否则 grad_output 会流向错误的 forward output，
+        # 得到的梯度比对结果无意义且会静默产生误导性结论。显式记错误并返回。
+        error_msg = (f"匹配的 forward output.{bwd_out_idx} 无效"
+                     f"（cpu_out 长度={len(cpu_out)}, npu_out 长度={len(npu_out)}），"
+                     f"无法执行反向")
         for ti in op_group.bwd_outputs:
             if not ti.is_none:
                 results.append(VerifyResult(
@@ -535,7 +534,7 @@ def _verify_backward(op_group, fn, atol, rtol, results):
                     max_diff=0, l2norm_diff=0, mean_diff=0,
                     max_rel_err=0, mean_rel_err=0,
                     passed=False,
-                    error=f"反向执行异常: {e}",
+                    error=error_msg,
                     construct_l2norm_err=bwd_quality.l2norm_err,
                     construct_clamp_ratio=bwd_quality.clamp_ratio,
                     construct_degraded=bwd_quality.degraded,
@@ -612,8 +611,26 @@ def _verify_backward(op_group, fn, atol, rtol, results):
             continue
 
         valid_pos = idx_map[fwd_idx]
-        cpu_grad = cpu_inputs_valid[valid_pos].grad
-        npu_grad = npu_inputs_valid[valid_pos].grad
+        cpu_in = cpu_inputs_valid[valid_pos]
+        npu_in = npu_inputs_valid[valid_pos]
+        # Python 标量参数（<class 'float'> 等）非 leaf tensor，不累积梯度 → 跳过比对
+        if not isinstance(cpu_in, torch.Tensor) or not isinstance(npu_in, torch.Tensor):
+            results.append(VerifyResult(
+                op_name=op_group.op_name, instance=op_group.instance,
+                direction="backward",
+                tensor_name=f"output.{ti.idx}",
+                shape_match=True,
+                max_diff=0, l2norm_diff=0, mean_diff=0,
+                max_rel_err=0, mean_rel_err=0,
+                passed=True,
+                note=f"matched input.{fwd_idx} (scalar param, no grad)",
+                construct_l2norm_err=bwd_quality.l2norm_err,
+                construct_clamp_ratio=bwd_quality.clamp_ratio,
+                construct_degraded=bwd_quality.degraded,
+            ))
+            continue
+        cpu_grad = cpu_in.grad
+        npu_grad = npu_in.grad
 
         # 两边梯度均为 None → 一致 (requires_grad=False)
         if cpu_grad is None and npu_grad is None:
@@ -736,8 +753,6 @@ def print_results(results: List[VerifyResult]):
         print(f"    → [{dir_passed}/{dir_total} passed]")
 
     unregistered = sum(1 for r in results if r.error and '未注册' in str(r.error))
-    actual_failed = failed - unregistered
-
     unable_to_determine = sum(1 for r in results if r.note and '无法判定' in str(r.note))
     actual_failed = failed - unregistered - unable_to_determine
 

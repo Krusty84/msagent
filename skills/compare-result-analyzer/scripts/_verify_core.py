@@ -284,7 +284,7 @@ def group_ops(tensors: List[TensorInfo]) -> Dict[str, OpGroup]:
 #  算子注册表
 # ============================================================
 #  定义算子名到实际 torch 函数的映射。
-#  框架内置常用算子，未内置的通过 --register 注册。
+#  框架内置常用算子，未内置的通过 @register_op 装饰器注册。
 #
 #  forward_fn: (*inputs) → output | Tuple[outputs]
 #  其中 inputs 就是按 CSV 中 input.0/1/... 顺序传入的参数。
@@ -315,14 +315,6 @@ def _resolve_by_getattr(root: Any, dotted_path: str) -> Optional[Callable]:
             return None
         obj = getattr(obj, part)
     return obj if callable(obj) else None
-
-
-def _is_safe_torch_path(name: str) -> bool:
-    """检查是否为安全的 torch.* 路径（仅含字母、数字、点号、下划线）"""
-    if not name.startswith("torch."):
-        return False
-    rest = name[len("torch."):]
-    return bool(re.match(r'^[a-zA-Z0-9._]+$', rest))
 
 
 def _wrap_tensor_method(method: Callable) -> Callable:
@@ -420,10 +412,6 @@ def _try_resolve_op(op_name: str) -> Optional[Callable]:
     Layer 2: 逐层 getattr (torch.* 路径，大小写不敏感)
       torch.nn.functional.linear → torch → .nn → .functional → .linear
 
-    Layer 3: safe eval 兜底 (仅 torch. 白名单)
-      路径只含 [a-zA-Z0-9._] 时 eval(op_name)。
-      禁止任意代码执行。
-
     Returns:
         可调用对象，或 None（推断失败）
     """
@@ -437,13 +425,6 @@ def _try_resolve_op(op_name: str) -> Optional[Callable]:
         fn = _resolve_by_getattr(torch, op_name[len("torch."):])
         if fn is not None:
             return fn
-
-    # Layer 3: safe eval 兜底 (仅 torch. 白名单)
-    if _is_safe_torch_path(op_name):
-        try:
-            return eval(op_name, {"torch": torch})
-        except (AttributeError, TypeError, NameError):
-            pass
 
     return None
 
@@ -484,16 +465,21 @@ def get_operator_fn(op_name: str, auto_register: bool = True) -> Optional[OpFn]:
 
     查找优先级:
       1. OP_REGISTRY 精确匹配
-      2. OP_REGISTRY 通配匹配 (大小写不敏感, key.casefold() in op_name.casefold())
+      2. OP_REGISTRY 大小写不敏感的精确匹配 (op_name.casefold() == key.casefold())
       3. 自动推断注册（auto_register=True 时）
     """
     # 1. 精确匹配
     if op_name in OP_REGISTRY:
         return OP_REGISTRY[op_name]
-    # 2. 通配匹配: 大小写不敏感，已注册的 "torch.bmm" 可匹配 dump 的 "Torch.bmm"
+    # 2. 大小写不敏感的精确匹配
+    #    仅做整串相等比较（不再用子串包含），避免 "torch.matmul" 误匹配
+    #    "torch.matmul_backward" / "torch.matmul_out" 等长名算子。
+    #    op_name 来自 NPU Name 按正则截取，反向由 direction 字段区分，
+    #    不存在 "_backward" 后缀；多卡场景的 _rankN 后缀在当前命名规范下
+    #    也不出现，故无需剥后缀。
     op_lower = op_name.casefold()
     for key, fn in OP_REGISTRY.items():
-        if key.casefold() in op_lower:
+        if op_lower == key.casefold():
             return fn
     # 3. 自动推断注册
     if auto_register:
@@ -822,6 +808,28 @@ def extract_stats(ti: TensorInfo) -> dict:
     }
 
 
+def _to_native_scalar(dtype_str: str, val: float):
+    """把 CSV 中的数值标量按其原生 Python 类型构造（不当 tensor）。
+
+    msProbe 把算子的 Python 标量参数（如 x * 4.0 中的 4.0）记作
+    <class 'float'> 等形式，它本就不是 tensor，而是 Python 标量。
+    这里按原生类型还原：
+      float  → float,  int → int,  bool → bool,  complex → complex(实部, 0)
+    complex 的虚部信息在 CSV 统计值（mean/min/max/l2norm 均为实数）中缺失，
+    无法忠实还原，调用方应据此标记降级。
+    未识别的 dtype 返回 None（正常流程不应到达，parse_csv 已过滤）。
+    """
+    if dtype_str in ("<class 'float'>", "float"):
+        return float(val)
+    if dtype_str in ("<class 'int'>", "int"):
+        return int(val)
+    if dtype_str in ("<class 'bool'>", "bool"):
+        return bool(val)
+    if dtype_str in ("<class 'complex'>", "complex"):
+        return complex(float(val), 0.0)
+    return None
+
+
 def construct_tensor_pair(ti: TensorInfo) -> tuple:
     """从同一份数据构造 (cpu_tensor, npu_tensor) 对 + 构造质量
 
@@ -829,8 +837,10 @@ def construct_tensor_pair(ti: TensorInfo) -> tuple:
     这样 NPU 和 CPU 的输入完全相同，比对出的 diff 只反映计算差异。
 
     Returns:
-        (cpu_tensor, npu_tensor, ConstructQuality)
-        - cpu_tensor / npu_tensor: None 表示该 input 为 None
+        (cpu_input, npu_input, ConstructQuality)
+        - cpu_input / npu_input: 该 input 的构造值。None 表示该 input 为 None；
+          torch.* dtype → leaf tensor；非 torch 数值标量（<class 'float'> 等）
+          → 原生 Python 标量（设备无关，cpu/npu 同值）
         - ConstructQuality: 构造质量指标
 
     注意:
@@ -841,6 +851,21 @@ def construct_tensor_pair(ti: TensorInfo) -> tuple:
     """
     if ti.is_none or ti.shape is None:
         return (None, None, ConstructQuality())
+
+    # 非 torch 前缀的数值标量（<class 'float'> 等）：它本就是 Python 标量
+    # 参数而非 tensor，按原生类型构造后直接传给算子；标量设备无关，
+    # cpu/npu 用同一值即可，不进 tensor 路径、不调用 torch_dtype。
+    if not ti.npu_dtype.startswith("torch."):
+        val = max(ti.npu_min, min(ti.npu_max, ti.npu_mean))
+        py_val = _to_native_scalar(ti.npu_dtype, val)
+        if py_val is None:
+            return (None, None, ConstructQuality())
+        quality = ConstructQuality()
+        if ti.npu_dtype in ("<class 'complex'>", "complex"):
+            # CSV 统计值只有实数，虚部信息缺失，无法忠实还原 complex 标量 → 降级
+            quality.degraded = True
+        return (py_val, py_val, quality)
+
     stats = extract_stats(ti)
     gen = _get_construct_rng_state()
     # 生成一次随机数据，转为 numpy

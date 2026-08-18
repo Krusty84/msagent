@@ -42,11 +42,6 @@ dependencies = [
     "mcp>=1.28.1,<2.0.0"
 ]
 
-[project.optional-dependencies]
-web = [
-    "langgraph-cli[inmem]>=0.4.16,<0.5.0",
-]
-
 [project.scripts]
 msagent = "msagent.cli.bootstrap.app:cli"
 
@@ -94,7 +89,6 @@ force-include = { "src/msagent/py.typed" = "msagent/py.typed" }
 only-include = [
     ".python-version",
     "README.md",
-    "langgraph.json",
     "pyproject.toml",
     "resources",
     "run.py",

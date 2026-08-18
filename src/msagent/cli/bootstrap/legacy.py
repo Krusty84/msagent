@@ -10,7 +10,6 @@ import yaml
 from rich.table import Table
 
 from msagent.cli.bootstrap.chat import handle_chat_command
-from msagent.cli.bootstrap.web import handle_web_command
 from msagent.cli.bootstrap.initializer import initializer
 from msagent.cli.theme import console
 from msagent.configs import ApprovalMode
@@ -31,7 +30,7 @@ DEFAULT_API_ENV_MAP = {
 }
 
 DEFAULT_SESSION_COMMAND = "__session__"
-PUBLIC_COMMANDS = {"config", "web"}
+PUBLIC_COMMANDS = {"config"}
 ROOT_ONLY_FLAGS = {"--version"}
 
 AGENT_HELP = (
@@ -44,12 +43,7 @@ AGENT_HELP = (
     "Minos     Documentation UX and code review."
 )
 
-SESSION_DESCRIPTION = (
-    "Start a chat session with msAgent.\n\n"
-    "subcommands:\n"
-    "  config      Configure msAgent\n"
-    "  web         Start a LangGraph server for deep-agents-ui"
-)
+SESSION_DESCRIPTION = "Start a chat session with msAgent.\n\nsubcommands:\n  config      Configure msAgent"
 
 
 def normalize_argv(argv: list[str]) -> list[str]:
@@ -73,7 +67,7 @@ def create_legacy_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Show version information and exit",
     )
-    subparsers = parser.add_subparsers(dest="cli_command", metavar="{config,web}")
+    subparsers = parser.add_subparsers(dest="cli_command", metavar="{config}")
 
     config_parser = subparsers.add_parser("config", help="Configure msAgent")
     config_parser.add_argument(
@@ -109,52 +103,6 @@ def create_legacy_parser() -> argparse.ArgumentParser:
         default=os.getcwd(),
         help="Working directory for project-local .msagent config",
     )
-
-    web_parser = subparsers.add_parser(
-        "web",
-        help="Start a LangGraph server for deep-agents-ui",
-    )
-    web_parser.add_argument(
-        "-v",
-        "--verbose",
-        action="store_true",
-        help="Enable verbose logging to console and .msagent/app.log",
-    )
-    web_parser.add_argument(
-        "--host",
-        default="127.0.0.1",
-        help="Host interface for the LangGraph dev server",
-    )
-    web_parser.add_argument(
-        "--port",
-        type=int,
-        default=2024,
-        help="Port for the LangGraph dev server",
-    )
-    web_parser.add_argument(
-        "--ui-port",
-        type=int,
-        default=3000,
-        help="Port for the official deep-agents-ui frontend",
-    )
-    web_parser.add_argument(
-        "--no-ui",
-        action="store_true",
-        help="Start only the LangGraph API server without the deep-agents-ui frontend",
-    )
-    web_parser.add_argument(
-        "--no-open",
-        action="store_true",
-        help="Do not open the web UI in the default browser after startup",
-    )
-    web_parser.add_argument(
-        "-w",
-        "--working-dir",
-        default=os.getcwd(),
-        help="Working directory for project-local .msagent config",
-    )
-    web_parser.add_argument("-a", "--agent", default=None, help=AGENT_HELP)
-    web_parser.add_argument("-m", "--model", default=None, help="LLM model alias")
 
     return parser
 
@@ -240,8 +188,6 @@ async def dispatch_legacy_command(args: argparse.Namespace) -> int:
         return await _handle_chat(args)
     if command == "config":
         return await _handle_config(args)
-    if command == "web":
-        return await _handle_web(args)
 
     console.print_error(f"Unknown command: {command}")
     console.print("")
@@ -323,21 +269,6 @@ async def _handle_config(args: argparse.Namespace) -> int:
 
     console.print_success("Configuration saved successfully")
     return 0
-
-
-async def _handle_web(args: argparse.Namespace) -> int:
-    web_args = argparse.Namespace(
-        host=args.host,
-        port=args.port,
-        ui_port=args.ui_port,
-        no_ui=args.no_ui,
-        no_open=args.no_open,
-        working_dir=args.working_dir,
-        agent=args.agent,
-        model=args.model,
-        verbose=args.verbose,
-    )
-    return await handle_web_command(web_args)
 
 
 async def _show_config(registry, working_dir: Path) -> int:

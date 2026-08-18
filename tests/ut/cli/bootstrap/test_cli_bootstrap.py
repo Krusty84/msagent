@@ -54,7 +54,6 @@ def test_normalize_argv_routes_messages_to_default_session() -> None:
         "Minos",
     ]
     assert normalize_argv(["config", "--show"]) == ["config", "--show"]
-    assert normalize_argv(["web", "--host", "0.0.0.0"]) == ["web", "--host", "0.0.0.0"]
 
 
 def test_help_only_exposes_public_commands_only() -> None:
@@ -62,23 +61,11 @@ def test_help_only_exposes_public_commands_only() -> None:
     help_text = parser.format_help()
 
     assert "config" in help_text
-    assert "web" in help_text
+    assert "web" not in help_text
     assert DEFAULT_SESSION_COMMAND not in help_text
     assert "chat" not in help_text
     assert "ask" not in help_text
     assert "mcp" not in help_text
-
-
-def test_web_parser_exposes_host_and_port() -> None:
-    parser = create_parser()
-    args = parser.parse_args(["web", "--host", "0.0.0.0", "--port", "3030", "--ui-port", "3001", "--no-open"])
-
-    assert args.cli_command == "web"
-    assert args.host == "0.0.0.0"
-    assert args.port == 3030
-    assert args.ui_port == 3001
-    assert args.no_ui is False
-    assert args.no_open is True
 
 
 def test_session_parser_no_longer_exposes_resume_flag() -> None:

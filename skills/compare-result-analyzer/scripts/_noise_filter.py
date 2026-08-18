@@ -384,8 +384,3 @@ def classify_near_zero_noise(nodes, threshold, grad_norm_spike=False):
             file=sys.stderr)
 
     return noise_nodes, cutoff_info, result
-
-
-
-
-

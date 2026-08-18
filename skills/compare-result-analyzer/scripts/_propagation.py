@@ -591,6 +591,3 @@ def propagation_analysis(rows, threshold, noise_node_names=None):
         })
 
     return root_cause, absorbed, propagation, input_propagation, pass_through, op_groups_list
-
-
-

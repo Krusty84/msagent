@@ -280,6 +280,3 @@ def detect_data_coverage_gaps(rows, threshold, noise_level=0.01):
         })
 
     return gaps
-
-
-

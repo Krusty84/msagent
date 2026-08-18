@@ -59,6 +59,7 @@ description: 技能的详细描述，说明它做什么，以及什么时候使�
 | --- | --- | --- |
 | `nan-overflow-detection` | 定位 NaN / overflow / gnorm 异常源头 | `帮我找出最早出现溢出的 rank 和算子` |
 | `deterministic-calculation-analysis` | 分析确定性计算问题 | `比对这批 msProbe 数据，找首个不一致 API` |
+| `spike-root-cause-analysis` | 梯度尖刺 (Gradient Spike) 根因定位 | `这个 spike 数据的根因是什么` |
 | `rl-consistency-analysis` | 做训练与推理一致性根因分析 | `分析这次训练和推理不一致的根因` |
 
 ### 2.3 量化 Skills

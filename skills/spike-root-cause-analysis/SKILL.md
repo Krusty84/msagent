@@ -123,7 +123,7 @@ C/D 通常可以从已有数据中获得:
 
 用户只提供 A/B 两个 dump 时，先在数据目录中找同设备的其他 rank/step dump 补成 C/D。确实只有两个 dump 时才降级为 A/B 直接对比，并注明「无对照组，A/B 比值可能混入设备系统偏差」。
 
-**Step 3.2: 选锚点 module** — 至少两个在 A/B/C/D 中命名可对齐的 module。每层代表算子取 module **输出算子**（如 self_attention.MLASelfAttention / mlp.MoELayer——输出携带 module 计算结果；分叉常在 module 内部计算产生，只比 Norm 最大的中间算子会漏掉，如 qkv 投影一致但 attention 输出已分叉）；输出算子不可对齐时回退 Norm 最大可对齐算子。锚点算子必须 A/B 两侧**同一算子**（key 或归一化后同 key；脚本自动归一设备命名差异: TE 前缀、Flash vs Fused、forward/backward 序号）**且两侧都有有效数值**。一侧 NaN/None/缺 key/元素总数不一致 → 该层标「未对齐」: 不算比值、不参与判定、不当作"一致/正常"。**代表算子一致 ≠ 该层无分叉**——分叉可能产生在 module 内部算子，起点层必须按 Step 3.5 展开内部 sub-module 算子对比。
+**Step 3.2: 选锚点 module** — 至少三个在 A/B/C/D 中命名可对齐的 module（锚点不足 3 个时脚本输出 `anchor_warning`，结论必须标注判定不完整）。每层代表算子取 module **输出算子**（如 self_attention.MLASelfAttention / mlp.MoELayer——输出携带 module 计算结果；分叉常在 module 内部计算产生，只比 Norm 最大的中间算子会漏掉，如 qkv 投影一致但 attention 输出已分叉）；输出算子不可对齐时回退 Norm 最大可对齐算子。锚点算子必须 A/B 两侧**同一算子**（key 或归一化后同 key；脚本自动归一设备命名差异: TE 前缀、Flash vs Fused、forward/backward 序号）**且两侧都有有效数值**。一侧 NaN/None/缺 key/元素总数不一致 → 该层标「未对齐」: 不算比值、不参与判定、不当作"一致/正常"。**代表算子一致 ≠ 该层无分叉**——分叉可能产生在 module 内部算子，起点层必须按 Step 3.5 展开内部 sub-module 算子对比。
 
 **Step 3.3: 逐层对比** — 打印表格，每锚点前向+反向各列 Norm:
 

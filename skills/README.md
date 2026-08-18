@@ -35,7 +35,6 @@ description: 技能的详细描述，说明它做什么，以及什么时候使�
 - `references/` 放较长的背景材料和细节说明
 - `assets/` 放模板、图表、数据文件等静态资源
 
-
 ## 2. Skill 索引目录
 
 ### 2.1 性能 Skills
@@ -115,7 +114,6 @@ description: 技能的详细描述，说明它做什么，以及什么时候使�
 | `/add-skill <path>` | 也可直接指定 `SKILL.md` 文件路径。 |
 
 ![add_skill](../docs/zh/figures/add_skill.png)
-
 
 ## 5. 安装 Skill 到其他 Agent
 

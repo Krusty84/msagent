@@ -46,7 +46,7 @@ CSV 直接传目录（自动批量加载多 rank × 多 step），不需要自�
 ### 分析流程
 
 **Step 0: 切分分析** — 脚本自动完成:
-- PP/TP 检测 (`vpp_stage` 多值 / 跨 rank 参数重叠度)
+- PP 检测 (`vpp_stage` 多值)
 - 累积窗口检测: norm 周期性重置 → `step` 实为 micro_step → 派生 `optimizer_step`/`micro_step`。CSV 与 trend.db 同源，走相同检测；短序列 (5-9 step) 用多 rank 共同重置点判窗口边界
 - dump 自动检测单/多 step 结构
 

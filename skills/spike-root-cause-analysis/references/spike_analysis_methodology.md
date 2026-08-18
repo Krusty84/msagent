@@ -71,22 +71,15 @@ Phase 1 接受以下任一格式的梯度监控数据:
    - 如果 vpp_stage > 1 → 存在 PP 切分，不同 stage 处理同一个前反向的不同部分
    - 需要按 vpp_stage 聚合才能得到完整的前反向
 
-2. **TP (Tensor Parallelism) 检测:**
-   - 检查不同 shard/rank 的参数名是否重叠
-   - 如果 shard 间参数名**完全不同** → 存在 TP 切分，多个 rank 共同组成一个模型
-   - 如果 shard 间参数名**完全相同** → 无 TP，每个 rank 有完整模型
-
-3. **确定前反向粒度:**
+2. **确定前反向粒度:**
    - 有 micro_step 字段 → 前反向单位 = `(step, micro_step)`
    - 无 micro_step 字段 → 前反向单位 = `(step,)`
-   - 有 TP → 同一前反向的梯度需要跨 TP rank 聚合后再对比
    - 仅 DP → 每个 rank 独立构成一次前反向，直接按 rank+step 对比
 
 **输出示例:**
 ```
 切分分析结果:
   - vpp_stage: 仅 0 → PP=1
-  - 跨 shard 参数重叠: 100% → 无 TP
   - micro_step 范围: 0-71 → 前反向单位 = (step, micro_step)
   - 结论: 纯 DP，单卡有完整模型，每个 (rank, step, micro_step) = 一次完整前反向
 ```

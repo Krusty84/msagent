@@ -231,7 +231,7 @@ ORDER BY cnt DESC;
 
 ### 阶段 5：生成最终产物（预计 3-5 分钟）
 
-必须生成以下 **3 个文件**：
+必须生成以下 **2 个文件**：
 
 #### 产物 1：完整报告 (Markdown) → `<工作目录>/train_infer_op_diff_report.md`
 

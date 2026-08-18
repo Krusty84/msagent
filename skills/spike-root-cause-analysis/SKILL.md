@@ -2,10 +2,10 @@
 name: spike-root-cause-analysis
 description: >
   分布式训练梯度尖刺 (Gradient Spike) 根因定位。基于梯度监控数据 (trend.db/CSV)、
-  msprobe dump 统计数据和张量快照，四阶段渐进式从异常坐标定位逐层深入到算子级和张量级根因。
+  msprobe dump 统计数据，三阶段渐进式从异常坐标定位逐层深入到算子级根因。
   当用户提供 spike/梯度尖刺/梯度异常相关数据时使用此 skill。
 keywords: [spike, 梯度尖刺, gradient spike, 梯度异常, 根因定位, root cause, dump_statistic,
-  trend.db, parameters_grad, 参数梯度, 前反向, 激活追溯, 张量对比]
+  trend.db, parameters_grad, 参数梯度, 前反向, 激活追溯]
 ---
 
 # Spike 根因定位分析
@@ -18,9 +18,6 @@ Phase 1+2 — 梯度监控数据 → 最先的根因前反向
 
 Phase 3 — Dump 统计数据 → 对照正常数据, 最早的分叉点
     以正常样本为对照组, 找激活过程最先分叉的层/算子
-
-Phase 4 — 张量数据 → 统计不可见的最早差异
-    在 Phase 3 分叉点之前, 找统计值无法观察到、但张量级存在的更早差异
 ```
 
 **判定铁律:**
@@ -30,7 +27,7 @@ Phase 4 — 张量数据 → 统计不可见的最早差异
 
 **核心原则:** 数据够就分析，不够就输出当前结论，不强行推进。每个阶段输出必须包含表格展示。
 
-**数据路径:** trend.db / monitor CSV → Phase 1-2；dump_statistic → Phase 1, 3；.pt 张量 → Phase 4。仅有 dump 时直接 `--dump` 模式走 Phase 1→2→3。
+**数据路径:** trend.db / monitor CSV → Phase 1-2；dump_statistic → Phase 1, 3。仅有 dump 时直接 `--dump` 模式走 Phase 1→2→3。
 
 ---
 
@@ -165,22 +162,6 @@ anchor: <module>  四组: A(异常) B(标杆) C(正常) D(标杆)  异常度=(A/
 
 ---
 
-## Phase 4: 张量级精确定位
-
-### 前置条件
-Phase 3 已定位分叉层和方向；优先级前向 [P0] > 反向 [P1]；有对应 .pt 文件。
-
-### 分析步骤
-
-1. 加载异常侧/标杆侧 .pt，比对 shape/dtype/统计量
-2. 元素级差异分布: 极端值位置、diff>阈值的元素占比
-3. 判断异常模式: 孤立 token 位置 vs 全层系统性偏差
-4. 结合 Phase 3 层结论解释一致性
-
-缺根因层张量时，用已有张量旁证（标注局限性），列出所需张量及优先级。
-
----
-
 ## 报告输出格式
 
 遵循 msagent 标准 **问题/证据/影响/建议**。表格由 agent 根据脚本 JSON 输出渲染（脚本只输出 JSON，不打印表格）。
@@ -226,12 +207,12 @@ Phase 3 已定位分叉层和方向；优先级前向 [P0] > 反向 [P1]；有�
 
 逐层表格（每锚点前向+反向 Norm + 异常度）→ 对照组验证 → 未对齐层核对（uncompared 非空时方向判定不可下）→ 前向/反向异常层列表 → 方向判定。
 
-### Phase 4: 张量位置 + 证据 + 关联 Phase 3 + 影响 + 建议。
-
 ---
+
+## 用户交互
 
 ## 用户交互
 
 - 数据类型/step 对应关系/标杆归属不明确 → 向用户确认
 - Phase 1 候选过多 → 用户可手动指定坐标跳过 Phase 2
-- 数据不足: 无标杆 → Phase 2 单设备；无 dump → 以 Phase 2 为终；无 .pt → 以 Phase 3 为终；分析到头输出结论+缺失项
+- 数据不足: 无标杆 → Phase 2 单设备；无 dump → 以 Phase 2 为终；分析到头输出结论+缺失项

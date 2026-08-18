@@ -4,13 +4,12 @@
 
 ## 概述
 
-四阶段渐进式分析链路:
+三阶段渐进式分析链路:
 
 ```
 Phase 1 — 梯度监控数据 → 候选 spike 三维坐标
 Phase 2 — 跨 step + 跨设备对比 → 根因坐标选定
 Phase 3 — Dump 统计数据 (四组对照) → 激活过程差异追溯
-Phase 4 — 张量数据 → 精确定位
 ```
 
 ## 四组对照方法
@@ -322,83 +321,11 @@ Module.module.module.decoder.layers.4.TransformerLayer.forward
     "op_name": "Torch.matmul.25.forward",
     "reason": "这是追溯链中最早出现显著差异的算子，输入正常但输出异常，说明该算子的计算过程引入了差异"
   },
-  "next_steps": "建议进行 Phase 3 分析: 加载 Torch.matmul.25 的输入/输出张量进行精确对比"
+  "next_steps": "建议补充 Torch.matmul.25 的输入/输出 .pt 张量做元素级验证"
 }
 ```
 
 ---
-
-## Phase 3: 张量级精确定位
-
-### 3.1 数据识别
-
-| 数据 | 格式 | 说明 |
-|------|------|------|
-| `.pt` 文件 | PyTorch 张量序列化 | 算子输入/输出/权重的实际值 |
-| 命名规则 | `<Module.Path>.<OpType>.forward.<id>.(input|output|parameters).<name>.<index>.pt` | 文件名携带完整的算子路径信息 |
-
-### 3.2 前置条件
-
-1. Phase 2 已完成，统计值追溯到了无法分辨的分叉点
-2. 异常侧和标杆侧都有对应算子的 `.pt` 文件
-3. 两侧张量的 shape/dtype 一致 (仅值不同)
-
-**如果不满足:** Phase 2 的统计级结论即为最终输出。
-
-### 3.3 分析步骤
-
-#### Step 3.3.1: 张量加载与对齐
-
-1. 加载异常侧和标杆侧的 `.pt` 文件
-2. 验证 shape 和 dtype 一致
-3. 如果存在精度差异 (bf16 vs fp32)，以较高精度为准
-
-#### Step 3.3.2: 逐元素对比
-
-```
-对比维度:
-  1. 分布对比: histogram / percentiles (p50, p90, p95, p99, p99.9)
-  2. 极值对比: Max, Min, top-K 最大值的位置
-  3. 结构对比: 按 token 位置 / head 分组查看差异分布
-  4. 数值精度: 检查是否有非规格化数(subnormal)、NaN、Inf
-```
-
-#### Step 3.3.3: 异常位置追踪
-
-1. 找到差异最大的元素位置 (token_index, hidden_dim_index 等)
-2. 判断是孤立点还是连续区域异常
-3. 结合模型结构 (attention head / token position) 解释异常位置含义
-4. 如果当前算子不足以判断，追溯到其上游算子的张量
-
-### 3.4 输出格式
-
-```json
-{
-  "phase": 3,
-  "status": "completed" | "partial",
-  "tensor_comparison": {
-    "op_name": "Torch.matmul.25.forward",
-    "tensor_role": "output",
-    "shape": [4096, 3072],
-    "dtype": "bfloat16",
-    "anomaly_location": {
-      "type": "isolated_region",
-      "token_range": [1024, 1056],
-      "description": "token position 1024-1056, hidden dim 512-1024 区域出现异常大值"
-    },
-    "diff_summary": {
-      "p99.9_ratio": 45.2,
-      "max_ratio": 62.3,
-      "element_count_above_10x": 128
-    }
-  },
-  "root_cause_assessment": {
-    "operator": "Torch.matmul.25 (q_proj matmul)",
-    "layer": "decoder.layers.4.self_attention",
-    "hypothesis": "token 1024-1056 的输入 embedding 存在异常大值，q_proj 的 weight 矩阵与异常输入相乘后放大了异常。建议检查 token 1024-1056 对应的输入数据/embedding。"
-  }
-}
-```
 
 ---
 
@@ -425,11 +352,7 @@ Module.module.module.decoder.layers.4.TransformerLayer.forward
 - 差异追溯路径: [从反向到前向的算子链]
 - 分叉点: [最早出现差异的算子]
 
-## 4. 张量级精确定位 (Phase 3, 如适用)
-- 异常位置: [token/head/dim 范围]
-- 根因假设: [说明]
-
-## 5. 结论与建议
+## 4. 结论与建议
 - 根因: [最终判断]
 - 修复建议: [具体措施]
 - 数据补充建议: [如分析不完整，建议提供什么数据]

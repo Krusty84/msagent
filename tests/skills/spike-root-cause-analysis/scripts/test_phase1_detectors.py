@@ -7,9 +7,9 @@ import os
 import sys
 import unittest
 
-sys.path.insert(0, os.path.join(
-    os.path.dirname(__file__), "..", "..", "..", "..",
-    "skills", "spike-root-cause-analysis", "scripts"))
+sys.path.insert(
+    0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "skills", "spike-root-cause-analysis", "scripts")
+)
 
 from step_level_detector import compute_per_target_baselines, detect_spikes
 from trend_db_spike_detector import detect_accumulation_window, detect_dump_spikes
@@ -19,10 +19,30 @@ def _make_step_rows(normal=20, spike_norm=100.0):
     """构造 step 级数据: normal 个正常 step + 1 个 spike。"""
     rows = []
     for i in range(normal):
-        rows.append({'rank': 0, 'step': i, 'target_id': 0, 'metric_id': 1,
-                     'norm': 1.0 + i * 0.01, 'min': 0.0, 'max': 2.0, 'mean': 1.0})
-    rows.append({'rank': 0, 'step': normal, 'target_id': 0, 'metric_id': 1,
-                 'norm': spike_norm, 'min': 0.0, 'max': 200.0, 'mean': 100.0})
+        rows.append(
+            {
+                'rank': 0,
+                'step': i,
+                'target_id': 0,
+                'metric_id': 1,
+                'norm': 1.0 + i * 0.01,
+                'min': 0.0,
+                'max': 2.0,
+                'mean': 1.0,
+            }
+        )
+    rows.append(
+        {
+            'rank': 0,
+            'step': normal,
+            'target_id': 0,
+            'metric_id': 1,
+            'norm': spike_norm,
+            'min': 0.0,
+            'max': 200.0,
+            'mean': 100.0,
+        }
+    )
     return rows
 
 
@@ -41,8 +61,7 @@ class TestDetectSpikes(unittest.TestCase):
 class TestDetectDumpSpikes(unittest.TestCase):
     def test_single_step_top_n(self):
         rows = [
-            {'rank': 0, 'step': 0, 'target_id': i, 'metric_id': 1,
-             'norm': 1.0 + i, 'min': 0.0, 'max': 5.0, 'mean': 1.0}
+            {'rank': 0, 'step': 0, 'target_id': i, 'metric_id': 1, 'norm': 1.0 + i, 'min': 0.0, 'max': 5.0, 'mean': 1.0}
             for i in range(5)
         ]
         targets = {i: {'name': f'p{i}'} for i in range(5)}
@@ -57,8 +76,18 @@ class TestDetectAccumulationWindow(unittest.TestCase):
         # 9 个 step (<10 走短序列分支), 2 个 target 在 step 4->5 同时重置 (10 -> 0.5)
         for tid in (0, 1):
             for step, norm in enumerate([1, 2, 3, 4, 10, 0.5, 1.5, 2.5, 3.5]):
-                rows.append({'rank': 0, 'step': step, 'target_id': tid, 'metric_id': 1,
-                             'norm': norm, 'min': 0.0, 'max': 20.0, 'mean': 1.0})
+                rows.append(
+                    {
+                        'rank': 0,
+                        'step': step,
+                        'target_id': tid,
+                        'metric_id': 1,
+                        'norm': norm,
+                        'min': 0.0,
+                        'max': 20.0,
+                        'mean': 1.0,
+                    }
+                )
         is_ms, window, opt_steps, boundary = detect_accumulation_window(rows)
         self.assertTrue(is_ms)
         self.assertEqual(window, 6)  # 窗口 = 边界之前步数 + 1

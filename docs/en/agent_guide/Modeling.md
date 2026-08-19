@@ -23,7 +23,7 @@ uv run msagent --agent Modeling
 Example:
 
 ```text
-Recommend serving auto-tuning parameters for Qwen3-32B on Atlas A3 with vLLM, prioritizing throughput.
+Recommend serving auto-tuning parameters for Qwen3-32B on Ascend A3 series products with vLLM, prioritizing throughput.
 ```
 
 ## Expected Output

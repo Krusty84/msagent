@@ -13,6 +13,7 @@
 - RL训推不一致根因分析
 - loss/gnorm NaN问题定位
 - 确定性计算问题定位
+- loss对不齐问题定位
 
 ## 推荐使用方式
 
@@ -54,12 +55,13 @@ Accuracy 通常会输出数据对齐方式、差异定位路径、首个异常�
 | RL训推不一致分析      | `请基于输入的训练和推理dump数据，分析训推的差异来源，给出可能原因。` | <img src="../figures/accuracy_rl_rca_report.jpg" alt="RL训推不一致根因分析报告" width="800"> |
 | loss/gnorm NaN溢出分析 | `请基于输入的训练dump数据，分析其中的NaN溢出，找出源卡和根因算子` | <img src="../figures/nan_overflow_detection_report.jpg" alt="loss/gnorm NaN溢出分析报告" width="800"> |
 | 开启确定性计算、切换软件版本，模型运行两次结果不一致分析 | `请基于输入的md5 dump数据，进行数据比对，寻找比对差异点，给出可能原因。` | <img src="../figures/deterministic_report.png" alt="确定性计算问题分析报告" width="800"> |
+| loss对不齐，基于比对结果分析 | `分析比对结果，输出分析报告` | <img src="../figures/compare_result_analyzer.png" alt="loss对不齐问题分析报告" width="800"> |
 
 ## 当出现分析结果不正确
 
 - 可提供额外的辅助信息，包括相关代码、正确的背景知识等
 - 可提出疑问或指出错误，修正Agent的错误观点
 - 可提出分析方向、关键点，指导Agent沿相关线索进一步分析
-- 示例路径均需替换为本地真实数据路径；没有真实 dump 时，只能做流程说明或排查建议
+- 示例路径均需替换为本地真实数据路径；依赖 dump 的分析流程需要真实 dump，loss 对不齐分析也可提供 `msProbe compare` 生成的 CSV/XLSX 比对结果
 
 分析示例可参考 [`accuracy_usage_example.md`](../example/accuracy_usage_example.md)。

@@ -1,0 +1,323 @@
+# =============================================================================
+# PR-pipeline_msagent (GitCode Actions)
+#
+# 由华为云 CodeArts 流水线 "PR-pipeline_msagent" 转换而来。
+# 原流水线阶段映射：
+#   1. openlibing_monitor  -> openlibing-monitor（原任务依赖内部 CodeHub ci 仓 +
+#                             openlibing 凭据，此处改为运行摘要上报，保持阶段语义）
+#   2. md_check            -> md-check（校验 PR 变更的 Markdown；输出 md_check 门控）
+#   3. CodeCheck           -> codecheck（可移植的 pre-commit 检查；Antipoison/SCA
+#                             依赖 openlibing 内部服务与 OBS SDK，未移植）
+#   4. Build               -> build（python3 build.py local 构建 wheel，产物上传 artifact）
+#   5. 阶段_1 (UT)         -> ut（python3 build.py test local：tests/ut + tests/skills）
+#
+# 与原流水线一致的语义：
+#   - md-check 输出 md_check=no 时（PR 含非文档变更）才执行 CodeCheck/Build/UT；
+#     纯文档 PR 时后续阶段跳过（与原流水线一致）。
+# =============================================================================
+name: PR-pipeline_msagent
+
+on:
+  pull_request:
+    types: [open, reopen, update]
+    branches:
+      - master
+  workflow_dispatch:
+    inputs:
+      target_branch:
+        description: 目标分支
+        type: string
+        required: false
+        default: master
+      pr_id:
+        description: PR 编号（可选）
+        type: string
+        required: false
+        default: ""
+
+concurrency:
+  enable: true
+  max: 5
+  exceed-action: QUEUE
+  preemption:
+    enable: true
+    events:
+      - mr_id
+
+permissions:
+  repository: read
+  pr: read
+
+env:
+  PYTHON_VERSION: "3.11"
+
+stages:
+  openlibing-monitor:
+    name: openlibing_monitor
+    select: selected_by_default
+    fail-fast: false
+    pre:
+      - type: auto
+    jobs:
+      openlibing-monitor:
+        name: openlibing_monitor
+        select: selected_by_default
+        needs: []
+        runs-on: [ubuntu-24, x64, slim]
+        steps:
+          - name: Checkout source code
+            uses: checkout
+            with:
+              fetch-depth: 0
+          - name: Pipeline run summary
+            run: |
+              echo "## openlibing_monitor 运行摘要" >> "$ATOMGIT_STEP_SUMMARY"
+              echo "" >> "$ATOMGIT_STEP_SUMMARY"
+              echo "| 项目 | 值 |" >> "$ATOMGIT_STEP_SUMMARY"
+              echo "|------|----|" >> "$ATOMGIT_STEP_SUMMARY"
+              echo "| 仓库 | ${{ atomgit.repository }} |" >> "$ATOMGIT_STEP_SUMMARY"
+              echo "| 触发事件 | ${{ atomgit.event_name }} |" >> "$ATOMGIT_STEP_SUMMARY"
+              echo "| 提交 | ${{ atomgit.sha }} |" >> "$ATOMGIT_STEP_SUMMARY"
+              echo "| PR | ${{ atomgit.event.pull_request.number }} |" >> "$ATOMGIT_STEP_SUMMARY"
+              echo "| 目标分支 | ${{ atomgit.base_ref }} |" >> "$ATOMGIT_STEP_SUMMARY"
+              echo "| 运行 ID | ${{ atomgit.run_id }} |" >> "$ATOMGIT_STEP_SUMMARY"
+              echo "" >> "$ATOMGIT_STEP_SUMMARY"
+              echo "> 原 CodeArts 任务通过内部 CodeHub 仓 + openlibing 凭据上报看板，" >> "$ATOMGIT_STEP_SUMMARY"
+              echo "> 该能力依赖华为云内部服务，未迁移。" >> "$ATOMGIT_STEP_SUMMARY"
+
+  md-check:
+    name: md_check
+    select: selected_by_default
+    fail-fast: false
+    pre:
+      - type: auto
+    jobs:
+      md-check:
+        name: md_check
+        select: selected_by_default
+        needs: []
+        runs-on: [ubuntu-24, x64, slim]
+        steps:
+          - name: Checkout source code
+            uses: checkout
+            with:
+              fetch-depth: 0
+          - id: check
+            name: Check changed markdown files
+            run: |
+              set -euo pipefail
+              BASE_REF="${ATOMGIT_BASE_REF:-master}"
+              BASE_SHA="${{ atomgit.event.pull_request.base.sha }}"
+              HEAD_SHA="${ATOMGIT_SHA}"
+
+              git fetch --no-tags origin "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}" >/dev/null 2>&1 || true
+              if [ -n "${BASE_SHA}" ] && git cat-file -e "${BASE_SHA}^{commit}" >/dev/null 2>&1; then
+                CHANGED="$(git diff --name-only "${BASE_SHA}" "${HEAD_SHA}")"
+              else
+                CHANGED="$(git diff --name-only "origin/${BASE_REF}"...HEAD)"
+              fi
+              echo "${CHANGED}" | tee /tmp/changed-files.txt
+
+              python3 - /tmp/changed-files.txt <<'PY'
+              import pathlib
+              import re
+              import sys
+
+              changed_path = sys.argv[1]
+              changed = [
+                  line.strip()
+                  for line in pathlib.Path(changed_path).read_text(encoding="utf-8").splitlines()
+                  if line.strip()
+              ]
+
+              doc_exts = {".md", ".png", ".jpg", ".jpeg", ".gif", ".svg"}
+              non_doc = [
+                  f
+                  for f in changed
+                  if pathlib.Path(f).suffix.lower() not in doc_exts
+                  and not f.startswith(("docs/", "LICENSES/"))
+              ]
+              md_check = "no" if non_doc else "yes"
+              print(f"changed_files={len(changed)}")
+              print(f"non_doc_files={len(non_doc)}")
+              print(f"md_check={md_check}")
+              pathlib.Path("/tmp/md_check_value").write_text(md_check, encoding="utf-8")
+
+              errors = []
+              for f in changed:
+                  if not f.lower().endswith(".md"):
+                      continue
+                  p = pathlib.Path(f)
+                  if not p.exists():
+                      continue
+                  try:
+                      text = p.read_text(encoding="utf-8")
+                  except Exception as exc:
+                      errors.append(f"{f}: cannot read as UTF-8: {exc}")
+                      continue
+                  lines = text.splitlines()
+                  fence_count = 0
+                  for i, line in enumerate(lines, 1):
+                      if "\x00" in line:
+                          errors.append(f"{f}:{i}: NUL byte found")
+                      if re.match(r"^#{1,6}[^\s#]", line):
+                          errors.append(f"{f}:{i}: heading must have a space after '#'")
+                      if line.startswith(("<<<<<<<", ">>>>>>>")):
+                          errors.append(f"{f}:{i}: merge conflict marker found")
+                      if line.strip().startswith("```"):
+                          fence_count += 1
+                  if fence_count % 2 == 1:
+                      errors.append(f"{f}: unbalanced code fences ({fence_count} fences)")
+                  for m in re.finditer(r"!?\[[^\]]*\]\(([^)]+)\)", text):
+                      target = m.group(1).strip()
+                      if (
+                          not target
+                          or target.startswith(("http://", "https://", "mailto:", "#", "<"))
+                      ):
+                          continue
+                      clean = target.split("#", 1)[0].split("?", 1)[0]
+                      if not clean:
+                          continue
+                      candidate = (p.parent / clean).resolve()
+                      if not candidate.exists():
+                          errors.append(f"{f}: broken relative link: {target}")
+
+              if errors:
+                  print("md_check failures:")
+                  print("\n".join(errors))
+                  sys.exit(1)
+              PY
+
+              MD_CHECK="$(cat /tmp/md_check_value)"
+              echo "md_check=${MD_CHECK}" >> "$ATOMGIT_OUTPUT"
+
+  codecheck:
+    name: CodeCheck
+    select: selected_by_default
+    fail-fast: false
+    pre:
+      - type: auto
+    jobs:
+      pre-commit:
+        name: codecheck_pre-commit
+        select: selected_by_default
+        needs: []
+        if: "${{ jobs.md-check.outputs.md_check == 'no' }}"
+        runs-on: [ubuntu-24, x64, small]
+        steps:
+          - name: Checkout source code
+            uses: checkout
+            with:
+              fetch-depth: 0
+          - name: Setup Python
+            uses: setup-python
+            with:
+              python-version: ${{ env.PYTHON_VERSION }}
+          - name: Install gitleaks
+            run: |
+              set -eux
+              GITLEAKS_VER="8.18.4"
+              mkdir -p "${HOME}/.local/bin"
+              for src in \
+                "https://pytorch-package.obs.cn-north-4.myhuaweicloud.com/pta-codecheck/gitleaks" \
+                "https://ghproxy.com/https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VER}/gitleaks_${GITLEAKS_VER}_linux_x64.tar.gz" \
+                "https://mirror.ghproxy.com/https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VER}/gitleaks_${GITLEAKS_VER}_linux_x64.tar.gz" \
+                "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VER}/gitleaks_${GITLEAKS_VER}_linux_x64.tar.gz"; do
+                if curl -fsSL --connect-timeout 15 --max-time 180 "$src" -o /tmp/gitleaks.dl; then
+                  if tar -tzf /tmp/gitleaks.dl >/dev/null 2>&1; then
+                    tar -xzf /tmp/gitleaks.dl -C "${HOME}/.local/bin" gitleaks
+                  else
+                    cp /tmp/gitleaks.dl "${HOME}/.local/bin/gitleaks"
+                  fi
+                  chmod +x "${HOME}/.local/bin/gitleaks"
+                  "${HOME}/.local/bin/gitleaks" version && break
+                fi
+              done
+              test -x "${HOME}/.local/bin/gitleaks"
+              echo "${HOME}/.local/bin" >> "$ATOMGIT_PATH"
+          - name: Install pre-commit
+            run: python -m pip install -q --upgrade pip pre-commit
+          - name: Run pre-commit on changed files
+            run: |
+              set -euo pipefail
+              BASE_REF="${ATOMGIT_BASE_REF:-master}"
+              BASE_SHA="${{ atomgit.event.pull_request.base.sha }}"
+              HEAD_SHA="${ATOMGIT_SHA}"
+              git fetch --no-tags origin "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}" >/dev/null 2>&1 || true
+              if [ -n "${BASE_SHA}" ] && git cat-file -e "${BASE_SHA}^{commit}" >/dev/null 2>&1; then
+                FILES="$(git diff --name-only --diff-filter=AM "${BASE_SHA}" "${HEAD_SHA}")"
+              else
+                FILES="$(git diff --name-only --diff-filter=AM "origin/${BASE_REF}"...HEAD)"
+              fi
+              if [ -z "${FILES}" ]; then
+                echo "no changed files to check"
+                exit 0
+              fi
+              SKIP=clang-tidy pre-commit run --show-diff-on-failure --files ${FILES}
+
+  build:
+    name: Build
+    select: selected_by_default
+    fail-fast: false
+    pre:
+      - type: auto
+    jobs:
+      build:
+        name: Build_msagent_x86
+        select: selected_by_default
+        needs: []
+        if: "${{ jobs.md-check.outputs.md_check == 'no' }}"
+        runs-on: [ubuntu-24, x64, medium]
+        steps:
+          - name: Checkout source code
+            uses: checkout
+            with:
+              fetch-depth: 0
+          - name: Setup Python
+            uses: setup-python
+            with:
+              python-version: ${{ env.PYTHON_VERSION }}
+          - name: Install uv
+            run: python -m pip install -q --upgrade pip uv packaging
+          - name: Build wheel
+            run: python build.py local
+          - name: Verify wheel
+            run: |
+              test -d artifacts
+              ls -la artifacts/
+              test -n "$(ls artifacts/*.whl 2>/dev/null)"
+              echo "## Build 结果" >> "$ATOMGIT_STEP_SUMMARY"
+              echo "wheel 构建成功：$(ls artifacts/*.whl)" >> "$ATOMGIT_STEP_SUMMARY"
+          - name: Upload wheel artifact
+            uses: upload-artifact
+            with:
+              name: msagent-wheel
+              path: artifacts/*.whl
+
+  ut:
+    name: 阶段_1
+    select: selected_by_default
+    fail-fast: false
+    pre:
+      - type: auto
+    jobs:
+      ut:
+        name: UT_msagent
+        select: selected_by_default
+        needs: []
+        if: "${{ jobs.md-check.outputs.md_check == 'no' }}"
+        runs-on: [ubuntu-24, x64, medium]
+        timeout-minutes: 90
+        steps:
+          - name: Checkout source code
+            uses: checkout
+            with:
+              fetch-depth: 0
+          - name: Setup Python
+            uses: setup-python
+            with:
+              python-version: ${{ env.PYTHON_VERSION }}
+          - name: Install uv
+            run: python -m pip install -q --upgrade pip uv
+          - name: Run unit tests
+            run: python build.py test local

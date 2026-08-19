@@ -13,6 +13,7 @@
 - RL训推不一致根因分析
 - loss/gnorm NaN问题定位
 - 确定性计算问题定位
+- loss对不齐问题定位
 
 ## 推荐使用方式
 
@@ -26,6 +27,7 @@
 | RL训推不一致分析      | `请基于输入的训练和推理dump数据，分析训推的差异来源，给出可能原因。` | <img src="../figures/accuracy_rl_rca_report.jpg" alt="RL训推不一致根因分析报告" width="800"> |
 | loss/gnorm NaN溢出分析 | `请基于输入的训练dump数据，分析其中的NaN溢出，找出源卡和根因算子` | <img src="../figures/nan_overflow_detection_report.jpg" alt="loss/gnorm NaN溢出分析报告" width="800"> |
 | 开启确定性计算、切换软件版本，模型运行两次结果不一致分析 | `请基于输入的md5 dump数据，进行数据比对，寻找比对差异点，给出可能原因。` | <img src="../figures/deterministic_report.png" alt="确定性计算问题分析报告" width="800"> |
+| loss对不齐，基于比对结果分析 | `分析比对结果，输出分析报告` | <img src="../figures/compare_result_analyzer.png" alt="loss对不齐问题分析报告" width="800"> |
 
 ## 当出现分析结果不正确
 

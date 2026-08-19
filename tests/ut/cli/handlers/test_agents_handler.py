@@ -166,6 +166,7 @@ async def test_agents_handler_updates_context_when_different_agent_selected(
     )
 
     context_updates: dict[str, object] = {}
+    warnings: list[str] = []
 
     async def fake_load_agents_config(_working_dir):
         return SimpleNamespace(agents=[hermes, minos])
@@ -184,6 +185,9 @@ async def test_agents_handler_updates_context_when_different_agent_selected(
     monkeypatch.setattr(agents_module.initializer, "load_agents_config", fake_load_agents_config)
     monkeypatch.setattr(agents_module.initializer, "load_agent_config", fake_load_agent_config)
     monkeypatch.setattr(agents_module.initializer, "update_default_agent", fake_update_default_agent)
+    monkeypatch.setattr(agents_module.uuid, "uuid4", lambda: "new-thread-id")
+    monkeypatch.setattr(agents_module.console, "print_warning", warnings.append)
+    monkeypatch.setattr(agents_module.console, "print", lambda *_args, **_kwargs: None)
 
     session = SimpleNamespace(context=_build_context(), update_context=lambda **kwargs: context_updates.update(kwargs))
     handler = AgentHandler(session)
@@ -193,6 +197,10 @@ async def test_agents_handler_updates_context_when_different_agent_selected(
 
     assert context_updates.get("agent") == "Minos"
     assert context_updates.get("model") == "fast"
+    assert context_updates.get("thread_id") == "new-thread-id"
+    assert context_updates.get("current_input_tokens") is None
+    assert context_updates.get("current_output_tokens") is None
+    assert warnings == ["Switched to Agent: Minos. A new conversation has started."]
 
 
 @pytest.mark.asyncio

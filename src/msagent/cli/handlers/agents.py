@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import uuid
+
 from prompt_toolkit.formatted_text import FormattedText
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.keys import Keys
@@ -55,8 +57,14 @@ class AgentHandler:
                         selected_agent_config.llm.alias, selected_agent_config.llm
                     ),
                     audit_log_enabled=resolve_audit_log_enabled(selected_agent_config),
+                    # Agent prompts must not inherit another agent's checkpointed conversation.
+                    thread_id=str(uuid.uuid4()),
+                    current_input_tokens=None,
+                    current_output_tokens=None,
                 )
                 logger.info(f"Switched to Agent: {selected_agent_name}, Model: {selected_agent_config.llm.alias}")
+                console.print_warning(f"Switched to Agent: {selected_agent_name}. A new conversation has started.")
+                console.print("")
 
                 # Mark this agent as the new default
                 await initializer.update_default_agent(selected_agent_name, self.session.context.working_dir)

@@ -9,7 +9,6 @@ dependencies = [
     "aiofiles~=25.1.0",
     "aiosqlite~=0.22.1",
     "deepagents>=0.4.0",
-    "ddgs>=9.0.0,<10.0.0",
     "duckduckgo-search>=8.0.0,<9.0.0",
     "httpx>=0.28.0,<1.0.0",
     "json-repair>=0.54.3,<0.59.0",
@@ -40,11 +39,6 @@ dependencies = [
     "msprof-mcp==0.1.8",
     "msprof-analyze>=26.1.0",
     "mcp>=1.28.1,<2.0.0"
-]
-
-[project.optional-dependencies]
-web = [
-    "langgraph-cli[inmem]>=0.4.16,<0.5.0",
 ]
 
 [project.scripts]
@@ -94,7 +88,6 @@ force-include = { "src/msagent/py.typed" = "msagent/py.typed" }
 only-include = [
     ".python-version",
     "README.md",
-    "langgraph.json",
     "pyproject.toml",
     "resources",
     "run.py",

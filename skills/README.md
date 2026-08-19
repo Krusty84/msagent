@@ -61,6 +61,7 @@ description: 技能的详细描述，说明它做什么，以及什么时候使�
 | `deterministic-calculation-analysis` | 分析确定性计算问题 | `比对这批 msProbe 数据，找首个不一致 API` |
 | `spike-root-cause-analysis` | 梯度尖刺 (Gradient Spike) 根因定位 | `这个 spike 数据的根因是什么` |
 | `rl-consistency-analysis` | 做训练与推理一致性根因分析 | `分析这次训练和推理不一致的根因` |
+| `compare-result-analyzer` | 基于比对结果，分析loss对不齐问题 | `分析比对结果` |
 
 ### 2.3 量化 Skills
 
@@ -82,8 +83,8 @@ description: 技能的详细描述，说明它做什么，以及什么时候使�
 
 | Skill | 作用 | 示例 prompt |
 | --- | --- | --- |
-| `ascendc-operator-performance-optim` | 做 AscendC 算子性能调优 | `分析这个算子并给出优化代码` |
 | `msot-msopprof-operator-profiler` | 做 msprof op 算子分析 | `输出这个算子的瓶颈和优化建议` |
+| `ops-performance-tuning` | 对 AscendC/CATLASS/Triton/TileLang/PyPTO/SHMEM 算子做编译、profiling 与性能调优 | `对这个算子做性能分析并给出前后对比报告` |
 
 ### 2.5 文档审查 Skills
 

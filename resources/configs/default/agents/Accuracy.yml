@@ -20,6 +20,7 @@ skills:
     - default:rl-consistency-analysis
     - default:nan-overflow-detection
     - default:deterministic-calculation-analysis
+    - default:spike-root-cause-analysis
     - default:compare-result-analyzer
   use_catalog: false
 compression:

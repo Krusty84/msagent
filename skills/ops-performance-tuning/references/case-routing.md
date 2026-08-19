@@ -41,9 +41,9 @@ PY
 
 | 代际 | 常见设备 | 官方算子仓 `build.sh --soc` | 独立工程常见 `NPU_ARCH` | 关键差异 |
 |---|---|---|---|---|
-| A2 | Ascend 910B、Atlas A2 | `ascend910b` | `dav-2201` | MemBase/高层 API 为主；不要下沉 A5 VF/RegBase 专属路径 |
-| A3 | Atlas A3 / 910_93 系列 | `ascend910_93` | 以本机工具链和样例声明为准 | 不硬编码 `dav-*`；从目标仓 CMake 与本机 `--help` 获取 |
-| A5 | Ascend 950/950PR | `ascend950` | `dav-3510` | 可重点评估 RegBase/VF、MicroAPI、PipeTimeline/PcSampling |
+| A2 | 昇腾A2系列产品 | `ascend910b` | `dav-2201` | MemBase/高层 API 为主；不要下沉 A5 VF/RegBase 专属路径 |
+| A3 | 昇腾A3系列产品 | `ascend910_93` | 以本机工具链和样例声明为准 | 不硬编码 `dav-*`；从目标仓 CMake 与本机 `--help` 获取 |
+| A5 | 昇腾950PR&950DT系列产品 | `ascend950` | `dav-3510` | 可重点评估 RegBase/VF、MicroAPI、PipeTimeline/PcSampling |
 
 ## 2. 编译路径速查
 
@@ -260,6 +260,7 @@ msprof op --output=./prof/baseline \
 - 官方构建与版本：[ops-nn QUICKSTART](https://gitcode.com/cann/ops-nn/blob/master/docs/QUICKSTART.md)、[build 参数说明](https://gitcode.com/cann/ops-nn/blob/master/docs/zh/install/build.md)、[CANN release-management](https://gitcode.com/cann/release-management)。
 - 官方采集：[Ascend/msopprof 用法](https://github.com/Ascend/msopprof/blob/master/docs/en/user_guide/msopprof_usage.md)、[msOpProf 用户指南](https://github.com/Ascend/msopprof/blob/master/docs/en/user_guide/msopprof_user_guide.md)、[Triton-Ascend profiling](https://github.com/triton-lang/triton-ascend/blob/main/docs/en/debug_guide/profiling.md)。
 - 官方优化资料：[MatMul 全载](https://gitcode.com/cann/ops-nn/wiki/MatMul%E7%AE%97%E5%AD%90%E6%80%A7%E8%83%BD%E4%BC%98%E5%8C%96%E5%AE%9E%E8%B7%B5%E4%B8%8E%E6%95%88%E6%9E%9C%E5%88%86%E6%9E%90.md)、[MatMul VCV](https://gitcode.com/cann/ops-nn/wiki/MatMul%E7%AE%97%E5%AD%90VCV%E6%80%A7%E8%83%BD%E4%BC%98%E5%8C%96%E5%AE%9E%E8%B7%B5%E4%B8%8E%E6%95%88%E6%9E%9C%E5%88%86%E6%9E%90.md)、[Ascend C Tiling/L2 技术文章](https://www.hiascend.com/developer/techArticles/20240920-1)。
+
 # 优化案例索引
 
 > 只在完成 profiling 与 Bound 判定后使用。先按 DSL 过滤，再按算子类别、SoC 能力与瓶颈机制选择最多三个案例。案例数字只代表来源所述环境，不得直接作为当前算子的目标或预期收益。

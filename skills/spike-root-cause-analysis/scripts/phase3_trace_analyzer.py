@@ -127,6 +127,8 @@ def _shape_compat(a, b):
     """shape 可比: 元素总数一致（允许设备间 flatten/多维表示差异，如 MoE grouped linear）。"""
     if a is None or b is None:
         return False
+    if not a or not b:
+        return False  # 空 shape（标量）元素总数不可比
     pa = pb = 1
     for d in a:
         pa *= d
@@ -259,6 +261,7 @@ def auto_discover_anchors(dump_a, dump_b):
 def run_four_group(dump_a, dump_b, dump_c, dump_d, anchors=None):
     """执行四组对照逐层对比, 返回结构化结果。"""
     result = {'anchors': []}
+    has_cd = bool(dump_c and dump_d)
 
     for anchor_name, anchor_kw in anchors:
         anchor_result = {'name': anchor_name, 'layers': []}
@@ -277,12 +280,14 @@ def run_four_group(dump_a, dump_b, dump_c, dump_d, anchors=None):
             # A/B 与 C/D 分别做对齐，每层取 module 输出代表算子
             (fwd_key_a, fwd_key_b, fwd_ab_a, fwd_ab_b) = find_anchor_op_pair(
                 dump_a, dump_b, layer_idx, anchor_kw, 'forward')
-            (fwd_cd_key, _, fwd_cd_c, fwd_cd_d) = find_anchor_op_pair(
-                dump_c, dump_d, layer_idx, anchor_kw, 'forward')
+            (fwd_cd_key, _, fwd_cd_c, fwd_cd_d) = (
+                find_anchor_op_pair(dump_c, dump_d, layer_idx, anchor_kw, 'forward')
+                if has_cd else (None, None, None, None))
             (bwd_key_a, bwd_key_b, bwd_ab_a, bwd_ab_b) = find_anchor_op_pair(
                 dump_a, dump_b, layer_idx, anchor_kw, 'backward')
-            (bwd_cd_key, _, bwd_cd_c, bwd_cd_d) = find_anchor_op_pair(
-                dump_c, dump_d, layer_idx, anchor_kw, 'backward')
+            (bwd_cd_key, _, bwd_cd_c, bwd_cd_d) = (
+                find_anchor_op_pair(dump_c, dump_d, layer_idx, anchor_kw, 'backward')
+                if has_cd else (None, None, None, None))
 
             fwd = {'A': fwd_ab_a, 'B': fwd_ab_b, 'C': fwd_cd_c, 'D': fwd_cd_d}
             bwd = {'A': bwd_ab_a, 'B': bwd_ab_b, 'C': bwd_cd_c, 'D': bwd_cd_d}

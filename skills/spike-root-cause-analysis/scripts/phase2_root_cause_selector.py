@@ -42,7 +42,7 @@ def get_top_target_per_step(anomalies):
     for a in anomalies:
         os_step = a.get('optimizer_step', 0)
         tname = a.get('target_name', '')
-        fn = a.get('suspect_final_norm') or a.get('norm', 0)
+        fn = a.get('suspect_final_norm') if 'suspect_final_norm' in a else a.get('norm', 0)
         if fn > step_targets[os_step][tname]:
             step_targets[os_step][tname] = fn
 

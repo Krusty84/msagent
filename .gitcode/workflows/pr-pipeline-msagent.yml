@@ -97,6 +97,8 @@ stages:
         select: selected_by_default
         needs: []
         runs-on: default
+        outputs:
+          md_check: ${{ steps.check.outputs.md_check }}
         steps:
           - name: Checkout source code
             uses: checkout
@@ -106,7 +108,10 @@ stages:
             name: Check changed markdown files
             run: |
               set -euo pipefail
-              BASE_REF="${ATOMGIT_BASE_REF:-master}"
+              BASE_REF="master"
+              if [ "${{ atomgit.event_name }}" = "pull_request" ] && [ -n "${ATOMGIT_BASE_REF}" ]; then
+                BASE_REF="${ATOMGIT_BASE_REF}"
+              fi
               BASE_SHA="${{ atomgit.event.pull_request.base.sha }}"
               HEAD_SHA="${ATOMGIT_SHA}"
 
@@ -202,17 +207,59 @@ stages:
         name: codecheck_pre-commit
         select: selected_by_default
         needs: []
-        if: "${{ jobs.md-check.outputs.md_check == 'no' }}"
         runs-on: default
         steps:
           - name: Checkout source code
             uses: checkout
             with:
               fetch-depth: 0
+          - id: gate
+            name: Check if code changes exist
+            run: |
+              set -euo pipefail
+              BASE_REF="master"
+              if [ "${{ atomgit.event_name }}" = "pull_request" ] && [ -n "${ATOMGIT_BASE_REF}" ]; then
+                BASE_REF="${ATOMGIT_BASE_REF}"
+              fi
+              BASE_SHA="${{ atomgit.event.pull_request.base.sha }}"
+              HEAD_SHA="${ATOMGIT_SHA}"
+              git fetch --no-tags origin "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}" >/dev/null 2>&1 || true
+              if [ -n "${BASE_SHA}" ] && git cat-file -e "${BASE_SHA}^{commit}" >/dev/null 2>&1; then
+                CHANGED="$(git diff --name-only "${BASE_SHA}" "${HEAD_SHA}")"
+              else
+                CHANGED="$(git diff --name-only "origin/${BASE_REF}"...HEAD)"
+              fi
+              printf '%s\n' "${CHANGED}" > /tmp/changed-files.txt
+              NON_DOC="$(python3 - /tmp/changed-files.txt <<'PY'
+              import pathlib
+              import sys
+
+              doc_exts = {".md", ".png", ".jpg", ".jpeg", ".gif", ".svg"}
+              lines = [
+                  line.strip()
+                  for line in pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").splitlines()
+                  if line.strip()
+              ]
+              non_doc = [
+                  f
+                  for f in lines
+                  if pathlib.Path(f).suffix.lower() not in doc_exts
+                  and not f.startswith(("docs/", "LICENSES/"))
+              ]
+              print(len(non_doc))
+              PY
+              )"
+              echo "non_doc_files=${NON_DOC}"
+              if [ "${NON_DOC}" -eq 0 ]; then
+                echo "skip=true" >> "$ATOMGIT_OUTPUT"
+              else
+                echo "skip=false" >> "$ATOMGIT_OUTPUT"
+              fi
           - name: Setup Python
             uses: setup-python
             with:
               python-version: ${{ env.PYTHON_VERSION }}
+            if: ${{ steps.gate.outputs.skip != 'true' }}
           - name: Install gitleaks
             run: |
               set -eux
@@ -235,12 +282,17 @@ stages:
               done
               test -x "${HOME}/.local/bin/gitleaks"
               echo "${HOME}/.local/bin" >> "$ATOMGIT_PATH"
+            if: ${{ steps.gate.outputs.skip != 'true' }}
           - name: Install pre-commit
             run: python -m pip install -q --upgrade pip pre-commit
+            if: ${{ steps.gate.outputs.skip != 'true' }}
           - name: Run pre-commit on changed files
             run: |
               set -euo pipefail
-              BASE_REF="${ATOMGIT_BASE_REF:-master}"
+              BASE_REF="master"
+              if [ "${{ atomgit.event_name }}" = "pull_request" ] && [ -n "${ATOMGIT_BASE_REF}" ]; then
+                BASE_REF="${ATOMGIT_BASE_REF}"
+              fi
               BASE_SHA="${{ atomgit.event.pull_request.base.sha }}"
               HEAD_SHA="${ATOMGIT_SHA}"
               git fetch --no-tags origin "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}" >/dev/null 2>&1 || true
@@ -254,6 +306,7 @@ stages:
                 exit 0
               fi
               SKIP=clang-tidy pre-commit run --show-diff-on-failure --files ${FILES}
+            if: ${{ steps.gate.outputs.skip != 'true' }}
 
   build:
     name: Build
@@ -266,21 +319,65 @@ stages:
         name: Build_msagent_x86
         select: selected_by_default
         needs: []
-        if: "${{ jobs.md-check.outputs.md_check == 'no' }}"
         runs-on: default
         steps:
           - name: Checkout source code
             uses: checkout
             with:
               fetch-depth: 0
+          - id: gate
+            name: Check if code changes exist
+            run: |
+              set -euo pipefail
+              BASE_REF="master"
+              if [ "${{ atomgit.event_name }}" = "pull_request" ] && [ -n "${ATOMGIT_BASE_REF}" ]; then
+                BASE_REF="${ATOMGIT_BASE_REF}"
+              fi
+              BASE_SHA="${{ atomgit.event.pull_request.base.sha }}"
+              HEAD_SHA="${ATOMGIT_SHA}"
+              git fetch --no-tags origin "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}" >/dev/null 2>&1 || true
+              if [ -n "${BASE_SHA}" ] && git cat-file -e "${BASE_SHA}^{commit}" >/dev/null 2>&1; then
+                CHANGED="$(git diff --name-only "${BASE_SHA}" "${HEAD_SHA}")"
+              else
+                CHANGED="$(git diff --name-only "origin/${BASE_REF}"...HEAD)"
+              fi
+              printf '%s\n' "${CHANGED}" > /tmp/changed-files.txt
+              NON_DOC="$(python3 - /tmp/changed-files.txt <<'PY'
+              import pathlib
+              import sys
+
+              doc_exts = {".md", ".png", ".jpg", ".jpeg", ".gif", ".svg"}
+              lines = [
+                  line.strip()
+                  for line in pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").splitlines()
+                  if line.strip()
+              ]
+              non_doc = [
+                  f
+                  for f in lines
+                  if pathlib.Path(f).suffix.lower() not in doc_exts
+                  and not f.startswith(("docs/", "LICENSES/"))
+              ]
+              print(len(non_doc))
+              PY
+              )"
+              echo "non_doc_files=${NON_DOC}"
+              if [ "${NON_DOC}" -eq 0 ]; then
+                echo "skip=true" >> "$ATOMGIT_OUTPUT"
+              else
+                echo "skip=false" >> "$ATOMGIT_OUTPUT"
+              fi
           - name: Setup Python
             uses: setup-python
             with:
               python-version: ${{ env.PYTHON_VERSION }}
+            if: ${{ steps.gate.outputs.skip != 'true' }}
           - name: Install uv
             run: python -m pip install -q --upgrade pip uv packaging
+            if: ${{ steps.gate.outputs.skip != 'true' }}
           - name: Build wheel
             run: python build.py local
+            if: ${{ steps.gate.outputs.skip != 'true' }}
           - name: Verify wheel
             run: |
               test -d artifacts
@@ -288,11 +385,13 @@ stages:
               test -n "$(ls artifacts/*.whl 2>/dev/null)"
               echo "## Build 结果" >> "$ATOMGIT_STEP_SUMMARY"
               echo "wheel 构建成功：$(ls artifacts/*.whl)" >> "$ATOMGIT_STEP_SUMMARY"
+            if: ${{ steps.gate.outputs.skip != 'true' }}
           - name: Upload wheel artifact
             uses: upload-artifact
             with:
               name: msagent-wheel
               path: artifacts/*.whl
+            if: ${{ steps.gate.outputs.skip != 'true' }}
 
   ut:
     name: 阶段_1
@@ -305,7 +404,6 @@ stages:
         name: UT_msagent
         select: selected_by_default
         needs: []
-        if: "${{ jobs.md-check.outputs.md_check == 'no' }}"
         runs-on: default
         timeout-minutes: 90
         steps:
@@ -313,11 +411,56 @@ stages:
             uses: checkout
             with:
               fetch-depth: 0
+          - id: gate
+            name: Check if code changes exist
+            run: |
+              set -euo pipefail
+              BASE_REF="master"
+              if [ "${{ atomgit.event_name }}" = "pull_request" ] && [ -n "${ATOMGIT_BASE_REF}" ]; then
+                BASE_REF="${ATOMGIT_BASE_REF}"
+              fi
+              BASE_SHA="${{ atomgit.event.pull_request.base.sha }}"
+              HEAD_SHA="${ATOMGIT_SHA}"
+              git fetch --no-tags origin "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}" >/dev/null 2>&1 || true
+              if [ -n "${BASE_SHA}" ] && git cat-file -e "${BASE_SHA}^{commit}" >/dev/null 2>&1; then
+                CHANGED="$(git diff --name-only "${BASE_SHA}" "${HEAD_SHA}")"
+              else
+                CHANGED="$(git diff --name-only "origin/${BASE_REF}"...HEAD)"
+              fi
+              printf '%s\n' "${CHANGED}" > /tmp/changed-files.txt
+              NON_DOC="$(python3 - /tmp/changed-files.txt <<'PY'
+              import pathlib
+              import sys
+
+              doc_exts = {".md", ".png", ".jpg", ".jpeg", ".gif", ".svg"}
+              lines = [
+                  line.strip()
+                  for line in pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").splitlines()
+                  if line.strip()
+              ]
+              non_doc = [
+                  f
+                  for f in lines
+                  if pathlib.Path(f).suffix.lower() not in doc_exts
+                  and not f.startswith(("docs/", "LICENSES/"))
+              ]
+              print(len(non_doc))
+              PY
+              )"
+              echo "non_doc_files=${NON_DOC}"
+              if [ "${NON_DOC}" -eq 0 ]; then
+                echo "skip=true" >> "$ATOMGIT_OUTPUT"
+              else
+                echo "skip=false" >> "$ATOMGIT_OUTPUT"
+              fi
           - name: Setup Python
             uses: setup-python
             with:
               python-version: ${{ env.PYTHON_VERSION }}
+            if: ${{ steps.gate.outputs.skip != 'true' }}
           - name: Install uv
             run: python -m pip install -q --upgrade pip uv
+            if: ${{ steps.gate.outputs.skip != 'true' }}
           - name: Run unit tests
             run: python build.py test local
+            if: ${{ steps.gate.outputs.skip != 'true' }}

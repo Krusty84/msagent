@@ -18,60 +18,61 @@ def load_trend_db(db_path):
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
 
-    tables = [r[0] for r in conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
-    required = {'trend_data', 'monitoring_targets', 'monitoring_metrics'}
-    if not required.issubset(set(tables)):
-        print(f"Error: {db_path} missing tables: {required - set(tables)}", file=sys.stderr)
+    try:
+        tables = [r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
+        required = {'trend_data', 'monitoring_targets', 'monitoring_metrics',
+                    'monitoring_tags', 'tag_target_mapping', 'global_stats'}
+        if not required.issubset(set(tables)):
+            print(f"Error: {db_path} missing tables: {required - set(tables)}", file=sys.stderr)
+            return None
+
+        targets = {}
+        for r in conn.execute(
+                "SELECT target_id, target_name, vpp_stage, micro_step FROM monitoring_targets"):
+            targets[r['target_id']] = {
+                'name': r['target_name'],
+                'vpp_stage': r['vpp_stage'],
+                'micro_step': r['micro_step']
+            }
+
+        metrics = {}
+        for r in conn.execute("SELECT metric_id, metric_name FROM monitoring_metrics"):
+            metrics[r['metric_id']] = r['metric_name']
+
+        tags = {}
+        for r in conn.execute("SELECT tag_id, tag_name, category, metric_id FROM monitoring_tags"):
+            tags[r['tag_id']] = {
+                'name': r['tag_name'],
+                'category': r['category'],
+                'metric_id': r['metric_id']
+            }
+
+        tag_target = defaultdict(set)
+        for r in conn.execute("SELECT tag_id, target_id FROM tag_target_mapping"):
+            tag_target[r['tag_id']].add(r['target_id'])
+
+        gs = conn.execute("SELECT * FROM global_stats").fetchone()
+        global_stats = dict(gs) if gs else {}
+
+        trend_rows = []
+        cursor = conn.execute(
+            "SELECT rank, step, target_id, metric_id, norm, min, max, mean "
+            "FROM trend_data ORDER BY rank, step, target_id, metric_id"
+        )
+        for r in cursor:
+            trend_rows.append({
+                'rank': r['rank'],
+                'step': r['step'],
+                'target_id': r['target_id'],
+                'metric_id': r['metric_id'],
+                'norm': r['norm'],
+                'min': r['min'],
+                'max': r['max'],
+                'mean': r['mean']
+            })
+    finally:
         conn.close()
-        return None
-
-    targets = {}
-    for r in conn.execute(
-            "SELECT target_id, target_name, vpp_stage, micro_step FROM monitoring_targets"):
-        targets[r['target_id']] = {
-            'name': r['target_name'],
-            'vpp_stage': r['vpp_stage'],
-            'micro_step': r['micro_step']
-        }
-
-    metrics = {}
-    for r in conn.execute("SELECT metric_id, metric_name FROM monitoring_metrics"):
-        metrics[r['metric_id']] = r['metric_name']
-
-    tags = {}
-    for r in conn.execute("SELECT tag_id, tag_name, category, metric_id FROM monitoring_tags"):
-        tags[r['tag_id']] = {
-            'name': r['tag_name'],
-            'category': r['category'],
-            'metric_id': r['metric_id']
-        }
-
-    tag_target = defaultdict(set)
-    for r in conn.execute("SELECT tag_id, target_id FROM tag_target_mapping"):
-        tag_target[r['tag_id']].add(r['target_id'])
-
-    gs = conn.execute("SELECT * FROM global_stats").fetchone()
-    global_stats = dict(gs) if gs else {}
-
-    trend_rows = []
-    cursor = conn.execute(
-        "SELECT rank, step, target_id, metric_id, norm, min, max, mean "
-        "FROM trend_data ORDER BY rank, step, target_id, metric_id"
-    )
-    for r in cursor:
-        trend_rows.append({
-            'rank': r['rank'],
-            'step': r['step'],
-            'target_id': r['target_id'],
-            'metric_id': r['metric_id'],
-            'norm': r['norm'],
-            'min': r['min'],
-            'max': r['max'],
-            'mean': r['mean']
-        })
-
-    conn.close()
 
     return {
         'targets': targets,
@@ -212,16 +213,18 @@ def load_monitor_csv(path):
         with open(csv_path, 'r', encoding='utf-8') as f:
             reader = csv.DictReader(f)
             for r in reader:
+                if 'name' not in r or not r['name'] or 'step' not in r:
+                    continue
                 rows.append({
                     'rank': default_rank,
-                    'vpp_stage': int(r.get('vpp_stage', 0)),
+                    'vpp_stage': int(r.get('vpp_stage') or 0),
                     'name': r['name'],
-                    'step': int(r['step']),
-                    'micro_step': int(r['micro_step']) if r.get('micro_step', '') else 0,
-                    'min': float(r.get('min', 0)),
-                    'max': float(r.get('max', 0)),
-                    'mean': float(r.get('mean', 0)),
-                    'norm': float(r.get('norm', 0)),
+                    'step': int(r.get('step') or 0),
+                    'micro_step': int(r.get('micro_step') or 0),
+                    'min': float(r.get('min') or 0),
+                    'max': float(r.get('max') or 0),
+                    'mean': float(r.get('mean') or 0),
+                    'norm': float(r.get('norm') or 0),
                     'metric_id': default_metric,
                     'shape': r.get('shape', ''),
                     'dtype': r.get('dtype', ''),
@@ -236,7 +239,6 @@ def load_monitor_csv(path):
         name_micro_steps[r['name']].add(r['micro_step'])
 
     names = sorted(name_micro_steps.keys())
-    all_micro_steps = sorted(set(ms for mss in name_micro_steps.values() for ms in mss))
     targets = {
         i: {
             'name': n,

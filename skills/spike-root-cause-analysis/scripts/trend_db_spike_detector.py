@@ -19,7 +19,6 @@ Phase 1 — 异常前反向定位: 从梯度监控数据检测 spike 候选坐�
 import argparse
 import json
 import os
-import random
 import sqlite3
 import sys
 from collections import Counter, defaultdict
@@ -89,29 +88,19 @@ def detect_accumulation_window(trend_rows, num_samples=5, drop_threshold=3.0):
     if len(steps) < 5:
         return False, 1, 0, None
 
-    rank_counts = {}
-    for r in trend_rows:
-        rank_counts[r['rank']] = rank_counts.get(r['rank'], 0) + 1
+    rank_counts = Counter(r['rank'] for r in trend_rows)
     best_rank = max(rank_counts, key=rank_counts.get)
 
-    tid_steps = {}
+    tid_steps = defaultdict(list)
     for r in trend_rows:
-        if r['rank'] != best_rank:
-            continue
-        tid = r['target_id']
-        if tid not in tid_steps:
-            tid_steps[tid] = []
-        tid_steps[tid].append((r['step'], r['norm']))
+        if r['rank'] == best_rank:
+            tid_steps[r['target_id']].append((r['step'], r['norm']))
 
-    full_coverage = []
-    for tid, data in tid_steps.items():
-        if len(data) == len(steps):
-            full_coverage.append(tid)
+    full_coverage = [tid for tid, data in tid_steps.items() if len(data) == len(steps)]
 
     if not full_coverage:
         return False, 1, 0, None
 
-    import random
     sample_tids = full_coverage[:num_samples] if len(full_coverage) <= num_samples else \
         [full_coverage[i * len(full_coverage) // num_samples] for i in range(num_samples)]
 
@@ -121,12 +110,10 @@ def detect_accumulation_window(trend_rows, num_samples=5, drop_threshold=3.0):
         data = sorted(tid_steps[tid], key=lambda x: x[0])
         norms = [d[1] for d in data]
 
-        reset_steps = []
-        for i in range(1, len(norms)):
-            if norms[i - 1] > 0 and norms[i] > 0:
-                ratio = norms[i - 1] / norms[i]
-                if ratio > drop_threshold:
-                    reset_steps.append(data[i][0])
+        reset_steps = [
+            data[i][0] for i in range(1, len(norms))
+            if norms[i - 1] > 0 and norms[i] > 0 and norms[i - 1] / norms[i] > drop_threshold
+        ]
 
         reset_points.append(set(reset_steps))
         if len(reset_steps) >= 2:
@@ -191,17 +178,11 @@ def analyze_sharding(data):
     targets = data.get('targets', {})
     trend_rows = data.get('trend_rows', [])
 
-    vpp_stages = set()
-    for tid, t in targets.items():
-        vpp_stages.add(t.get('vpp_stage', 0))
+    vpp_stages = {t.get('vpp_stage', 0) for t in targets.values()}
     pp_stages = len(vpp_stages)
 
-    micro_steps = set()
-    for tid, t in targets.items():
-        micro_steps.add(t.get('micro_step', 0))
-    for r in trend_rows:
-        if 'micro_step' in r:
-            micro_steps.add(r['micro_step'])
+    micro_steps = {t.get('micro_step', 0) for t in targets.values()}
+    micro_steps.update(r['micro_step'] for r in trend_rows if 'micro_step' in r)
     has_explicit_micro_step = len(micro_steps) > 1
 
     accumulation_window = 0
@@ -283,9 +264,7 @@ def detect_micro_step_spikes(trend_rows, targets, top_per_step=3,
     max_ms_per_opt = {}
     for r in trend_rows:
         opt = r.get('optimizer_step', 0)
-        ms = r.get('micro_step', 0)
-        if opt not in max_ms_per_opt or ms > max_ms_per_opt[opt]:
-            max_ms_per_opt[opt] = ms
+        max_ms_per_opt[opt] = max(max_ms_per_opt.get(opt, 0), r.get('micro_step', 0))
 
     final_rows = defaultdict(list)  # optimizer_step -> [(norm, rank, target_id, row)]
     for r in trend_rows:
@@ -306,13 +285,11 @@ def detect_micro_step_spikes(trend_rows, targets, top_per_step=3,
 
     # ── Step 2: 累积曲线 delta 检测 ──
     # 短序列（每个 opt_step 内 micro_step 数少）时全量展开所有 (target, rank) 的曲线，
-    max_ms = max_ms_per_opt.get(max(max_ms_per_opt, key=lambda k: max_ms_per_opt[k]), 0)
-    is_short = len(trend_rows) > 0 and max_ms <= 12
+    max_ms = max(max_ms_per_opt.values(), default=0)
+    is_short = max_ms <= 12
 
     if is_short:
-        suspect_keys = set()
-        for r in trend_rows:
-            suspect_keys.add((r['target_id'], r['rank'], r.get('optimizer_step', 0)))
+        suspect_keys = {(r['target_id'], r['rank'], r.get('optimizer_step', 0)) for r in trend_rows}
     else:
         suspect_keys = {(s['target_id'], s['rank'], s['optimizer_step']) for s in suspects}
 
@@ -426,9 +403,7 @@ def collect_target_rank_norms(trend_rows, anomalies, window, targets=None):
     max_ms_per_opt = {}
     for r in trend_rows:
         opt = r.get('optimizer_step', 0)
-        ms = r.get('micro_step', 0)
-        if opt not in max_ms_per_opt or ms > max_ms_per_opt[opt]:
-            max_ms_per_opt[opt] = ms
+        max_ms_per_opt[opt] = max(max_ms_per_opt.get(opt, 0), r.get('micro_step', 0))
 
     result = {}
     for os_step, (tname, _) in step_top_target.items():

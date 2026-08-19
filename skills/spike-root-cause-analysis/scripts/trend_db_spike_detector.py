@@ -83,6 +83,12 @@ def detect_accumulation_window(trend_rows, num_samples=5, drop_threshold=3.0):
     if not trend_rows:
         return False, 1, 0, None
 
+    # 多 metric 混合会破坏逐 step 覆盖判定，只用行数最多的 metric
+    metric_counts = Counter(r['metric_id'] for r in trend_rows)
+    if len(metric_counts) > 1:
+        trend_rows = [r for r in trend_rows
+                      if r['metric_id'] == metric_counts.most_common(1)[0][0]]
+
     steps = sorted(set(r['step'] for r in trend_rows))
     # 放宽下限: 至少 5 个 step 且存在周期性重置才判定为累积
     if len(steps) < 5:
@@ -194,12 +200,10 @@ def analyze_sharding(data):
         has_accumulation, accumulation_window, optimizer_step_count, reset_boundary = \
             detect_accumulation_window(trend_rows)
 
-    if has_accumulation:
+    if has_accumulation or has_explicit_micro_step:
         has_micro_step = True
-        micro_step_range = list(range(0, accumulation_window))
-    elif has_explicit_micro_step:
-        has_micro_step = True
-        micro_step_range = sorted(micro_steps)
+        micro_step_range = (list(range(0, accumulation_window)) if has_accumulation
+                            else sorted(micro_steps))
     else:
         has_micro_step = False
         micro_step_range = [0]
@@ -280,7 +284,7 @@ def detect_micro_step_spikes(trend_rows, targets, top_per_step=3,
             suspects.append({
                 'rank': rank, 'optimizer_step': opt_step,
                 'target_id': tid, 'target_name': targets[tid]['name'],
-                'final_norm': norm, 'final_micro_step': last_ms
+                'final_norm': norm, 'final_micro_step': max_ms_per_opt.get(opt_step, 0)
             })
 
     # ── Step 2: 累积曲线 delta 检测 ──
@@ -295,9 +299,9 @@ def detect_micro_step_spikes(trend_rows, targets, top_per_step=3,
 
     ms_index = defaultdict(list)
     for r in trend_rows:
-        key = (r['target_id'], r['rank'], r.get('optimizer_step', 0))
-        if key in suspect_keys:
-            ms_index[key].append((r.get('micro_step', 0), r))
+        k = (r['target_id'], r['rank'], r.get('optimizer_step', 0))
+        if k in suspect_keys:
+            ms_index[k].append((r.get('micro_step', 0), r))
 
     suspect_map = {(s['target_id'], s['rank'], s['optimizer_step']): s for s in suspects}
     result = []
@@ -395,10 +399,7 @@ def collect_target_rank_norms(trend_rows, anomalies, window, targets=None):
     if not step_top_target:
         return None
 
-    tid_to_name = {}
-    if targets:
-        for tid, t in targets.items():
-            tid_to_name[tid] = t['name']
+    tid_to_name = {tid: t['name'] for tid, t in targets.items()}
 
     max_ms_per_opt = {}
     for r in trend_rows:
@@ -453,8 +454,7 @@ def main():
         if boundary is not None:
             # 短序列: 重置边界前的 step 归 opt0，边界及之后归 opt1
             # micro_step = 相对窗口起点的偏移
-            steps_all = sorted(set(r['step'] for r in data['trend_rows']))
-            start = steps_all[0]
+            start = min(r['step'] for r in data['trend_rows'])
             for r in data['trend_rows']:
                 r['optimizer_step'] = 0 if r['step'] < boundary else 1
                 r['micro_step'] = r['step'] - start
@@ -464,6 +464,12 @@ def main():
                 r['micro_step'] = r['step'] % window
         anomalies = detect_micro_step_spikes(
             data['trend_rows'], data['targets'], delta_iqr_mult=args.iqr_mult)
+    elif sharding.get('has_micro_step'):
+        # 显式 micro_step（如 CSV）: 无需窗口切分，按已有 micro_step 检测
+        for r in data['trend_rows']:
+            r.setdefault('optimizer_step', 0)
+        anomalies = detect_micro_step_spikes(
+            data['trend_rows'], data['targets'], delta_iqr_mult=args.iqr_mult)
     else:
         baselines = compute_per_target_baselines(data['trend_rows'], data['targets'])
         anomalies = detect_spikes(data['trend_rows'], data['targets'], baselines,
@@ -471,7 +477,7 @@ def main():
                                   mad_multiplier=args.mad_mult)
 
     target_rank_norms = None
-    if sharding.get('accumulation_detected') and anomalies:
+    if sharding.get('has_micro_step') and anomalies:
         target_rank_norms = collect_target_rank_norms(
             data['trend_rows'], anomalies, sharding['accumulation_window'], data['targets'])
 

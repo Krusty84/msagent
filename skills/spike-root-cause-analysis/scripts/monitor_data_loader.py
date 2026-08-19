@@ -52,7 +52,8 @@ def load_trend_db(db_path):
         for r in conn.execute("SELECT tag_id, target_id FROM tag_target_mapping"):
             tag_target[r['tag_id']].add(r['target_id'])
 
-        gs = conn.execute("SELECT * FROM global_stats").fetchone()
+        gs = conn.execute(
+            "SELECT min_step, max_step, max_rank, grad_unreduced, grad_reduced FROM global_stats").fetchone()
         global_stats = dict(gs) if gs else {}
 
         trend_rows = []
@@ -99,7 +100,6 @@ def load_dump_statistic(dump_dir):
 
     targets = {}
     rows = []
-    tid = 0
     name_to_id = {}
     step = 0  # 默认 step
 
@@ -150,7 +150,7 @@ def _load_dump_ranks(base_path, step, name_to_id, targets, rows):
             param_name = op_name.rsplit('.parameters_grad', 1)[0]
 
             for wkey, wval in op_data.items():
-                if isinstance(wval, list) and len(wval) > 0 and 'Norm' in wval[0]:
+                if isinstance(wval, list) and wval and isinstance(wval[0], dict) and 'Norm' in wval[0]:
                     norm = wval[0].get('Norm', 0)
                     mx = wval[0].get('Max', 0)
                     mn = wval[0].get('Min', 0)
@@ -235,16 +235,16 @@ def load_monitor_csv(path):
         return None
 
     name_micro_steps = defaultdict(set)
+    name_vpp_stages = defaultdict(set)
     for r in rows:
         name_micro_steps[r['name']].add(r['micro_step'])
+        name_vpp_stages[r['name']].add(r['vpp_stage'])
 
     names = sorted(name_micro_steps.keys())
     targets = {
-        i: {
-            'name': n,
-            'vpp_stage': 0,
-            'micro_step': sorted(name_micro_steps[n])[0] if name_micro_steps[n] else 0
-        }
+        i: {'name': n,
+            'vpp_stage': min(name_vpp_stages[n]) if name_vpp_stages[n] else 0,
+            'micro_step': sorted(name_micro_steps[n])[0] if name_micro_steps[n] else 0}
         for i, n in enumerate(names)
     }
     name_to_id = {n: i for i, n in enumerate(names)}

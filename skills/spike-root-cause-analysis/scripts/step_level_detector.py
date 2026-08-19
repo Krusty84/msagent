@@ -83,12 +83,12 @@ def detect_spikes(trend_rows, targets, baselines, metric_id=1,
         if iqr > 0:
             iqr_threshold = baseline['q3'] + iqr_multiplier * iqr
         else:
-            iqr_threshold = med * 10 if med > 0 else float('inf')
+            iqr_threshold = med * 10 if med > 0 else 1e-10
 
         if mad > 0:
             mad_threshold = med + mad_multiplier * mad
         else:
-            mad_threshold = float('inf')
+            mad_threshold = med * mad_multiplier if med > 0 else 1e-10
 
         is_spike_iqr = norm > iqr_threshold and norm > 0
         is_spike_mad = norm > mad_threshold and norm > 0

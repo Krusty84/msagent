@@ -72,7 +72,7 @@ python -m pip install --pre --upgrade "mindstudio-agent>=26.1.0a2,<26.2"
 3. 构建成功后，安装包将生成在 `artifacts/` 目录下。使用如下命令进行安装：
 
    ```shell
-   pip install artifacts/mindstudio_agent-{version}-py3-none-any.whl
+   pip install artifacts/mindstudio_agent-*-py3-none-any.whl
    ```
 
    安装完成后，若显示如下信息，则说明软件安装成功。
@@ -106,37 +106,23 @@ msagent --help
 
 ## 5. 升级与卸载
 
-`msagent` 会在当前工作目录下生成 `.msagent/` 本地目录，用于保存缓存、会话历史、记忆、日志、检查点和运行时配置等内容。
+`msagent` 会在当前工作目录下生成 `.msagent/` 本地目录，用于保存缓存、会话历史、日志和运行时配置等内容。
 
-- 正常升级不需要删除 `.msagent/`。如需排查旧配置，先停止会话并重命名该目录进行备份，确认不再需要其中数据后再自行清理。
-- 卸载不会自动删除 `.msagent/`。如果后续不再使用 `msagent`，也应先确认其中没有需要保留的历史、记忆或自定义配置。
+- 升级前，先删除当前工作目录下的 `.msagent/` 文件夹，避免旧缓存影响新版本行为。
+- 卸载时，如果后续不再使用 `msagent`，也建议一并删除 `.msagent/` 文件夹。
 
 常见操作示例：
 
 - 升级
 
   ```shell
-  python -m pip install --upgrade mindstudio-agent
-  ```
-
-  如确需使用全新默认配置进行对比，可在启动新版本前备份原目录：
-
-  ```shell
-  mv .msagent .msagent.backup
-  ```
-
-  新版本首次启动后会重新生成 `.msagent/`；排查完成前请保留 `.msagent.backup/`。
-
-  从 **26.1.0-alpha.2** 起，Web UI 依赖 `langgraph-cli[inmem]` 已改为可选 extra `[web]`。`pip install -U` 升级时**不会自动卸载**旧版已安装的 web 相关包；若不再使用 Web UI，可手动执行：
-
-  ```shell
-  pip uninstall -y langgraph-cli langgraph-api langgraph-runtime-inmem
+  rm -rf .msagent
+  pip install mindstudio-agent
   ```
 
 - 卸载
 
   ```shell
-  python -m pip uninstall mindstudio-agent
+  rm -rf .msagent
+  pip uninstall mindstudio-agent
   ```
-
-  卸载命令会保留 `.msagent/`，便于后续恢复或迁移。

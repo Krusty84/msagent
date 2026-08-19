@@ -22,7 +22,6 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-import os
 from pathlib import Path
 from typing import Any, Literal
 
@@ -50,9 +49,7 @@ class AgentContext(BaseModel):
     """Context passed to agent for template rendering."""
 
     approval_mode: ApprovalMode = Field(default=ApprovalMode.ACTIVE)
-    working_dir: Path = Field(
-        default_factory=lambda: Path(os.getenv("MSAGENT_WEB_WORKING_DIR", "").strip() or Path.cwd()).resolve()
-    )
+    working_dir: Path = Field(default_factory=lambda: Path.cwd().resolve())
     platform: str = Field(default="")
     os_version: str = Field(default="")
     current_date_time_zoned: str = Field(default="")

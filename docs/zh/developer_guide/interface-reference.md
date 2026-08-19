@@ -1,6 +1,6 @@
 # 接口说明
 
-本文覆盖当前公开的 `msagent` 主命令、`config`、`web` 和交互式斜杠命令。配置文件结构见 [配置与扩展](../user_guide/configuration-and-extension.md)，具体操作流程见 [msAgent 使用指南](../user_guide/usemap.md)。
+本文覆盖当前公开的 `msagent` 主命令、`config` 和交互式斜杠命令。配置文件结构见 [配置与扩展](../user_guide/configuration-and-extension.md)，具体操作流程见 [msAgent 使用指南](../user_guide/usemap.md)。
 
 ## 使用分级
 
@@ -13,7 +13,7 @@
 ## 1. 主命令
 
 ```bash
-msagent [options] [message]
+msagent [message] [options]
 ```
 
 不传 `message` 时进入交互式会话；传入 `message` 时发送一次任务请求。
@@ -22,10 +22,10 @@ msagent [options] [message]
 | --- | --- | --- | --- |
 | 基础 | `[message]` | 不传时进入交互会话 | 发送一次任务请求。 |
 | 基础 | `-h`, `--help` | - | 显示主命令帮助。 |
-| 基础 | `--version` | - | 显示版本并退出；该参数直接跟在 `msagent` 后。 |
+| 基础 | `-V`, `--version` | - | 显示版本并退出；该参数直接跟在 `msagent` 后。 |
 | 基础 | `--stream` | 已启用 | 使用流式输出。 |
 | 常用 | `--no-stream` | 未启用 | 只渲染最终回复。 |
-| 高级 | `-v`, `--verbose` | 未启用 | 日志始终写入 `.msagent/logs/app.log`；启用后在终端显示日志文件位置。 |
+| 高级 | `-v`, `--verbose` | 未启用 | 启用详细日志输出。 |
 | 常用 | `-w`, `--working-dir` | 当前目录 | 指定会话工作目录。 |
 | 常用 | `-a`, `--agent` | 当前配置 | 指定 `Profiler`、`Accuracy`、`Quantizer`、`Modeling`、`Operator` 或 `Minos`。 |
 | 常用 | `-m`, `--model` | 当前 Agent 配置 | 指定 LLM 模型别名。 |
@@ -88,7 +88,7 @@ msagent config [options]
 | 常用 | `--llm-max-tokens <number>` | 保持当前值 | 设置最大输出 token；`0` 表示使用 provider 或模型默认值。 |
 | 常用 | `-w`, `--working-dir <path>` | 当前目录 | 指定项目本地 `.msagent` 配置所在的工作目录。 |
 | 高级 | `--llm-api-key <key>` | 不设置 | 仅在本次 `config` 进程中设置 API Key，不为后续会话持久化。 |
-| 高级 | `-v`, `--verbose` | 未启用 | 在终端显示日志文件位置。 |
+| 高级 | `-v`, `--verbose` | 未启用 | 启用详细日志输出。 |
 
 DeepSeek 等 OpenAI-compatible 服务示例：
 
@@ -116,55 +116,14 @@ OPENAI_API_KEY=your-key
 
 官方服务不需要自定义 Base URL。若此前配置过兼容服务或代理，请在设置 provider 或模型的同一条命令中加入 `--llm-base-url ""` 清除旧地址；不要单独运行该参数。
 
-## 4. Web 命令
-
-发布包默认不包含 Web UI 依赖，首次使用前安装可选 extra：
-
-```bash
-python -m pip install --pre --upgrade "mindstudio-agent[web]>=26.1.0a2,<26.2"
-```
-
-前端还需要 Node.js。源码或回退前端路径会使用 `npm` 和 `npx`，启动前请确认这些命令可用：
-
-```bash
-node --version
-npm --version
-npx --version
-```
-
-如果只需启动 LangGraph API，不需要前端和 Node.js，请使用 `msagent web --no-ui`。
-
-源码运行时先执行 `uv sync --extra web`，并将下列命令写成 `uv run msagent web ...`。
-
-```bash
-msagent web [options]
-```
-
-`web` 默认同时启动 LangGraph API 服务和 deep-agents-ui 前端。
-
-| 级别 | 参数 | 默认值 | 说明 |
-| --- | --- | --- | --- |
-| 基础 | `-h`, `--help` | - | 显示 Web 命令帮助。 |
-| 基础 | `--host <host>` | `127.0.0.1` | 指定 LangGraph 服务监听地址。 |
-| 基础 | `--port <port>` | `2024` | 指定 LangGraph 服务端口。 |
-| 基础 | `--ui-port <port>` | `3000` | 指定 deep-agents-ui 前端端口。 |
-| 常用 | `--no-ui` | 未启用 | 只启动 LangGraph API。 |
-| 常用 | `--no-open` | 未启用 | 启动后不自动打开浏览器。 |
-| 常用 | `-w`, `--working-dir <path>` | 当前目录 | 指定项目工作目录。 |
-| 常用 | `-a`, `--agent <name>` | 当前配置 | 指定启动的 Agent。 |
-| 常用 | `-m`, `--model <alias>` | 当前 Agent 配置 | 指定 LLM 模型别名。 |
-| 高级 | `-v`, `--verbose` | 未启用 | 在终端显示日志文件位置。 |
-
-完整集成方式见 [msAgent 集成指南](../user_guide/integration-guide.md)。
-
-## 5. Agent、MCP 与 Skill 入口
+## 4. Agent、MCP 与 Skill 入口
 
 - Agent 列表和领域边界见 [文档首页](../../index.md) 的“内置 Agent 与能力分工”。
 - Agent YAML、Tool 和 Skill 过滤规则见 [Agent / Tool / Skill 过滤规则](../user_guide/agent-tool-skill-filter-rules.md)。
 - MCP 配置字段见 [配置与扩展](../user_guide/configuration-and-extension.md)。
 - Skill 开发、部署与排错见 [Skill 开发部署排错](skill-development.md)。
 
-## 6. 本地验证命令
+## 5. 本地验证命令
 
 修改接口相关文档后，至少运行：
 
@@ -172,7 +131,6 @@ msagent web [options]
 msagent --version
 msagent --help
 msagent config --help
-msagent web --help
 msagent config --show
 ```
 

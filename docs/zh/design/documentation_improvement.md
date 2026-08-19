@@ -6,7 +6,7 @@
 
 创建日期（Created）：2026-08-15
 
-更新日期（Updated）：2026-08-16
+更新日期（Updated）：2026-08-19
 
 相关 Issue/PR：[Issue #10](https://gitcode.com/Ascend/msagent/issues/10)、[PR #115](https://gitcode.com/Ascend/msagent/pull/115)
 
@@ -38,7 +38,7 @@ msAgent 已具备安装指南、用户指南和多个领域 Agent，但原有文
 本提案的目标如下：
 
 - 提供从安装、模型配置、配置校验到启动会话的最短可执行路径。
-- 提供 `msagent`、`msagent config`、`msagent web` 和交互式斜杠命令的中英文公开接口说明。
+- 提供 `msagent`、`msagent config` 和交互式斜杠命令的中英文公开接口说明。
 - 提供 Skill 开发、部署、Agent 放行、验证和排错的中英文入口。
 - 至少覆盖 4 个 Agent，并统一说明其定位、启动方式、输入、输出和排错路径。
 - 建立中英文核心文档的对应结构，英文范围明确为核心入口而非全量镜像。
@@ -77,7 +77,7 @@ msAgent 已具备安装指南、用户指南和多个领域 Agent，但原有文
 
 ### 2.3 开发者查询 CLI 接口
 
-开发者能够在独立接口说明中查询主命令、`config`、`web` 子命令和交互式斜杠命令，了解交互式会话、单次请求、工作目录、Agent 选择、模型选择、审批模式、配置检查和 Web 服务等入口。CLI 参数仍以 `--help` 输出为准，文档不复制内部实现细节。
+开发者能够在独立接口说明中查询主命令、`config` 子命令和交互式斜杠命令，了解交互式会话、单次请求、工作目录、Agent 选择、模型选择、审批模式和配置检查等入口。CLI 参数仍以 `--help` 输出为准，文档不复制内部实现细节。
 
 ### 2.4 开发者创建和部署 Skill
 
@@ -107,7 +107,7 @@ msAgent 已具备安装指南、用户指南和多个领域 Agent，但原有文
 |---|---|---|
 | 安装与快速开始 | 覆盖安装、配置、校验和启动 | 按 Quick Start 顺序执行命令 |
 | 配置与 FAQ | 覆盖本地配置、API Key、`.env` 和源码运行入口 | 检查交叉引用和配置输出 |
-| 接口说明 | 覆盖主命令、`config`、`web` 与交互式斜杠命令 | 对照 CLI 帮助和斜杠命令注册表 |
+| 接口说明 | 覆盖主命令、`config` 与交互式斜杠命令 | 对照 CLI 帮助和斜杠命令注册表 |
 | Skill 开发 | 覆盖开发、部署、放行、验证和排错 | 使用最小目录与配置示例走查 |
 | Agent 文档 | 至少 4 个 Agent，结构和入口清晰 | 检查中英文 Agent 导航 |
 | 中英双语 | 核心入口结构对应，范围说明明确 | 对照中英文 `toctree` |
@@ -178,9 +178,8 @@ FAQ 只保留高频、跨页面仍需要解释的问题；已有配置专题能�
 
 接口说明覆盖以下稳定入口：
 
-- `msagent [options] [message]`
+- `msagent [message] [options]`
 - `msagent config [options]`
-- `msagent web [options]`
 - Agent、MCP、Skill 相关文档入口
 - 本地验证命令
 
@@ -250,9 +249,8 @@ Skill 指南提供最小可运行结构和生命周期：创建、Agent 放行�
 
 | 接口 | 输入 | 输出 | 约束 |
 |---|---|---|---|
-| `msagent [options] [message]` | 会话参数和可选消息 | 交互式会话或单次回复 | 参数以 `msagent --help` 为准 |
+| `msagent [message] [options]` | 会话参数和可选消息 | 交互式会话或单次回复 | 参数以 `msagent --help` 为准 |
 | `msagent config [options]` | Provider、模型、Base URL 等配置参数 | 更新或展示项目本地配置 | API Key 展示必须脱敏 |
-| `msagent web [options]` | 服务地址、端口、Agent 和模型等参数 | LangGraph API 及可选 Web UI | 参数以 `msagent web --help` 为准 |
 | `SKILL.md` | frontmatter、工作流说明及可选资源 | 可被 Agent 发现和调用的 Skill | 必须满足目录扫描和 Pattern 过滤规则 |
 
 调用示例由 Quick Start、接口说明和 Skill 指南分别维护，本 RFC 不重复完整参数表。
@@ -322,7 +320,6 @@ Skill 指南提供最小可运行结构和生命周期：创建、Agent 放行�
 uv run msagent --version
 uv run msagent --help
 uv run msagent config --help
-uv run msagent web --help
 uv run msagent config --show
 python -m pip install -r docs/requirements.txt
 python -m sphinx -E -b html docs docs/_build/html

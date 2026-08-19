@@ -80,8 +80,8 @@ description: 技能的详细描述，说明它做什么，以及什么时候使�
 
 | Skill | 作用 | 示例 prompt |
 | --- | --- | --- |
-| `ascendc-operator-performance-optim` | 做 AscendC 算子性能调优 | `分析这个算子并给出优化代码` |
 | `msot-msopprof-operator-profiler` | 做 msprof op 算子分析 | `输出这个算子的瓶颈和优化建议` |
+| `ops-performance-tuning` | 对 AscendC/CATLASS/Triton/TileLang/PyPTO/SHMEM 算子做编译、profiling 与性能调优 | `对这个算子做性能分析并给出前后对比报告` |
 
 ### 2.5 文档审查 Skills
 

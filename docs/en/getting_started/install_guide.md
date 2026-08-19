@@ -28,18 +28,21 @@ python -m pip install --pre --upgrade "mindstudio-agent>=26.1.0a2,<26.2"
 
 Otherwise, use the commands and Agent names shown by the installed release's `msagent --help` output.
 
-## Run from Source
+## Build and Install from Source
 
-Install [uv](https://docs.astral.sh/uv/), then run the following commands from a development environment supported by the repository:
+Source builds use the standard MindStudio build environment. Follow the container requirements in the Chinese [installation guide](../../zh/getting_started/install_guide.md), then run these commands inside the required interactive container:
 
 ```bash
+cd ~
 git clone https://gitcode.com/Ascend/msagent.git
-cd msagent
-uv sync --dev
-uv run msagent --version
+cd ~/msagent
+python3 build.py
+python -m pip install artifacts/mindstudio_agent-*-py3-none-any.whl
 ```
 
-Use `uv run msagent ...` instead of `msagent ...` for subsequent source-based commands. Repository builds and release packages use the standard MindStudio build environment described in the Chinese [installation guide](../../zh/getting_started/install_guide.md).
+If `uv` is already installed in the container, `python3 build.py local` skips installing it. To run the unit-test build workflow, use `python3 build.py test`.
+
+For contribution and local development rather than package installation, follow the Chinese [Contribution Guide](../../zh/developer_guide/contributing.md), which documents the `uv sync --dev` and `uv run msagent ...` workflow.
 
 ## Next Step
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import configparser
 import os
 from pathlib import Path
 
@@ -10,7 +11,6 @@ import yaml
 from rich.table import Table
 
 from msagent.cli.bootstrap.chat import handle_chat_command
-from msagent.cli.bootstrap.web import handle_web_command
 from msagent.cli.bootstrap.initializer import initializer
 from msagent.cli.theme import console
 from msagent.configs import ApprovalMode
@@ -31,8 +31,8 @@ DEFAULT_API_ENV_MAP = {
 }
 
 DEFAULT_SESSION_COMMAND = "__session__"
-PUBLIC_COMMANDS = {"config", "web"}
-ROOT_ONLY_FLAGS = {"--version"}
+PUBLIC_COMMANDS = {"config"}
+ROOT_ONLY_FLAGS = {"--help", "-h", "--version", "-V"}
 
 AGENT_HELP = (
     "Agent name. Available agents:\n"
@@ -44,12 +44,142 @@ AGENT_HELP = (
     "Minos     Documentation UX and code review."
 )
 
-SESSION_DESCRIPTION = (
-    "Start a chat session with msAgent.\n\n"
-    "subcommands:\n"
-    "  config      Configure msAgent\n"
-    "  web         Start a LangGraph server for deep-agents-ui"
-)
+SESSION_DESCRIPTION = "Start a chat session with msAgent.\n\nsubcommands:\n  config      Configure msAgent"
+
+ROOT_HELP_TEXT = """Description:
+  Start an interactive msagent session, or use subcommands to configure the
+  local project settings.
+
+Usage:
+  msagent [message] [options]
+  msagent config [options]
+
+Optional arguments:
+  -h, --help                               Show help message and exit.
+  -V, --version                            Show version information and exit.
+      --stream                             Stream output.
+      --no-stream                          Render the final reply without token streaming.
+  -v, --verbose                            Enable verbose logging to console and .msagent/app.log.
+  -w, --working-dir <DIR>                  Working directory for the session [default: current directory]
+  -a, --agent <NAME>                       Agent name. Available: Profiler, Accuracy, Quantizer, Modeling, Operator, Minos.
+  -m, --model <NAME>                       LLM model alias.
+      --timer                              Enable startup timing.
+  -am, --approval-mode {semi-active,active,aggressive}
+                                           Tool approval mode [default: active]
+      --trace-jsonl <FILE>                 Write JSONL trace events to this file.
+
+Examples:
+  # Start an interactive session in the current directory
+  msagent
+
+  # Send a message directly to the default agent
+  msagent "analyze profiling"
+
+  # Start a session with a specific agent and model
+  msagent --agent Profiler --model deepseek-v4-flash
+
+  # Show current project-local configuration
+  msagent config --show
+
+Troubleshooting:
+  - "command not found": make sure msagent is installed in the current Python environment.
+  - Missing model response: run `msagent config --show` and verify the configured LLM provider and model.
+  - Permission or path errors: check that --working-dir points to a writable project directory.
+"""
+
+CONFIG_HELP_TEXT = """Description:
+  Configure project-local msagent settings, or display the current
+  configuration.
+
+Usage:
+  msagent config [options]
+
+Optional arguments:
+  -h, --help                               Show help message and exit.
+  -v, --verbose                            Enable verbose logging to console and .msagent/app.log.
+  -s, --show                               Show current configuration.
+      --llm-provider <NAME>                LLM provider. Available: openai, anthropic, gemini, google.
+      --llm-api-key <KEY>                  LLM API key for this process only.
+      --llm-max-tokens <INT>               Max output tokens (0 means provider/model default).
+      --llm-base-url <URL>                 Custom provider base URL for a compatible service or proxy.
+  -m, --llm-model <NAME>                   Model name.
+  -w, --working-dir <DIR>                  Working directory for project-local .msagent config [default: current directory]
+
+Examples:
+  # Show current project-local configuration
+  msagent config --show
+
+  # Update the default provider and model
+  msagent config --llm-provider openai --llm-model gpt-5
+
+  # Use a custom compatible endpoint for the current project
+  msagent config --llm-provider openai --llm-base-url http://127.0.0.1:8000/v1
+
+Troubleshooting:
+  - Unsupported provider: use one of openai, anthropic, gemini, or google.
+  - API key not persisted: `--llm-api-key` only applies to the current process.
+  - Config not taking effect: confirm `--working-dir` points to the intended project directory.
+"""
+
+VERSION_BANNER = """=================================================================
+                   >>>>>   MindStudio   <<<<<
+    THE END-TO-END TOOLCHAIN TO UNLEASH HUAWEI ASCEND COMPUTE
+================================================================="""
+
+VERSION_INFO_DEFAULTS = {
+    "version": "",
+    "commit": "unknown",
+    "date": "unknown",
+    "repo": "https://gitcode.com/Ascend/msagent",
+}
+
+
+def _load_version_info() -> dict[str, str]:
+    for path in (
+        Path(__file__).resolve().parents[2] / "version.info",
+        Path(__file__).resolve().parents[4] / "version.info",
+    ):
+        if not path.exists():
+            continue
+        try:
+            parser = configparser.ConfigParser()
+            parser.read(path, encoding="utf-8")
+            section = parser["PACKAGE"]
+            return {
+                key: section.get(key.capitalize(), default).strip() or default
+                for key, default in VERSION_INFO_DEFAULTS.items()
+            }
+        except Exception:
+            continue
+
+    return VERSION_INFO_DEFAULTS.copy()
+
+
+def render_root_help() -> None:
+    console.print(ROOT_HELP_TEXT, end="", markup=False)
+
+
+def render_config_help() -> None:
+    console.print(CONFIG_HELP_TEXT, end="", markup=False)
+
+
+def _resolve_copyright_year(build_date: str) -> str:
+    return build_date[:4] if len(build_date) >= 4 and build_date[:4].isdigit() else "2026"
+
+
+def render_version_info() -> None:
+    version_info = _load_version_info()
+    copyright_year = _resolve_copyright_year(version_info["date"])
+    version_text = (
+        f"{VERSION_BANNER}\n"
+        f"{APP_NAME} {version_info.get('version') or 'unknown'} ({version_info['commit']})\n"
+        f"Copyright (C) {copyright_year} Huawei Technologies Co., Ltd.\n"
+        "License: Mulan PSL v2.\n\n"
+        "Build Info:\n"
+        f"  Date : {version_info['date']}\n"
+        f"  Repo : {version_info['repo']}\n"
+    )
+    console.print(version_text, end="", markup=False)
 
 
 def normalize_argv(argv: list[str]) -> list[str]:
@@ -69,11 +199,12 @@ def create_legacy_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawTextHelpFormatter,
     )
     parser.add_argument(
+        "-V",
         "--version",
         action="store_true",
         help="Show version information and exit",
     )
-    subparsers = parser.add_subparsers(dest="cli_command", metavar="{config,web}")
+    subparsers = parser.add_subparsers(dest="cli_command", metavar="{config}")
 
     config_parser = subparsers.add_parser("config", help="Configure msAgent")
     config_parser.add_argument(
@@ -109,52 +240,6 @@ def create_legacy_parser() -> argparse.ArgumentParser:
         default=os.getcwd(),
         help="Working directory for project-local .msagent config",
     )
-
-    web_parser = subparsers.add_parser(
-        "web",
-        help="Start a LangGraph server for deep-agents-ui",
-    )
-    web_parser.add_argument(
-        "-v",
-        "--verbose",
-        action="store_true",
-        help="Enable verbose logging to console and .msagent/app.log",
-    )
-    web_parser.add_argument(
-        "--host",
-        default="127.0.0.1",
-        help="Host interface for the LangGraph dev server",
-    )
-    web_parser.add_argument(
-        "--port",
-        type=int,
-        default=2024,
-        help="Port for the LangGraph dev server",
-    )
-    web_parser.add_argument(
-        "--ui-port",
-        type=int,
-        default=3000,
-        help="Port for the official deep-agents-ui frontend",
-    )
-    web_parser.add_argument(
-        "--no-ui",
-        action="store_true",
-        help="Start only the LangGraph API server without the deep-agents-ui frontend",
-    )
-    web_parser.add_argument(
-        "--no-open",
-        action="store_true",
-        help="Do not open the web UI in the default browser after startup",
-    )
-    web_parser.add_argument(
-        "-w",
-        "--working-dir",
-        default=os.getcwd(),
-        help="Working directory for project-local .msagent config",
-    )
-    web_parser.add_argument("-a", "--agent", default=None, help=AGENT_HELP)
-    web_parser.add_argument("-m", "--model", default=None, help="LLM model alias")
 
     return parser
 
@@ -230,9 +315,7 @@ def _add_runtime_options(parser: argparse.ArgumentParser, *, include_timer: bool
 async def dispatch_legacy_command(args: argparse.Namespace) -> int:
     """Dispatch a parsed retained command."""
     if args.version:
-        from msagent.utils.version import get_version
-
-        console.print(f"[bold cyan]msAgent[/bold cyan] v{get_version()}")
+        render_version_info()
         return 0
 
     command = args.cli_command or DEFAULT_SESSION_COMMAND
@@ -240,8 +323,6 @@ async def dispatch_legacy_command(args: argparse.Namespace) -> int:
         return await _handle_chat(args)
     if command == "config":
         return await _handle_config(args)
-    if command == "web":
-        return await _handle_web(args)
 
     console.print_error(f"Unknown command: {command}")
     console.print("")
@@ -323,21 +404,6 @@ async def _handle_config(args: argparse.Namespace) -> int:
 
     console.print_success("Configuration saved successfully")
     return 0
-
-
-async def _handle_web(args: argparse.Namespace) -> int:
-    web_args = argparse.Namespace(
-        host=args.host,
-        port=args.port,
-        ui_port=args.ui_port,
-        no_ui=args.no_ui,
-        no_open=args.no_open,
-        working_dir=args.working_dir,
-        agent=args.agent,
-        model=args.model,
-        verbose=args.verbose,
-    )
-    return await handle_web_command(web_args)
 
 
 async def _show_config(registry, working_dir: Path) -> int:

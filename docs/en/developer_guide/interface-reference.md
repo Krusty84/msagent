@@ -1,6 +1,6 @@
 # Interface Reference
 
-This page covers the public `msagent` command, `config`, `web`, and interactive slash commands. For local configuration files, see [Configuration and Extensions](../user_guide/configuration-and-extension.md). For workflow examples, see the Chinese [msAgent Usage Guide](../../zh/user_guide/usemap.md).
+This page covers the public `msagent` command, `config`, and interactive slash commands. For local configuration files, see [Configuration and Extensions](../user_guide/configuration-and-extension.md). For workflow examples, see the Chinese [msAgent Usage Guide](../../zh/user_guide/usemap.md).
 
 ## Usage Levels
 
@@ -13,7 +13,7 @@ These levels indicate a suggested reading order only. They do not indicate permi
 ## 1. Main Command
 
 ```bash
-msagent [options] [message]
+msagent [message] [options]
 ```
 
 Without `message`, `msagent` starts an interactive session. With `message`, it sends a one-shot request.
@@ -22,10 +22,10 @@ Without `message`, `msagent` starts an interactive session. With `message`, it s
 | --- | --- | --- | --- |
 | Basic | `[message]` | Interactive session when omitted | Send a one-shot request. |
 | Basic | `-h`, `--help` | - | Show main command help. |
-| Basic | `--version` | - | Show the version and exit; place this option directly after `msagent`. |
+| Basic | `-V`, `--version` | - | Show the version and exit; place this option directly after `msagent`. |
 | Basic | `--stream` | Enabled | Stream model output. |
 | Common | `--no-stream` | Disabled | Render only the final response. |
-| Advanced | `-v`, `--verbose` | Disabled | Logs are always written to `.msagent/logs/app.log`; enabling this option prints the log path. |
+| Advanced | `-v`, `--verbose` | Disabled | Enable verbose logging. |
 | Common | `-w`, `--working-dir` | Current directory | Set the session working directory. |
 | Common | `-a`, `--agent` | Current configuration | Select `Profiler`, `Accuracy`, `Quantizer`, `Modeling`, `Operator`, or `Minos`. |
 | Common | `-m`, `--model` | Current Agent configuration | Select an LLM model alias. |
@@ -88,7 +88,7 @@ With no configuration update options, the command displays the current configura
 | Common | `--llm-max-tokens <number>` | Keep current value | Set max output tokens; `0` means provider or model default. |
 | Common | `-w`, `--working-dir <path>` | Current directory | Set the working directory for project-local `.msagent` configuration. |
 | Advanced | `--llm-api-key <key>` | Not set | Set an API key only for this `config` process; it is not persisted for later sessions. |
-| Advanced | `-v`, `--verbose` | Disabled | Print the log file path. |
+| Advanced | `-v`, `--verbose` | Disabled | Enable verbose logging. |
 
 Example for DeepSeek and other OpenAI-compatible services:
 
@@ -114,54 +114,13 @@ OPENAI_API_KEY=your-key
 
 Official services do not require a custom Base URL. If a compatible service or proxy was configured earlier, include `--llm-base-url ""` in the same command that sets the provider or model. Do not run the empty option by itself.
 
-## 4. Web Command
-
-The published package does not include Web UI dependencies by default. Install the optional extra before first use:
-
-```bash
-python -m pip install --pre --upgrade "mindstudio-agent[web]>=26.1.0a2,<26.2"
-```
-
-The frontend also requires Node.js. The source or fallback frontend path uses `npm` and `npx`; verify that the commands are available before startup:
-
-```bash
-node --version
-npm --version
-npx --version
-```
-
-To run only the LangGraph API without the frontend or Node.js, use `msagent web --no-ui`.
-
-For a source checkout, first run `uv sync --extra web`, then use `uv run msagent web ...`.
-
-```bash
-msagent web [options]
-```
-
-By default, `web` starts both the LangGraph API server and the deep-agents-ui frontend.
-
-| Level | Option | Default | Description |
-| --- | --- | --- | --- |
-| Basic | `-h`, `--help` | - | Show Web command help. |
-| Basic | `--host <host>` | `127.0.0.1` | Set the LangGraph server host interface. |
-| Basic | `--port <port>` | `2024` | Set the LangGraph server port. |
-| Basic | `--ui-port <port>` | `3000` | Set the deep-agents-ui frontend port. |
-| Common | `--no-ui` | Disabled | Start only the LangGraph API server. |
-| Common | `--no-open` | Disabled | Do not open a browser after startup. |
-| Common | `-w`, `--working-dir <path>` | Current directory | Set the project working directory. |
-| Common | `-a`, `--agent <name>` | Current configuration | Select the Agent. |
-| Common | `-m`, `--model <alias>` | Current Agent configuration | Select an LLM model alias. |
-| Advanced | `-v`, `--verbose` | Disabled | Print the log file path. |
-
-For integration details, see the Chinese [msAgent Integration Guide](../../zh/user_guide/integration-guide.md).
-
-## 5. Related Interfaces
+## 4. Related Interfaces
 
 - Skill development: [Skill Development](skill-development.md)
 - Agent, Tool, and Skill filters: [Chinese Filter Guide](../../zh/user_guide/agent-tool-skill-filter-rules.md)
 - MCP configuration: [Configuration and Extensions](../user_guide/configuration-and-extension.md)
 
-## 6. Local Verification
+## 5. Local Verification
 
 After changing interface documentation, run at least:
 
@@ -169,7 +128,6 @@ After changing interface documentation, run at least:
 msagent --version
 msagent --help
 msagent config --help
-msagent web --help
 msagent config --show
 ```
 

@@ -32,6 +32,7 @@ skills:
     - default:memory-analysis
     - default:op-mfu-calculator
     - default:op-mfu-profiler
+    - default:ascend-fusion-op-replace
   use_catalog: false
 compression:
   auto_compress_enabled: true

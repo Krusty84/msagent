@@ -63,7 +63,7 @@ stages:
         name: openlibing_monitor
         select: selected_by_default
         needs: []
-        runs-on: ubuntu-24
+        runs-on: default
         steps:
           - name: Checkout source code
             uses: checkout
@@ -96,7 +96,7 @@ stages:
         name: md_check
         select: selected_by_default
         needs: []
-        runs-on: ubuntu-24
+        runs-on: default
         steps:
           - name: Checkout source code
             uses: checkout
@@ -203,7 +203,7 @@ stages:
         select: selected_by_default
         needs: []
         if: "${{ jobs.md-check.outputs.md_check == 'no' }}"
-        runs-on: ubuntu-24
+        runs-on: default
         steps:
           - name: Checkout source code
             uses: checkout
@@ -267,7 +267,7 @@ stages:
         select: selected_by_default
         needs: []
         if: "${{ jobs.md-check.outputs.md_check == 'no' }}"
-        runs-on: ubuntu-24
+        runs-on: default
         steps:
           - name: Checkout source code
             uses: checkout
@@ -306,7 +306,7 @@ stages:
         select: selected_by_default
         needs: []
         if: "${{ jobs.md-check.outputs.md_check == 'no' }}"
-        runs-on: ubuntu-24
+        runs-on: default
         timeout-minutes: 90
         steps:
           - name: Checkout source code

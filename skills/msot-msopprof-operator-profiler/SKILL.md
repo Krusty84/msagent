@@ -346,12 +346,13 @@ msprof op simulator --soc-version=Ascend910B4 --export=./dump_dir --output=./out
 | `Source` | 代码热点图 | `visualize_data.bin` | 通常需 `-g` 编译 |
 | `MemoryDetail` | L2 / 内存细节增强 | CSV + `visualize_data.bin` | 与 `Default` 绑定 |
 | `TimelineDetail` | 指令流水 + 上板热点图增强 | `visualize_data.bin` | device-only，且限制较多 |
-| `PipeTimeline` | Pipe 流水图 | `trace.json` + `visualize_data.bin` | 仅 Atlas 350 加速卡 |
+| `PipeTimeline` | Pipe 流水图 | `trace.json` + `visualize_data.bin` | 仅昇腾950PR&950DT系列产品 |
 | `KernelScale` | 指定代码段采集 | CSV / 可视化 | 依赖 Kernel 侧插桩 API |
-| `PcSampling` | SIMT stall 信息 | `visualize_data.bin` | 仅 Atlas 350 加速卡 |
+| `PcSampling` | SIMT stall 信息 | `visualize_data.bin` | 仅昇腾950PR&950DT系列产品 |
 | `BasicInfo` | 只采集基础信息 | `OpBasicInfo.csv` | 轻量模式 |
 
 > 说明：
+> 
 > - 如果用户既要 `TimelineDetail` 又要常规 CSV / 计算内存热力图，通常需要显式带上 `Default`。
 > - `TimelineDetail` / `Source` / `MemoryDetail` 与 `range replay` 不能共存。
 

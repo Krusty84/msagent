@@ -1,0 +1,58 @@
+diff --git a/run.py b/run.py
+index 2d3ddf1..12267f9 100644
+--- a/run.py
++++ b/run.py
+@@ -10,6 +10,8 @@ from accelerate import Accelerator
+ from torch import nn
+ from torch.utils.data import DataLoader, TensorDataset
+ 
++from profiler_adapter import ProfilerConfig, ProfilerController, validate_step_budget
++
+ 
+ class TinyModel(nn.Module):
+     def __init__(self) -> None:
+@@ -23,6 +25,8 @@ class TinyModel(nn.Module):
+ def main() -> None:
+     parser = argparse.ArgumentParser()
+     parser.add_argument("--result", type=Path, required=True)
++    parser.add_argument("--profiler-enabled", action="store_true", default=False)
++    parser.add_argument("--profiler-output-dir", type=str, default="./profiler_output")
+     args = parser.parse_args()
+ 
+     torch.manual_seed(11)
+@@ -34,14 +38,28 @@ def main() -> None:
+     loader = DataLoader(TensorDataset(inputs, labels), batch_size=1, shuffle=False)
+     model, optimizer, loader = accelerator.prepare(model, optimizer, loader)
+ 
++    profiler_config = ProfilerConfig.from_mapping({
++        "enabled": args.profiler_enabled,
++        "output_dir": args.profiler_output_dir,
++        "start_step": 0,
++        "wait": 0,
++        "warmup": 1,
++        "active": 1,
++        "repeat": 1,
++    })
++    validate_step_budget(profiler_config, total_steps=len(loader))
++    controller = ProfilerController(profiler_config)
++
+     losses: list[float] = []
+-    for batch_inputs, batch_labels in loader:
+-        predictions = model(batch_inputs)
+-        loss = F.mse_loss(predictions, batch_labels)
+-        accelerator.backward(loss)
+-        optimizer.step()
+-        optimizer.zero_grad(set_to_none=True)
+-        losses.append(float(loss.detach().float().cpu()))
++    with controller:
++        for batch_inputs, batch_labels in loader:
++            predictions = model(batch_inputs)
++            loss = F.mse_loss(predictions, batch_labels)
++            accelerator.backward(loss)
++            optimizer.step()
++            optimizer.zero_grad(set_to_none=True)
++            losses.append(float(loss.detach().float().cpu()))
++            controller.step()
+ 
+     unwrapped = accelerator.unwrap_model(model)
+     checksum = sum(float(parameter.detach().float().cpu().sum()) for parameter in unwrapped.parameters())

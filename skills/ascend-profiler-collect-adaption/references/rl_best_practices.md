@@ -2,6 +2,10 @@
 
 > 代表框架：verl
 
+下文用于识别 RL 的 role/stage 和跨进程调用链。新框架适配应为 actor、rollout、ref 等真正执行 NPU 的
+角色分别创建通用 `ProfilerController`，每个阶段 start/stop 一次并使用独立 worker 名/输出目录。同一
+controller 可以在上一个阶段 stop 后开启新会话，但同一进程不能同时存在两个活动 profiler。
+
 ## 采集控制方式：配置文件 + step 条件触发 + HTTP API（混合）
 
 涉及文件（以 `verl` 为例）：
@@ -147,3 +151,4 @@ class RayPPOTrainer:
 ## 规则
 - 如果推理是服务化的方式拉起（与训练worker分进程），需要调用推理引擎的profiler方法，可参考[vllm_async_server.py](https://github.com/verl-project/verl/blob/main/verl/workers/rollout/vllm_rollout/vllm_async_server.py)/[async_sglang_server.py](https://github.com/verl-project/verl/blob/main/verl/workers/rollout/sglang_rollout/async_sglang_server.py)。
 - 需要将 actor 和 rollout 阶段的 profiler 控制拆分开，支持通过不同参数分别开启或关闭对应阶段的 profiler 采集。
+- 每个 role/stage 的验收会话必须独立通过 trace + kernel CSV 校验，禁止用另一个角色的产物补齐当前角色。

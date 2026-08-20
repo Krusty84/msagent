@@ -2,6 +2,10 @@
 
 > 代表框架：vLLM-Ascend、SGLang
 
+下文用于识别服务的配置/RPC/worker 边界。新框架适配应使用通用 `ProfilerController`，API 层只转发请求，
+每个执行 NPU 的 worker 独立持有 controller。controller 在每次 `start()` 时创建新的底层 PTA profiler，
+`stop()` 后可再次启动下一会话；不能尝试重启已经 stop 的同一个原始 `torch_npu.profiler.profile` 对象。
+
 ## 采集控制方式：运行时 HTTP API（curl 命令）
 
 涉及文件（以 `vLLM-Ascend` 为例）：
@@ -87,3 +91,6 @@ class Worker:
 ```
 
 HTTP API 调用链：`POST /start_profile` → `engine.start_profile()` → `executor.profile(True)` → `worker.profile(True)`
+
+适配时还必须验证：重复 start/stop 不重复调用底层生命周期；并发请求不创建两个活动实例；worker 名至少
+包含 global rank 和 PID；验收器的 `--expected-workers` 或 `--expected-ranks` 能发现缺失会话。

@@ -1,0 +1,60 @@
+diff --git a/run.py b/run.py
+index 9857a73..179f7b9 100644
+--- a/run.py
++++ b/run.py
+@@ -7,10 +7,27 @@ from pathlib import Path
+ import torch
+ from diffusers import DDPMScheduler, UNet2DModel
+ 
++from profiler_adapter import (
++    ProfilerConfig,
++    ProfilerController,
++    validate_step_budget,
++)
++
+ 
+ def main() -> None:
+     parser = argparse.ArgumentParser()
+     parser.add_argument("--result", type=Path, required=True)
++    parser.add_argument(
++        "--profiler-enabled",
++        action="store_true",
++        help="Enable torch_npu profiler collection (default: off)",
++    )
++    parser.add_argument(
++        "--profiler-output-dir",
++        type=Path,
++        default=Path("./profiler_output"),
++        help="Directory for profiler output (default: ./profiler_output)",
++    )
+     args = parser.parse_args()
+ 
+     torch.manual_seed(13)
+@@ -28,10 +45,26 @@ def main() -> None:
+     scheduler.set_timesteps(2)
+     sample = torch.ones((1, 3, 8, 8), device="npu")
+ 
+-    with torch.no_grad():
++    profiler_config = ProfilerConfig.from_mapping(
++        {
++            "enabled": args.profiler_enabled,
++            "output_dir": str(args.profiler_output_dir),
++            "wait": 0,
++            "warmup": 1,
++            "active": 1,
++            "repeat": 1,
++            "export_type": "text",
++            "level": "level0",
++        }
++    )
++    validate_step_budget(profiler_config, len(scheduler.timesteps))
++    controller = ProfilerController(profiler_config)
++
++    with torch.no_grad(), controller:
+         for timestep in scheduler.timesteps:
+             predicted_noise = model(sample, timestep).sample
+             sample = scheduler.step(predicted_noise, timestep, sample).prev_sample
++            controller.step()
+ 
+     payload = {
+         "framework": "diffusers",

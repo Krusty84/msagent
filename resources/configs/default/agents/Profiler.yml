@@ -21,6 +21,7 @@ tools:
   output_max_tokens: 10000
 skills:
   patterns:
+    - default:torch-npu-profiler-adaptation
     - default:ascend-profiler-db-explorer
     - default:ascend-computation-analysis
     - default:ascend-schedule-analysis

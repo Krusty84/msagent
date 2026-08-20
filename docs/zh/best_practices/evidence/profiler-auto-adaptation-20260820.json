@@ -1,8 +1,20 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "issue": "https://gitcode.com/Ascend/msagent/issues/11",
   "date": "2026-08-20",
-  "hardware": "Ascend 910",
+  "adaptation_agent": {
+    "application": "msAgent v26.0.0",
+    "agent": "Hermes",
+    "model": "DeepSeek-V4-Flash-0731",
+    "provider": "openai-compatible Gitee AI",
+    "config": "/workspace/.msagent/config.llms.yml",
+    "skill": "torch-npu-profiler-adaptation",
+    "invocation": "msagent <prompt> -w /workspace -a Hermes -m default --stream -am aggressive"
+  },
+  "hardware": {
+    "device": "Ascend 910",
+    "device_count": 2
+  },
   "software": {
     "cann": "9.1.0-beta.3",
     "python": "3.12",
@@ -12,24 +24,57 @@
     "accelerate": "1.12.0",
     "diffusers": "0.38.0"
   },
+  "test_contract": {
+    "unadapted_sources": "tests/skills/ascend_profiler_collect_adaption/fixtures/unadapted_frameworks",
+    "isolation": "Each fixture was copied to an independent Git repository before msAgent ran.",
+    "baseline": "Each native entrypoint was run on Ascend NPU before adaptation and its JSON result was saved.",
+    "adaptation": "msAgent loaded the Skill, ran discovery, scaffolded profiler_adapter.py, and edited each native entrypoint.",
+    "disabled": "The adapted entrypoint was run without --profiler-enabled; no profiler output directory was created.",
+    "enabled": "The same entrypoint was run with --profiler-enabled using wait=0,warmup=1,active=1,repeat=1.",
+    "validation": "Every independent ASCEND_PROFILER_OUTPUT session passed strict NPU trace and kernel_details.csv validation."
+  },
   "commands": {
-    "run": "python skills/ascend-profiler-collect-adaption/scripts/run_framework_npu_smoke.py <framework> --output-dir <output>/<framework>",
-    "validate": "python skills/ascend-profiler-collect-adaption/scripts/validate_profile_output.py <output>/<framework> --expect text"
+    "discover": "python <installed-skill>/scripts/discover_execution_loops.py <project> --json",
+    "scaffold": "python <installed-skill>/scripts/scaffold_adapter.py <project> --destination profiler_adapter.py",
+    "disabled": "python <project>/run.py --result <run>/disabled.json --profiler-output-dir <run>/disabled-profile",
+    "enabled": "python <project>/run.py --result <run>/enabled.json --profiler-enabled --profiler-output-dir <run>/profile",
+    "validate": "python skills/ascend-profiler-collect-adaption/scripts/validate_profile_output.py <run>/profile --expect text --expected-sessions 1 --expected-ranks 0"
+  },
+  "adaptation_prompts": {
+    "transformers": "必须先调用 get_skill(name=torch-npu-profiler-adaptation, category=default)，然后严格按该 Skill 执行。直接修改独立 Transformers Trainer 项目，生成 profiler_adapter.py，增加默认关闭 CLI，通过 TrainerCallback.on_optimizer_step 计步，并用 controller context 包裹 trainer.train；仅修改目标项目。",
+    "accelerate": "必须先调用 get_skill(name=torch-npu-profiler-adaptation, category=default)。运行 discover 定位 Accelerate backward/optimizer 循环，用 scaffold 生成 adapter，增加默认关闭 CLI，以 controller 包裹原循环，每个 optimizer.step 后 step；保持 prepare/backward/optimizer/数据和结果不变。",
+    "diffusers": "必须先调用 get_skill(name=torch-npu-profiler-adaptation, category=default)。运行 discover 定位 Diffusers scheduler denoising 循环，用 scaffold 生成 adapter，增加默认关闭 CLI，保持 torch.no_grad，以 controller 包裹原循环，每个 scheduler.step 后 step；保持 UNet/scheduler/sample 和结果不变。"
   },
   "results": [
     {
-      "framework": "transformers",
-      "steps": 2,
-      "baseline_checksum": -2.384185791015625e-07,
-      "profiled_checksum": -2.384185791015625e-07,
-      "outputs_match": true,
-      "trace_events": 1069,
-      "duration_events": 649,
-      "trace_bytes": 179078,
-      "trace_sha256": "5263b4bc2ef7120e43aa560580278811de3f535d2657281fef4235f596fd7fc8",
-      "kernel_csv_columns": 9,
-      "kernel_csv_bytes": 6176,
-      "kernel_csv_sha256": "22c159c8c7854f48fe3062c3f56b434b236cb60df780b54de9cd91f2243a2424",
+      "framework": "Transformers",
+      "version": "5.13.0",
+      "native_path": "Trainer.train with TrainerCallback.on_optimizer_step",
+      "baseline_commit": "e7627b2af091d4b250e0bcae20aa4efa3f27d127",
+      "baseline_equals_disabled": true,
+      "disabled_equals_enabled": true,
+      "result": {
+        "steps": 2,
+        "training_loss": 0.3322017192840576,
+        "checksum": -8.600659549236298
+      },
+      "run_py_before_sha256": "35e109386b513814d85a505fe593a07dead0bb74dcedd0a078d7841965f96181",
+      "run_py_after_sha256": "14354967a88737721ad2b44c78ed0237929329e6cd66f3490e2d6c9dbbb10c94",
+      "adapter_sha256": "dda5190eb9db440ad12b2dc8d72b4334631f96ea6f37f9603bd5500dc21cf849",
+      "patch": "profiler-auto-adaptation-transformers.patch",
+      "patch_sha256": "3e77200e588d72367e0ca7dab5c385e1969c8ba498245a71bc018a98829c133d",
+      "trace": {
+        "events": 738,
+        "duration_events": 437,
+        "npu_async_pairs": 42,
+        "bytes": 124206,
+        "sha256": "cb6d604759d55ed9026c3eb35bd6318f5b35f0ee3bab0fcf58d895d9720b8436"
+      },
+      "kernel_csv": {
+        "valid_rows": 45,
+        "bytes": 4159,
+        "sha256": "4ea694565d92229d25a9c83161138638fc312ab8ef910d15793fc27356e0aee5"
+      },
       "validator": {
         "passed": true,
         "text_ready": true,
@@ -38,18 +83,34 @@
       }
     },
     {
-      "framework": "accelerate",
-      "steps": 2,
-      "baseline_checksum": 4.536649703979492,
-      "profiled_checksum": 4.536649703979492,
-      "outputs_match": true,
-      "trace_events": 179,
-      "duration_events": 97,
-      "trace_bytes": 28011,
-      "trace_sha256": "2dc0f0776fd8ce36989b19fea9393a2084f9ea4c62daf3ab3f21f5fd011d047a",
-      "kernel_csv_columns": 9,
-      "kernel_csv_bytes": 772,
-      "kernel_csv_sha256": "7fa3962afc38de258dd85614d461bb30fa33628ec325fc03c0dab4f34eb490a7",
+      "framework": "Accelerate",
+      "version": "1.12.0",
+      "native_path": "Accelerator.prepare/backward with explicit optimizer loop",
+      "baseline_commit": "ea9916a686d3b05336e81c6fcf82f55e7873ce2b",
+      "baseline_equals_disabled": true,
+      "disabled_equals_enabled": true,
+      "result": {
+        "steps": 2,
+        "losses": [0.1918797641992569, 0.45124268531799316],
+        "checksum": 0.504450112581253
+      },
+      "run_py_before_sha256": "0ef7de592be0a9e0fc52ea6ff271d54fdb0c1fe3568b2bdcc75a40a423602d17",
+      "run_py_after_sha256": "a81c56805b06a895f09990e1d26142a5d35bef8eb808837e3651ad211bd45216",
+      "adapter_sha256": "dda5190eb9db440ad12b2dc8d72b4334631f96ea6f37f9603bd5500dc21cf849",
+      "patch": "profiler-auto-adaptation-accelerate.patch",
+      "patch_sha256": "9331ebc63886e2492222d34cdd89c7651990afdf03cd5a6218c3a339dc923ca9",
+      "trace": {
+        "events": 353,
+        "duration_events": 213,
+        "npu_async_pairs": 15,
+        "bytes": 58671,
+        "sha256": "d41d43438983c4b0ae29e9e751a1d4786f8d4e34262f272ab18e517b6b4dc812"
+      },
+      "kernel_csv": {
+        "valid_rows": 15,
+        "bytes": 1409,
+        "sha256": "a404a02e65a0654e3262021ab3a3709efaa36a3809d8ea3ab9801415c781cb11"
+      },
       "validator": {
         "passed": true,
         "text_ready": true,
@@ -58,18 +119,33 @@
       }
     },
     {
-      "framework": "diffusers",
-      "steps": 2,
-      "baseline_checksum": -10.987547874450684,
-      "profiled_checksum": -10.987547874450684,
-      "outputs_match": true,
-      "trace_events": 3859,
-      "duration_events": 2243,
-      "trace_bytes": 648174,
-      "trace_sha256": "3680f9c8fe0c95d212472fd7b79622494a16a25967803529a0d1ebc7f585e071",
-      "kernel_csv_columns": 9,
-      "kernel_csv_bytes": 25850,
-      "kernel_csv_sha256": "f99c785fd6b9acbc51b017a558237b556fe8b03f0e7f7ebd113446ea63436c65",
+      "framework": "Diffusers",
+      "version": "0.38.0",
+      "native_path": "UNet2DModel with DDPMScheduler denoising loop",
+      "baseline_commit": "3ef6463c78477497990899dbad5128cbcb9b5598",
+      "baseline_equals_disabled": true,
+      "disabled_equals_enabled": true,
+      "result": {
+        "steps": 2,
+        "checksum": 187.69091796875
+      },
+      "run_py_before_sha256": "f47af5f1711878cd145208cf2dea1bc9fd76e461a65e81f6a3e9949d4369d3d6",
+      "run_py_after_sha256": "6e3e63617c866013eca719895a5c9a26ce23fd78af8e3b1068f2aaed16bf60c6",
+      "adapter_sha256": "dda5190eb9db440ad12b2dc8d72b4334631f96ea6f37f9603bd5500dc21cf849",
+      "patch": "profiler-auto-adaptation-diffusers.patch",
+      "patch_sha256": "56e23741760e00f8219765d7af5033ea0ddfa5d8fc2e2a4db1dc85c4631522f6",
+      "trace": {
+        "events": 3152,
+        "duration_events": 1849,
+        "npu_async_pairs": 163,
+        "bytes": 536933,
+        "sha256": "702b29ec0cb39d0f5b23b2240e1373e438027499292f0bd6fb7299acd48baa15"
+      },
+      "kernel_csv": {
+        "valid_rows": 296,
+        "bytes": 25792,
+        "sha256": "d718e84f7072674e4ead18a0e58ee37405b1fcc2e309e7d049d37ad9df1ec05d"
+      },
       "validator": {
         "passed": true,
         "text_ready": true,
@@ -78,11 +154,101 @@
       }
     }
   ],
-  "notes": [
-    "Each disabled run created no profiler output directory.",
-    "Each profiled checksum exactly matched its disabled baseline checksum.",
-    "PTA completed synchronous parsing after stop().",
-    "Only the expected no-warmup warning was emitted; no profiler error was observed.",
-    "Large raw profiler directories are intentionally not stored in the source repository."
+  "generic_prompt_forward_tests": [
+    {
+      "target": "Transformers Trainer clean repository",
+      "prompt": "调用 torch-npu-profiler-adaptation skill，自动适配 <project>，运行关闭/开启回归并验证真实 PTA 产物。只修改 <project>。",
+      "agent_decisions": [
+        "discover returned no local loop because Trainer owns it",
+        "selected Trainer callback step boundary after inspecting the installed framework",
+        "scaffolded the shared adapter and added a default-off JSON configuration entrypoint",
+        "ran baseline, disabled and enabled native entrypoints",
+        "ran the strict validator and msprof-mcp kernel/timeline analysis"
+      ],
+      "validator": {
+        "passed": true,
+        "text_ready": true,
+        "parsed_output_ready": true,
+        "visualizable": true,
+        "events": 2808,
+        "npu_async_pairs": 168,
+        "kernel_rows": 168
+      },
+      "visual_analysis": "msprof-mcp parsed 168 kernels and found aclnnApplyAdamWV2 events in the timeline trace"
+    },
+    {
+      "target": "multiprocessing NPU inference service clean repository",
+      "prompt": "调用 torch-npu-profiler-adaptation skill，自动适配 <project>，运行关闭/开启回归并验证真实 PTA 产物。只修改 <project>。",
+      "agent_decisions": [
+        "placed the controller in the spawned process that owns the NPU model",
+        "passed profiler configuration across the process boundary",
+        "advanced one profiler step after each inference request",
+        "kept the parent scheduler free of torch_npu.profiler ownership"
+      ],
+      "baseline_equals_disabled_equals_enabled": true,
+      "agent_enabled_run_blocked_by_noninteractive_delete_approval": true,
+      "independent_safe_enabled_rerun": true,
+      "validator": {
+        "passed": true,
+        "text_ready": true,
+        "parsed_output_ready": true,
+        "visualizable": true,
+        "events": 101,
+        "npu_async_pairs": 2,
+        "kernel_rows": 2
+      }
+    },
+    {
+      "target": "Accelerate training clean repository",
+      "prompt": "调用 torch-npu-profiler-adaptation skill，自动适配 <project>，运行关闭/开启回归并验证真实 PTA 产物。只修改 <project>。",
+      "agent_decisions": [
+        "used discovery to select the high-confidence backward and optimizer loop",
+        "scaffolded the shared adapter and exposed default-disabled serialized CLI configuration",
+        "wrapped the native loop in the controller context and stepped after optimizer.step",
+        "ran baseline and disabled entrypoints before requesting the enabled run"
+      ],
+      "baseline_equals_disabled_equals_enabled": true,
+      "agent_enabled_run_blocked_by_noninteractive_delete_approval": true,
+      "independent_safe_enabled_rerun": true,
+      "validator": {
+        "passed": true,
+        "text_ready": true,
+        "parsed_output_ready": true,
+        "visualizable": true,
+        "events": 353,
+        "npu_async_pairs": 15,
+        "kernel_rows": 15
+      }
+    },
+    {
+      "target": "Diffusers inference clean repository",
+      "prompt": "调用 torch-npu-profiler-adaptation skill，自动适配 <project>，运行关闭/开启回归并验证真实 PTA 产物。只修改 <project>。",
+      "agent_decisions": [
+        "used discovery to select the scheduler.timesteps denoising loop",
+        "classified the target as an explicit finite inference loop",
+        "scaffolded the final shared adapter and added default-disabled JSON configuration",
+        "preserved torch.no_grad while wrapping the native loop and stepping after scheduler.step"
+      ],
+      "baseline_equals_disabled_equals_enabled": true,
+      "agent_regression_run_blocked_by_noninteractive_delete_approval": true,
+      "independent_safe_disabled_and_enabled_rerun": true,
+      "validator": {
+        "passed": true,
+        "text_ready": true,
+        "parsed_output_ready": true,
+        "visualizable": true,
+        "events": 3142,
+        "npu_async_pairs": 163,
+        "kernel_rows": 294
+      }
+    }
+  ],
+  "agent_notes": [
+    "All three code adaptations were generated by msAgent after loading the Skill; verification was then rerun independently with the same native entrypoints.",
+    "The first Transformers validation attempt generated an rm -rf command, triggered msAgent approval, and stopped in non-interactive mode. No source was lost; verification was rerun with fresh mktemp directories and no deletion.",
+    "The committed patch files are byte-for-byte the git diffs generated in the isolated target repositories.",
+    "The three framework runs were repeated after adapter hardening; baseline, disabled and enabled results remained exactly equal and the stricter validator passed every fresh output.",
+    "Generic-prompt forward tests used only the documented one-line request and target path; no callback, loop or step injection point was supplied in the prompt.",
+    "Raw profiler directories are intentionally not committed because they include large CANN artifacts; trace and kernel CSV sizes and SHA-256 values are recorded for integrity."
   ]
 }

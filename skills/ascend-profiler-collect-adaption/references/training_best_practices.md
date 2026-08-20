@@ -2,6 +2,10 @@
 
 > 代表框架：MindSpeed-LLM、MindSpeed-MM
 
+下文是已适配框架的结构参考，不应整段复制到新框架。使用本 Skill 时统一生成
+`assets/profiler_adapter.py`，由 Agent 只接入目标框架原有配置和真实 optimizer/global-step 边界。
+`current_rank`/`rank` 必须来自当前 worker 的 global rank，不能在多进程中统一默认成 0。
+
 ## 采集控制方式：配置文件
 
 涉及文件（以 `MindSpeed-LLM` 为例）：
@@ -171,8 +175,26 @@ class Trainer:
 | `profile_step_start` | `start_step` | 调用 `step()` 前跳过的完整业务 step 数 |
 | `profile_step_end - profile_step_start` | `active` | 采集窗口长度，必须大于 0 |
 | `profile_ranks` | `ranks` | `-1` 表示全部 rank |
+| `current_rank` | `rank` | 当前 worker 的 global rank；启用多进程采集时必需 |
 | `profile_level` | `level` | `level_none` / `level0` / `level1` / `level2` |
 | `profile_export_type` | `export_type` | 完整可视化验收使用 `text` |
 
 例如 `start_step=2, wait=0, warmup=1, active=2, repeat=1` 至少需要调用
 `2 + 0 + (1 + 2) * 1 = 5` 次 `step()`。在接线前用模板中的 `validate_step_budget` 检查总 step 数。
+
+## callback 的异常安全边界
+
+Trainer/Engine 的 `on_step_end` 很适合映射 optimizer/global step，但不能默认认为 `on_train_end` 会在
+训练异常时执行。优先由调用原生 `train()` 的边界持有 controller：
+
+```python
+controller = ProfilerController(config)
+callback = ProfilerStepCallback(controller)
+trainer.add_callback(callback)
+with controller:
+    result = trainer.train()
+```
+
+callback 只调用 `controller.step()`。若框架无法在 `train()` 外包裹生命周期，则必须先从源码或测试证明
+异常路径也会调用结束 hook，才能让开始/结束 callback 单独负责 `start/stop`。上面的 MindSpeed 代码仅用于
+理解既有字段和注入点，不是异常安全范式；新适配应使用通用 adapter 的 context manager。

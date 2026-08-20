@@ -1,0 +1,105 @@
+diff --git a/run.py b/run.py
+index 41214a6..94347ea 100644
+--- a/run.py
++++ b/run.py
+@@ -8,7 +8,13 @@ import torch
+ import torch.nn.functional as F
+ from torch import nn
+ from torch.utils.data import Dataset
+-from transformers import Trainer, TrainingArguments
++from transformers import Trainer, TrainerCallback, TrainingArguments
++
++from profiler_adapter import ProfilerConfig, ProfilerController, validate_step_budget
++
++# Two-step smoke training.  Schedule: warmup on optimizer step 0, record the text
++# trace on optimizer step 1.  required_steps = 0 + (0 + 1 + 1) * 1 = 2 = max_steps.
++PROFILER_SCHEDULE = {"start_step": 0, "wait": 0, "warmup": 1, "active": 1, "repeat": 1}
+ 
+ 
+ class TinyDataset(Dataset):
+@@ -38,29 +44,72 @@ class TinyModel(nn.Module):
+         return {"loss": loss, "logits": logits}
+ 
+ 
++class ProfilerStepCallback(TrainerCallback):
++    """Advance the torch_npu profiler schedule after every global optimizer step.
++
++    ``on_optimizer_step`` fires once per optimizer step (the gradient-accumulation
++    boundary inside the Transformers Trainer), never per dataloader micro-batch.
++    """
++
++    def __init__(self, controller: ProfilerController) -> None:
++        self.controller = controller
++
++    def on_optimizer_step(self, args, state, control, **kwargs):
++        self.controller.step()
++        return control
++
++
+ def main() -> None:
+-    parser = argparse.ArgumentParser()
++    parser = argparse.ArgumentParser(description="Tiny Transformers Trainer smoke run")
+     parser.add_argument("--result", type=Path, required=True)
++    parser.add_argument(
++        "--profiler-enabled",
++        action="store_true",
++        help="Enable real torch_npu.profiler text collection (default: disabled)",
++    )
++    parser.add_argument(
++        "--profiler-output-dir",
++        type=Path,
++        default=Path("./profiler_output"),
++        help="Directory that receives the ASCEND_PROFILER_OUTPUT session "
++        "(default: ./profiler_output)",
++    )
+     args = parser.parse_args()
+ 
+     torch.manual_seed(7)
+     model = TinyModel()
++    training_args = TrainingArguments(
++        output_dir=str(args.result.parent / "trainer-output"),
++        max_steps=2,
++        per_device_train_batch_size=1,
++        learning_rate=1e-3,
++        report_to="none",
++        save_strategy="no",
++        logging_strategy="no",
++        remove_unused_columns=False,
++        seed=7,
++    )
++
++    profiler_config = ProfilerConfig.from_mapping(
++        {
++            "enabled": args.profiler_enabled,
++            "output_dir": str(args.profiler_output_dir),
++            **PROFILER_SCHEDULE,
++        }
++    )
++    validate_step_budget(profiler_config, training_args.max_steps)
++    controller = ProfilerController(profiler_config)
++
+     trainer = Trainer(
+         model=model,
+-        args=TrainingArguments(
+-            output_dir=str(args.result.parent / "trainer-output"),
+-            max_steps=2,
+-            per_device_train_batch_size=1,
+-            learning_rate=1e-3,
+-            report_to="none",
+-            save_strategy="no",
+-            logging_strategy="no",
+-            remove_unused_columns=False,
+-            seed=7,
+-        ),
++        args=training_args,
+         train_dataset=TinyDataset(),
++        callbacks=[ProfilerStepCallback(controller)],
+     )
+-    train_output = trainer.train()
++    with controller:
++        train_output = trainer.train()
++    # Profiling disabled: start/stop and the callback are no-ops and no profiling
++    # directory or torch_npu import is created.  Training semantics are unchanged.
+     checksum = sum(float(parameter.detach().float().cpu().sum()) for parameter in model.parameters())
+     payload = {
+         "framework": "transformers",

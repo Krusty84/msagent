@@ -35,8 +35,11 @@ class Candidate:
     path: str
     line: int
     scope: str
+    loop_type: str
     calls: list[str]
     score: int
+    confidence: str
+    evidence: list[dict[str, object]]
 
 
 def call_name(node: ast.Call) -> str:
@@ -83,33 +86,86 @@ class LoopVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     def _record_loop(self, node: ast.For | ast.AsyncFor | ast.While) -> None:
-        calls = sorted(
-            {call_name(item) for item in ast.walk(node) if isinstance(item, ast.Call)}
-        )
-        score = 0
+        collector = DirectCallCollector()
+        if isinstance(node, (ast.For, ast.AsyncFor)):
+            collector.visit(node.iter)
+        else:
+            collector.visit(node.test)
+        for statement in (*node.body, *node.orelse):
+            collector.visit(statement)
+        calls = sorted(collector.calls)
+        evidence: list[dict[str, object]] = []
         for call in calls:
-            for suffix, weight in CALL_WEIGHTS.items():
-                if call == suffix or call.endswith(f".{suffix}"):
-                    score += weight
+            matches = [
+                (suffix, weight)
+                for suffix, weight in CALL_WEIGHTS.items()
+                if call == suffix or call.endswith(f".{suffix}")
+            ]
+            if matches:
+                suffix, weight = max(matches, key=lambda item: item[1])
+                evidence.append({"call": call, "matched": suffix, "weight": weight})
+        score = sum(int(item["weight"]) for item in evidence)
         if score:
             self.candidates.append(
                 Candidate(
                     path=self.relative_path,
                     line=node.lineno,
                     scope=".".join(self.scope) or "<module>",
+                    loop_type=type(node).__name__,
                     calls=calls,
                     score=score,
+                    confidence="high"
+                    if score >= 10
+                    else "medium"
+                    if score >= 6
+                    else "low",
+                    evidence=evidence,
                 )
             )
+
+
+class DirectCallCollector(ast.NodeVisitor):
+    """Collect calls owned by one loop without descending into nested execution units."""
+
+    def __init__(self) -> None:
+        self.calls: set[str] = set()
+
+    def visit_Call(self, node: ast.Call) -> None:
+        name = call_name(node)
+        if name:
+            self.calls.add(name)
+        self.generic_visit(node)
+
+    def visit_For(self, node: ast.For) -> None:
+        return
+
+    def visit_AsyncFor(self, node: ast.AsyncFor) -> None:
+        return
+
+    def visit_While(self, node: ast.While) -> None:
+        return
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        return
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        return
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        return
+
+    def visit_Lambda(self, node: ast.Lambda) -> None:
+        return
 
 
 def discover(root: Path) -> tuple[list[Candidate], list[dict[str, str]]]:
     candidates: list[Candidate] = []
     errors: list[dict[str, str]] = []
     for path in sorted(root.rglob("*.py")):
-        if any(part in IGNORED_PARTS for part in path.parts):
+        relative_path = path.relative_to(root)
+        if any(part in IGNORED_PARTS for part in relative_path.parts[:-1]):
             continue
-        relative = str(path.relative_to(root))
+        relative = str(relative_path)
         try:
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=relative)
         except (OSError, UnicodeDecodeError, SyntaxError) as exc:
@@ -142,7 +198,8 @@ def main() -> int:
     else:
         for item in selected:
             print(
-                f"{item.score:>3} {item.path}:{item.line} {item.scope} [{', '.join(item.calls)}]"
+                f"{item.score:>3} {item.confidence:<6} {item.path}:{item.line} "
+                f"{item.scope} {item.loop_type} [{', '.join(item.calls)}]"
             )
         if errors:
             print(f"warning: skipped {len(errors)} unreadable or invalid Python files")

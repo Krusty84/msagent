@@ -1087,6 +1087,7 @@ class AgentFactory:
         local_backend = LocalShellBackend(
             root_dir=str(working_dir),
             inherit_env=True,
+            virtual_mode=False,
         )
         routes: dict[str, Any] = {}
         if enable_large_results:

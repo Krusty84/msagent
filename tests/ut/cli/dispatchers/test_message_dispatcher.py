@@ -1264,3 +1264,257 @@ def test_tool_activity_indicator_blinks_dot_and_moves_sweep() -> None:
     sweep_second = next(span for span in second.spans if span.style == "secondary")
     sweep_third = next(span for span in third.spans if span.style == "secondary")
     assert sweep_second.start < sweep_third.start
+
+
+# ---------------------------------------------------------------------------
+# First-dispatch async warmup retry (regression tests for #218)
+# ---------------------------------------------------------------------------
+
+
+def _make_warmup_exception() -> BaseException:
+    """Build an exception chain that looks like the first-message warmup race.
+
+    Mirrors the pattern in #218: a top-level "Connection error." wrapping an
+    `IndexError: pop from an empty deque` raised by httpx/langchain stream
+    queues before the connection pool is fully initialized.
+    """
+    inner = IndexError("pop from an empty deque")
+    outer = httpx.ConnectError("all connection attempts failed")
+    outer.__cause__ = inner
+    return outer
+
+
+def test_is_warmup_error_detects_nested_index_error(tmp_path: Path) -> None:
+    """The IndexError may be nested under a Connection error chain."""
+    dispatcher = MessageDispatcher(_build_session(tmp_path))
+    assert dispatcher._is_warmup_error(_make_warmup_exception()) is True
+
+
+def test_is_warmup_error_detects_direct_index_error(tmp_path: Path) -> None:
+    """A bare IndexError("pop from an empty deque") is also detected."""
+    dispatcher = MessageDispatcher(_build_session(tmp_path))
+    assert dispatcher._is_warmup_error(IndexError("pop from an empty deque")) is True
+
+
+def test_is_warmup_error_returns_false_for_other_index_error(tmp_path: Path) -> None:
+    """Other IndexError variants must not trigger the retry path."""
+    dispatcher = MessageDispatcher(_build_session(tmp_path))
+    assert dispatcher._is_warmup_error(IndexError("list assignment index out of range")) is False
+
+
+def test_is_warmup_error_returns_false_for_unrelated_error(tmp_path: Path) -> None:
+    """Plain connection errors without the deque signature must not retry."""
+    dispatcher = MessageDispatcher(_build_session(tmp_path))
+    request = httpx.Request("POST", "https://api.example.com/v1/chat")
+    err = APIConnectionError(request=request)
+    assert dispatcher._is_warmup_error(err) is False
+
+
+@pytest.mark.asyncio
+async def test_dispatch_retries_once_on_first_warmup_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """First message hitting the deque race should retry once and succeed."""
+    dispatcher = MessageDispatcher(_build_session(tmp_path))
+    call_count = {"n": 0}
+    printed_errors: list[str] = []
+
+    monkeypatch.setattr(
+        dispatcher.message_builder,
+        "build",
+        lambda content: (content, {}),
+    )
+
+    async def fake_load_user_memory(_working_dir: Path) -> str:
+        return ""
+
+    monkeypatch.setattr(
+        message_module.initializer,
+        "load_user_memory",
+        fake_load_user_memory,
+    )
+    monkeypatch.setattr(
+        message_module.console,
+        "print_error",
+        printed_errors.append,
+    )
+    monkeypatch.setattr(
+        message_module.console,
+        "print",
+        lambda *args, **kwargs: None,
+    )
+
+    async def fake_invoke_response(self, *_args, **_kwargs) -> None:
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            raise _make_warmup_exception()
+        # Second attempt succeeds.
+
+    monkeypatch.setattr(
+        dispatcher,
+        "_invoke_response",
+        MethodType(fake_invoke_response, dispatcher),
+    )
+
+    await dispatcher.dispatch("hello")
+
+    assert call_count["n"] == 2  # failed once, retried once
+    assert dispatcher._first_dispatch_done is True
+    assert printed_errors == []  # no error printed to user
+
+
+@pytest.mark.asyncio
+async def test_dispatch_does_not_retry_second_warmup_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """After the first dispatch completes, later deque errors are NOT retried."""
+    dispatcher = MessageDispatcher(_build_session(tmp_path))
+    dispatcher._first_dispatch_done = True  # Simulate prior successful call
+    call_count = {"n": 0}
+    printed_errors: list[str] = []
+
+    monkeypatch.setattr(
+        dispatcher.message_builder,
+        "build",
+        lambda content: (content, {}),
+    )
+
+    async def fake_load_user_memory(_working_dir: Path) -> str:
+        return ""
+
+    monkeypatch.setattr(
+        message_module.initializer,
+        "load_user_memory",
+        fake_load_user_memory,
+    )
+    monkeypatch.setattr(
+        message_module.console,
+        "print_error",
+        printed_errors.append,
+    )
+    monkeypatch.setattr(
+        message_module.console,
+        "print",
+        lambda *args, **kwargs: None,
+    )
+
+    async def fake_invoke_response(self, *_args, **_kwargs) -> None:
+        call_count["n"] += 1
+        raise _make_warmup_exception()
+
+    monkeypatch.setattr(
+        dispatcher,
+        "_invoke_response",
+        MethodType(fake_invoke_response, dispatcher),
+    )
+
+    await dispatcher.dispatch("hello")
+
+    assert call_count["n"] == 1  # No retry: _first_dispatch_done is True
+    assert len(printed_errors) == 1  # Error surfaces to user
+
+
+@pytest.mark.asyncio
+async def test_dispatch_does_not_retry_non_warmup_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """First dispatch with an unrelated error must not retry."""
+    dispatcher = MessageDispatcher(_build_session(tmp_path))
+    call_count = {"n": 0}
+    printed_errors: list[str] = []
+
+    monkeypatch.setattr(
+        dispatcher.message_builder,
+        "build",
+        lambda content: (content, {}),
+    )
+
+    async def fake_load_user_memory(_working_dir: Path) -> str:
+        return ""
+
+    monkeypatch.setattr(
+        message_module.initializer,
+        "load_user_memory",
+        fake_load_user_memory,
+    )
+    monkeypatch.setattr(
+        message_module.console,
+        "print_error",
+        printed_errors.append,
+    )
+    monkeypatch.setattr(
+        message_module.console,
+        "print",
+        lambda *args, **kwargs: None,
+    )
+
+    async def fake_invoke_response(self, *_args, **_kwargs) -> None:
+        call_count["n"] += 1
+        raise RuntimeError("totally unrelated failure")
+
+    monkeypatch.setattr(
+        dispatcher,
+        "_invoke_response",
+        MethodType(fake_invoke_response, dispatcher),
+    )
+
+    await dispatcher.dispatch("hello")
+
+    assert call_count["n"] == 1  # No retry: error signature didn't match
+    assert dispatcher._first_dispatch_done is False  # Still False: dispatch never succeeded
+    assert len(printed_errors) == 1
+
+
+@pytest.mark.asyncio
+async def test_dispatch_falls_through_after_failed_warmup_retry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If the warmup retry also fails, dispatch surfaces the original error."""
+    dispatcher = MessageDispatcher(_build_session(tmp_path))
+    call_count = {"n": 0}
+    printed_errors: list[str] = []
+
+    monkeypatch.setattr(
+        dispatcher.message_builder,
+        "build",
+        lambda content: (content, {}),
+    )
+
+    async def fake_load_user_memory(_working_dir: Path) -> str:
+        return ""
+
+    monkeypatch.setattr(
+        message_module.initializer,
+        "load_user_memory",
+        fake_load_user_memory,
+    )
+    monkeypatch.setattr(
+        message_module.console,
+        "print_error",
+        printed_errors.append,
+    )
+    monkeypatch.setattr(
+        message_module.console,
+        "print",
+        lambda *args, **kwargs: None,
+    )
+
+    async def fake_invoke_response(self, *_args, **_kwargs) -> None:
+        call_count["n"] += 1
+        raise _make_warmup_exception()  # Always fails with warmup signature
+
+    monkeypatch.setattr(
+        dispatcher,
+        "_invoke_response",
+        MethodType(fake_invoke_response, dispatcher),
+    )
+
+    await dispatcher.dispatch("hello")
+
+    assert call_count["n"] == 2  # First call + 1 retry
+    assert len(printed_errors) == 1  # User sees the error (not silent)
+    assert dispatcher._first_dispatch_done is False  # Never succeeded

@@ -177,6 +177,10 @@ class MessageDispatcher:
         self.message_builder = MessageContentBuilder(Path(session.context.working_dir))
         self._pending_compression = False
         self._pending_tool_headers: dict[str, DeferredToolHeader] = {}
+        # Set to True once the first dispatch has reached the stream without
+        # triggering the async warmup race. Used to gate a one-shot retry on
+        # the very first user message (see _is_warmup_error).
+        self._first_dispatch_done = False
 
     async def dispatch(self, content: str) -> None:
         """Dispatch user message and get AI response."""
@@ -209,20 +213,39 @@ class MessageDispatcher:
                 prompt=prior_prompt,
             )
 
-            if ctx.stream_output:
-                await self._stream_response(
-                    {"messages": [human_message]},
-                    graph_config,
-                    agent_context,
-                )
-            else:
-                await self._invoke_without_stream(
-                    {"messages": [human_message]},
-                    graph_config,
-                    agent_context,
-                )
+            await self._invoke_response(
+                ctx,
+                {"messages": [human_message]},
+                graph_config,
+                agent_context,
+            )
 
         except Exception as e:
+            # First-message async warmup race: langchain/httpx stream queue
+            # can raise "IndexError: pop from an empty deque" before the
+            # connection pool is fully initialized. Retry once on the very
+            # first dispatch only, to avoid masking real connection errors
+            # on later messages.
+            if not self._first_dispatch_done and self._is_warmup_error(e):
+                logger.warning(
+                    "First dispatch hit async warmup race; retrying once",
+                    exc_info=True,
+                )
+                try:
+                    await self._invoke_response(
+                        ctx,
+                        {"messages": [human_message]},
+                        graph_config,
+                        agent_context,
+                    )
+                    self._first_dispatch_done = True
+                    return
+                except Exception:
+                    logger.debug(
+                        "Warmup retry failed; falling through to error path",
+                        exc_info=True,
+                    )
+
             recorder = getattr(self.session, "run_recorder", None)
             if recorder is not None:
                 recorder.record_error(e)
@@ -230,6 +253,37 @@ class MessageDispatcher:
             console.print_error(f"Error processing message: {error_msg}")
             console.print("")
             await self._log_processing_error(e)
+            return
+
+        self._first_dispatch_done = True
+
+    async def _invoke_response(
+        self,
+        ctx: Any,
+        input_data: dict[str, Any] | Command,
+        graph_config: RunnableConfig,
+        agent_context: AgentContext,
+    ) -> None:
+        """Run the streaming or non-streaming response. Extracted so the
+        warmup-race retry path can re-invoke it without re-running setup."""
+        if ctx.stream_output:
+            await self._stream_response(input_data, graph_config, agent_context)
+        else:
+            await self._invoke_without_stream(input_data, graph_config, agent_context)
+
+    def _is_warmup_error(self, error: BaseException) -> bool:
+        """Return True only for the first-message async warmup race signature.
+
+        The signature is `IndexError: pop from an empty deque` somewhere in
+        the exception chain. This is a known transient from httpx/langchain
+        async stream queues that resolves after the first successful call.
+        We deliberately do NOT match on bare "Connection error." because
+        that would mask real connection failures on subsequent messages.
+        """
+        for cause in self._walk_exception_chain(error):
+            if isinstance(cause, IndexError) and "pop from an empty deque" in str(cause):
+                return True
+        return False
 
     async def _resolve_prior_agent_prompt(self, graph_config: RunnableConfig) -> str | None:
         """Read the latest assistant message from checkpointed graph state."""

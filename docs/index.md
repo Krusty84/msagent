@@ -32,6 +32,7 @@ zh/user_guide/document-ux-review
 zh/user_guide/context-compaction-guide
 zh/user_guide/retry-middleware-guide
 zh/user_guide/agent-tool-skill-filter-rules
+zh/best_practices/profiler-auto-adaptation-practice
 ```
 
 ```{toctree}

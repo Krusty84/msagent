@@ -161,3 +161,18 @@ class Trainer:
 ```
 
 调用链：YAML配置文件 → `fsdp2_parse_args` → `TrainingArguments` → `Trainer.__init__` 内部构建 `ProfilerConfig` → `ProfilerManager`→ `Trainer.train()` 调用 `start/step/stop`
+
+## 与通用适配模板的字段映射
+
+| 训练范例字段 | 通用模板字段 | 说明 |
+| --- | --- | --- |
+| `profile` / `enabled` | `enabled` | 必须默认关闭 |
+| `profile_save_path` | `output_dir` | 多 rank 使用独立目录或 `worker_name` |
+| `profile_step_start` | `start_step` | 调用 `step()` 前跳过的完整业务 step 数 |
+| `profile_step_end - profile_step_start` | `active` | 采集窗口长度，必须大于 0 |
+| `profile_ranks` | `ranks` | `-1` 表示全部 rank |
+| `profile_level` | `level` | `level_none` / `level0` / `level1` / `level2` |
+| `profile_export_type` | `export_type` | 完整可视化验收使用 `text` |
+
+例如 `start_step=2, wait=0, warmup=1, active=2, repeat=1` 至少需要调用
+`2 + 0 + (1 + 2) * 1 = 5` 次 `step()`。在接线前用模板中的 `validate_step_budget` 检查总 step 数。

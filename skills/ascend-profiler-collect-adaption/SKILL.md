@@ -1,132 +1,70 @@
 ---
 name: torch-npu-profiler-adaptation
 description: >
-  Adapt torch_npu.profiler interface for AI frameworks and training/inference code on Ascend NPU.
-  Use this skill whenever users need to integrate profiling, add performance data collection,
-  or instrument PyTorch code with torch_npu.profiler on Huawei Ascend NPU platforms.
-  Triggers on: "torch_npu profiler", "NPU profiling", "Ascend profiler", "profiler adaptation",
-  "profile training", "profile inference", "add profiler to framework", "性能采集", "profiling 数据",
-  "昇腾 profiler", and any request to add performance monitoring to Ascend NPU code.
+  Automatically adapt torch_npu.profiler collection to an Ascend PyTorch training, inference,
+  or reinforcement-learning framework while preserving its behavior. Use when a framework has no
+  usable PTA profiler entry point and the result must be collected, parsed, and visualizable.
 ---
 
-# torch_npu.profiler 接口适配
+# torch_npu.profiler 自动适配
 
-将 `torch_npu.profiler` 采集接口适配到 AI 框架或训练/推理代码中，采集 NPU 算子、kernel 及内存等性能数据。按以下三步完成，每步向用户确认后继续。
+为目标框架补齐默认关闭、可配置、可验证的 PTA profiler 能力。完成标准不是“代码中出现
+`profile()`”，而是原业务仍能运行，启用后能够生成可解析且可视化的 profiling 产物。
 
-## 第一步：`torch_npu.profiler` 先验知识
+## 工作流
 
-`torch_npu.profiler` 是昇腾 NPU 平台上的性能分析工具，用于采集 PyTorch 训练或在线推理场景中的 PyTorch 算子、CANN 算子、底层 NPU 算子及内存占用等性能数据。
+1. 建立基线：记录原启动命令、退出码和关键模型输出。不要修改用户原始启动脚本；创建独立
+   profiler 启动入口或新增默认关闭的配置。
+2. 发现执行单元：运行 `python scripts/discover_execution_loops.py <repo>`，结合调用链确认真正
+   执行 NPU forward/backward/generate 的进程和循环。调度进程不是注入点。
+3. 选择场景并只读取对应参考：
+   - 训练或 Trainer/Engine 循环：`references/training_best_practices.md`
+   - 服务化推理或 Worker 执行：`references/inference_best_practices.md`
+   - Actor/Rollout/Ref 多阶段：`references/rl_best_practices.md`
+   - API 参数不确定时：`references/api_reference.md`
+4. 生成通用封装：先运行
+   `python scripts/scaffold_adapter.py <repo> --destination <package>/profiler_adapter.py --dry-run`，
+   检查目标后再移除 `--dry-run`。脚本拒绝覆盖已有不同内容。
+5. 接线：在执行单元初始化时创建一个 `ProfilerController`，使用 `with controller:` 包裹执行循环，
+   每个完成的业务 step 后调用 `step()`。配置必须从原入口完整透传，默认 `enabled=false`。
+6. 双路径回归：分别运行 profiler 关闭和开启路径。关闭路径必须与基线等价；开启路径必须使用
+   足够的 step，并检查 error 日志。
+7. 验收产物：运行
+   `python scripts/validate_profile_output.py <output-dir> --expect text`。完整验收必须使用 Text 导出；
+   只有命令返回 0，且报告 `parsed_output_ready` 和 `visualizable` 均为 `true`，才可宣称采集、解析
+   和可视化链路通过。DB-only 校验只能证明数据库结构可供后续工具读取。
 
-> 参数说明、使用方式（`with` 语句 / `start/stop`）详见 [`references/api_reference.md`](references/api_reference.md)，关键约束见下方"规则"。
-
-
-## 第二步：定位注入点
-
-### 普通单卡场景
-
-无封装层，适合快速验证或单机调试。配置直接写在脚本中，运行即采集，无外部控制机制。
+## 接线范式
 
 ```python
-import torch_npu
+from .profiler_adapter import ProfilerConfig, ProfilerController
 
-experimental_config = torch_npu.profiler._ExperimentalConfig(
-    export_type=[torch_npu.profiler.ExportType.Text],
-    profiler_level=torch_npu.profiler.ProfilerLevel.Level0,
-    aic_metrics=torch_npu.profiler.AiCMetrics.AiCoreNone,
-)
-
-prof = torch_npu.profiler.profile(
-    activities=[ProfilerActivity.CPU, ProfilerActivity.NPU],
-    schedule=torch_npu.profiler.schedule(wait=0, warmup=0, active=1, repeat=1, skip_first=1),
-    on_trace_ready=torch_npu.profiler.tensorboard_trace_handler("./result"),
-    experimental_config=experimental_config,
-)
-
-prof.start()
-for _ in range(10):
-    train_one_step()
-    prof.step()
-prof.stop()
+controller = ProfilerController(ProfilerConfig.from_mapping(config.profiler))
+with controller:
+    for batch in batches:
+        result = run_one_step(batch)  # 原业务调用不改写
+        controller.step()
 ```
 
-### 训练场景
+多进程框架应在每个实际执行 NPU 计算的 worker 内各建一个实例，并用 `ranks` 过滤采集范围。
+服务 API 只能把启停请求转发到 worker；不能在 API/调度进程内创建 profiler。异常路径也必须执行
+`stop()`，但 profiler 的关闭异常不得吞掉原业务异常。
 
-- 沿业务调用链找到真正执行前向、反向和优化器更新的位置，最接近 NPU 计算的执行单元即最佳注入点。
-- 完整封装范例见 [`references/training_best_practices.md`](references/training_best_practices.md)（MindSpeed-LLM：`ProfilerConfig` → `ProfilerManager` → `Trainer`）。
+## 不变量
 
-### 推理场景
+- 不改变 forward/backward/generate、优化器、数据顺序、返回值或并行拓扑。
+- 默认关闭；关闭时不导入 `torch_npu`、不创建目录、不增加 NPU 同步点。
+- 同一进程、同一执行单元最多一个活动 profiler 实例；重复 `start/stop` 应安全且可诊断。
+- `start_step + (wait + warmup + active) * repeat` 不得超过实际调用 `step()` 的次数。
+- 封装集中在独立模块；禁止在业务文件中散落 profiler 参数和 `profile(...)` 调用。
+- 采集目录必须按 rank/worker 隔离，避免多进程相互覆盖。
+- Text 产物至少包含可解析的 `trace_view.json` 和解析生成的有效统计 CSV；DB 产物必须是有效 SQLite
+  数据库。仅有目录或空文件不算通过，DB-only 也不能替代完整可视化验收。
+- 没有真实 NPU 环境时，可以完成静态和模拟测试，但必须把硬件采集、解析、可视化标为未验证，
+  不得用 mock 结果代替验收证据。
 
-- 沿调用链找到接近 NPU 实际执行的位置。注意：如果主控/调度进程内不执行实际 NPU 计算，则不能在该进程中注入 profiler。
-- 完整封装范例见 [`references/inference_best_practices.md`](references/inference_best_practices.md)（vLLM-Ascend：`TorchNPUProfilerWrapper` → `Worker.profile()` → HTTP API）。
+## 交付报告
 
-### 强化学习场景
-
-- 混合控制：配置文件 + step 条件触发 + HTTP API，适合多角色（Actor / Rollout / Ref）的复杂训练拓扑。
-- 完整封装范例见 [`references/rl_best_practices.md`](references/rl_best_practices.md)（verl：`DistProfiler` → `NPUProfiler` → `VLLMHttpServer` → `RayPPOTrainer`）。
-
-## 第三步：验证输出（可选阶段）
-
-先向用户确认是否需要验证 `torch_npu.profiler` 接口适配后的实际采集效果。
-
-- 如果用户需要验证，则让用户提供训练环境、训练脚本以及训练方式说明，并在此基础上开展验证。
-- 如果用户不需要验证，则直接结束本阶段流程。
-
-### AI 任务拉起脚本/启动命令适配 profiler
-
-在用户提供的 AI 任务拉起脚本、启动命令或对应封装入口中补充 `torch_npu.profiler` 相关配置参数，并确保这些参数能够透传到 `torch_npu.profiler` 的核心注入位置。
-
-需要注意的是：
-- 不能直接修改用户原始拉起脚本、启动命令或业务入口，应先复制一份脚本或明确新增独立配置，再在适配副本上完成 profiler 适配与验证。
-- 强化学习场景中的 profiler 控制必须按阶段解耦。各阶段仅允许控制本阶段对应的采集流程，禁止跨阶段控制。
-- 任务运行过程中需要特别关注 profiler 的 error 日志，必须解决所有 error 日志问题。
-
-### profiler 交付件校验
-
-告知用户运行完成后，按实际导出类型检查输出目录中的关键文件，text类型交付件与DB类型交付件不要求同时存在：
-
-```
-{OUTPUTDIR}/*/ASCEND_PROFILER_OUTPUT/
-├── trace_view.json      # 文本类交付件：全量 trace
-├── op_statistic.csv     # 文本类交付件：算子统计
-├── kernel_details.csv   # 文本类交付件：kernel 详情
-├── ascend_pytorch_profiler_*.db  # DB 类交付件
-└── ...
-```
-
-text类型交付件校验示例：
-
-```bash
-ls {OUTPUTDIR}/*/ASCEND_PROFILER_OUTPUT/trace_view.json
-ls {OUTPUTDIR}/*/ASCEND_PROFILER_OUTPUT/op_statistic.csv
-ls {OUTPUTDIR}/*/ASCEND_PROFILER_OUTPUT/kernel_details.csv
-```
-
-DB类型交付件校验示例：
-
-```bash
-ls {OUTPUTDIR}/*/ASCEND_PROFILER_OUTPUT/ascend_pytorch_profiler_*.db
-```
-
-具体的 profiler 交付件完整性校验方法，可参考 [ascend-profiler-data-validation](https://gitcode.com/Ascend/msagent/blob/master/skills/ascend-profiler-data-validation/SKILL.md)。
-
-## 规则
-
-- **原有业务逻辑不可变更**：任何适配代码都绝对不能修改原先的业务逻辑，只能在现有代码基础上新增 `torch_npu.profiler` 接口及相关采集能力，禁止借适配之名变更原有功能行为
-- **封装优先**：必须通过统一封装层接入，禁止在业务代码中散落 `profile(...)` 调用
-- **单进程单实例**：一个进程只允许一个 profiler 实例
-- **同进程调用**：profiler 必须与被采集的训练/推理流程处于同一进程内
-- **Step 数**：`skip_first + (wait + warmup + active) * repeat` 必须小于总训练 step 数，否则采集不完整
-- **链路打通并进入验证输出阶段**：适配完成后，必须确认 profiler 流程已打通，需验证从外部参数传递、配置解析、封装层调用到核心采集代码执行的整条链路均生效，并进入“第三步：验证输出”阶段，对 profiler 采集结果和关键交付件进行检查
-- **范式锁定**：一旦确定为训练/推理/强化学习场景，所有接口默认值、采集控制方式均以该场景对应参考范例为准，禁止跨范式混用
-- **分步确认后继续**：第一步确认接口用法、参数项、默认值和场景范式；第二步确认注入点、封装方式、参数透传链路和脚本侧 profiler 配置已补齐且默认关闭；第三步确认是否开展验证，验证场景下需确认环境、启动方式、验证范围、输出目录和关键交付件结果；未经用户确认，不得进入下一步
-
-## Reference 说明
-
-| reference 文件 | 主要内容 | 何时按需读取 |
-|---|---|---|
-| [`references/training_best_practices.md`](references/training_best_practices.md) | 训练场景适配范例，说明训练流程中的典型注入点、参数组织方式和调用链路。 | 当任务属于训练框架、训练脚本或单机/分布式训练适配时读取。 |
-| [`references/inference_best_practices.md`](references/inference_best_practices.md) | 推理场景适配范例，说明服务化推理中的参数透传、封装层调用和控制链路。 | 当任务属于推理框架、在线服务或多进程推理适配时读取。 |
-| [`references/rl_best_practices.md`](references/rl_best_practices.md) | 强化学习场景适配范例，说明分阶段解耦控制、阶段内参数配置和 Trainer / Rollout / Actor 协同方式。 | 当任务属于强化学习场景，或涉及 rollout、actor、ref 等阶段化 profiler 控制时读取。 |
-| [`references/api_reference.md`](references/api_reference.md) | `torch_npu.profiler` 关键 API、常用参数、`_ExperimentalConfig` 字段及基础使用方式。 | 当需要确认接口定义、参数含义、默认值、`with` / `start-stop` 用法时读取。 |
-
-> 按需读取原则：先根据任务场景选择对应 reference；仅在需要确认接口或参数细节时补充读取 `references/api_reference.md`，避免无关 reference 混读。
+按框架逐项给出：基线命令与结果、修改文件、注入进程/循环、关闭路径结果、开启路径命令、输出目录、
+校验脚本结果、可视化入口和已知限制。覆盖 3 个以上框架时使用矩阵，明确哪些是实际运行证据，哪些仅为
+模拟或静态检查。

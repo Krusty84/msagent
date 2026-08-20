@@ -1,0 +1,88 @@
+{
+  "schema_version": 1,
+  "issue": "https://gitcode.com/Ascend/msagent/issues/11",
+  "date": "2026-08-20",
+  "hardware": "Ascend 910",
+  "software": {
+    "cann": "9.1.0-beta.3",
+    "python": "3.12",
+    "torch": "2.10.0+cpu",
+    "torch_npu": "2.10.0.post2",
+    "transformers": "5.13.0",
+    "accelerate": "1.12.0",
+    "diffusers": "0.38.0"
+  },
+  "commands": {
+    "run": "python skills/ascend-profiler-collect-adaption/scripts/run_framework_npu_smoke.py <framework> --output-dir <output>/<framework>",
+    "validate": "python skills/ascend-profiler-collect-adaption/scripts/validate_profile_output.py <output>/<framework> --expect text"
+  },
+  "results": [
+    {
+      "framework": "transformers",
+      "steps": 2,
+      "baseline_checksum": -2.384185791015625e-07,
+      "profiled_checksum": -2.384185791015625e-07,
+      "outputs_match": true,
+      "trace_events": 1069,
+      "duration_events": 649,
+      "trace_bytes": 179078,
+      "trace_sha256": "5263b4bc2ef7120e43aa560580278811de3f535d2657281fef4235f596fd7fc8",
+      "kernel_csv_columns": 9,
+      "kernel_csv_bytes": 6176,
+      "kernel_csv_sha256": "22c159c8c7854f48fe3062c3f56b434b236cb60df780b54de9cd91f2243a2424",
+      "validator": {
+        "passed": true,
+        "text_ready": true,
+        "parsed_output_ready": true,
+        "visualizable": true
+      }
+    },
+    {
+      "framework": "accelerate",
+      "steps": 2,
+      "baseline_checksum": 4.536649703979492,
+      "profiled_checksum": 4.536649703979492,
+      "outputs_match": true,
+      "trace_events": 179,
+      "duration_events": 97,
+      "trace_bytes": 28011,
+      "trace_sha256": "2dc0f0776fd8ce36989b19fea9393a2084f9ea4c62daf3ab3f21f5fd011d047a",
+      "kernel_csv_columns": 9,
+      "kernel_csv_bytes": 772,
+      "kernel_csv_sha256": "7fa3962afc38de258dd85614d461bb30fa33628ec325fc03c0dab4f34eb490a7",
+      "validator": {
+        "passed": true,
+        "text_ready": true,
+        "parsed_output_ready": true,
+        "visualizable": true
+      }
+    },
+    {
+      "framework": "diffusers",
+      "steps": 2,
+      "baseline_checksum": -10.987547874450684,
+      "profiled_checksum": -10.987547874450684,
+      "outputs_match": true,
+      "trace_events": 3859,
+      "duration_events": 2243,
+      "trace_bytes": 648174,
+      "trace_sha256": "3680f9c8fe0c95d212472fd7b79622494a16a25967803529a0d1ebc7f585e071",
+      "kernel_csv_columns": 9,
+      "kernel_csv_bytes": 25850,
+      "kernel_csv_sha256": "f99c785fd6b9acbc51b017a558237b556fe8b03f0e7f7ebd113446ea63436c65",
+      "validator": {
+        "passed": true,
+        "text_ready": true,
+        "parsed_output_ready": true,
+        "visualizable": true
+      }
+    }
+  ],
+  "notes": [
+    "Each disabled run created no profiler output directory.",
+    "Each profiled checksum exactly matched its disabled baseline checksum.",
+    "PTA completed synchronous parsing after stop().",
+    "Only the expected no-warmup warning was emitted; no profiler error was observed.",
+    "Large raw profiler directories are intentionally not stored in the source repository."
+  ]
+}

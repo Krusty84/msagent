@@ -136,7 +136,38 @@ class TestRenderTodosPanel:
         ]
         panel = render_todos_panel(todos)
         assert isinstance(panel, Panel)
-        assert panel.title == "TODOs"
+        # Title now includes progress: 1/3 completed → "TODOs — 33% (1/3)"
+        assert panel.title == "TODOs — 33% (1/3)"
+
+    def test_panel_title_shows_progress_partial(self):
+        """Partial completion should show non-zero, non-100% progress."""
+        todos = [
+            {"content": "Task 1", "status": "completed"},
+            {"content": "Task 2", "status": "in_progress"},
+            {"content": "Task 3", "status": "pending"},
+            {"content": "Task 4", "status": "pending"},
+        ]
+        panel = render_todos_panel(todos)
+        assert panel.title == "TODOs — 25% (1/4)"
+
+    def test_panel_title_shows_progress_complete(self):
+        """All-completed todos should show 100%."""
+        todos = [
+            {"content": "Task 1", "status": "completed"},
+            {"content": "Task 2", "status": "completed"},
+        ]
+        panel = render_todos_panel(todos)
+        assert panel.title == "TODOs — 100% (2/2)"
+
+    def test_panel_title_rounds_half_up(self):
+        """2/3 should round to 67%, not 66%."""
+        todos = [
+            {"content": "Task 1", "status": "completed"},
+            {"content": "Task 2", "status": "completed"},
+            {"content": "Task 3", "status": "pending"},
+        ]
+        panel = render_todos_panel(todos)
+        assert panel.title == "TODOs — 67% (2/3)"
 
     def test_full_list_shown(self):
         """Test that all todos are shown (no hidden indicator)."""
@@ -304,7 +335,8 @@ class TestTodoPanelIntegration:
         # Step 2: Render panel
         panel = render_todos_panel(todos, max_items=50, max_completed=50, show_completed_indicator=False)
         assert isinstance(panel, Panel)
-        assert panel.title == "TODOs"
+        # Title reflects progress: 1/3 completed.
+        assert panel.title == "TODOs — 33% (1/3)"
 
         # Step 3: Check tool call skipping
         assert Renderer._should_skip_tool_call({"name": "write_todos"})

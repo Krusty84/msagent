@@ -109,6 +109,17 @@ def _build_todos_table(
     return table
 
 
+def _compute_progress_label(todos: list[Todo]) -> str | None:
+    """Return a '33% (1/3)' progress label, or None when there are no todos."""
+    if not todos:
+        return None
+    done = sum(1 for todo in todos if todo["status"] == "completed")
+    total = len(todos)
+    # Round half-up so 1/3 reads as 33% rather than 33.33%.
+    pct = (done * 100 + total // 2) // total
+    return f"{pct}% ({done}/{total})"
+
+
 def render_todos_panel(
     todos: list[dict[str, Any]] | None,
     *,
@@ -123,7 +134,9 @@ def render_todos_panel(
         max_completed=max_completed,
         show_completed_indicator=show_completed_indicator,
     )
-    return Panel(table, title="TODOs", border_style="muted")
+    progress = _compute_progress_label(coerced)
+    title = "TODOs" if progress is None else f"TODOs — {progress}"
+    return Panel(table, title=title, border_style="muted")
 
 
 def format_todos(

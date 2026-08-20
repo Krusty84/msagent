@@ -35,7 +35,6 @@ description: 技能的详细描述，说明它做什么，以及什么时候使�
 - `references/` 放较长的背景材料和细节说明
 - `assets/` 放模板、图表、数据文件等静态资源
 
-
 ## 2. Skill 索引目录
 
 ### 2.1 性能 Skills
@@ -50,6 +49,7 @@ description: 技能的详细描述，说明它做什么，以及什么时候使�
 | `ascend-communication-analysis` | 分析通信侧瓶颈 | `查这个集群里通信耗时和慢卡` |
 | `ascend-schedule-analysis` | 分析调度、下发和 Host Bound 问题 | `看看下发延迟和调度卡在哪里` |
 | `mindstudio-cpu-binding` | 分析 CPU 绑核、NUMA 和 Host 侧瓶颈 | `排查这个多卡任务的 CPU binding 问题` |
+| `memory-analysis` | 显存数据全链路：按诉求指导 msMemScope 采集，并对 dump 做系统性解读与泄漏/OOM/调优诊断 | `帮我采集反向过程的显存数据` / `帮我解读这份显存数据，分析显存瓶颈` |
 | `op-mfu-calculator` | 计算算子 MFU | `按这个 shape 和耗时算 MFU` |
 | `op-mfu-profiler` | 采集profiling数据并解析算子 MFU | `这是我的程序，帮我分析算子的 MFU` |
 | `ascend-model-analysis` |  生成模型分析报告                   | `请帮生成deepseekv4-pro的模型分析报告` |
@@ -60,7 +60,11 @@ description: 技能的详细描述，说明它做什么，以及什么时候使�
 | --- | --- | --- |
 | `nan-overflow-detection` | 定位 NaN / overflow / gnorm 异常源头 | `帮我找出最早出现溢出的 rank 和算子` |
 | `deterministic-calculation-analysis` | 分析确定性计算问题 | `比对这批 msProbe 数据，找首个不一致 API` |
+| `spike-root-cause-analysis` | 梯度尖刺 (Gradient Spike) 根因定位 | `这个 spike 数据的根因是什么` |
 | `rl-consistency-analysis` | 做训练与推理一致性根因分析 | `分析这次训练和推理不一致的根因` |
+| `compare-result-analyzer` | 基于比对结果，分析loss对不齐问题 | `分析比对结果` |
+
+| `train-infer-op-diff-scanner` | RL 训推算子差异性扫描（融合算子 vs 单算子） | `扫描这个 RL 脚本的训练和推理算子差异` |
 
 ### 2.3 量化 Skills
 
@@ -116,7 +120,6 @@ description: 技能的详细描述，说明它做什么，以及什么时候使�
 | `/add-skill <path>` | 也可直接指定 `SKILL.md` 文件路径。 |
 
 ![add_skill](../docs/zh/figures/add_skill.png)
-
 
 ## 5. 安装 Skill 到其他 Agent
 

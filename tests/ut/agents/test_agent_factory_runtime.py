@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import os
 from functools import partial
 from types import SimpleNamespace
 
@@ -120,7 +121,7 @@ async def test_agent_factory_create_populates_runtime_tools_without_name_error(
 
 
 @pytest.mark.asyncio
-async def test_agent_factory_create_uses_explicit_working_dir_for_backends(
+async def test_agent_factory_create_isolates_shell_cwd_from_working_dir(
     monkeypatch,
     tmp_path,
 ) -> None:
@@ -140,7 +141,32 @@ async def test_agent_factory_create_uses_explicit_working_dir_for_backends(
         llm_config=SimpleNamespace(),
     )
 
-    assert graph._agent_backend.root_dir == str(tmp_path.resolve())
+    # Regression for #219: shell CWD must be isolated from working_dir
+    # so commands like msprof-analyze cannot write `log/` into the data dir.
+    import tempfile as _tempfile
+    assert graph._agent_backend.root_dir != str(tmp_path.resolve())
+    assert graph._agent_backend.root_dir.startswith(_tempfile.gettempdir())
+
+
+def test_build_agent_backend_separates_shell_cwd_from_working_dir(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """Regression for #219: shell CWD must not be the working/data dir."""
+    _patch_deepagent_entrypoints(monkeypatch)
+
+    backend = factory_module.AgentFactory._build_agent_backend(
+        tmp_path,
+        enable_large_results=False,
+        enable_conversation_history=False,
+    )
+
+    import tempfile as _tempfile
+    assert backend.root_dir != str(tmp_path.resolve())
+    assert backend.root_dir.startswith(_tempfile.gettempdir())
+    assert os.path.isdir(backend.root_dir)  # temp dir actually exists
+    # Working dir is still untouched.
+    assert not any(tmp_path.iterdir())
 
 
 @pytest.mark.asyncio
@@ -638,7 +664,7 @@ def test_build_agent_backend_inherits_parent_environment(
         enable_conversation_history=False,
     )
 
-    assert captured["root_dir"] == str(tmp_path)
+    assert captured["root_dir"] != str(tmp_path)
     assert captured["inherit_env"] is True
 
 

@@ -1084,8 +1084,12 @@ class AgentFactory:
         enable_large_results: bool,
         enable_conversation_history: bool,
     ) -> CompositeBackend | LocalShellBackend:
+        # Isolate the shell CWD from working_dir so commands cannot pollute
+        # the data directory (e.g. msprof-analyze creates a 'log' subdir in
+        # CWD). Absolute paths still bypass CWD, so e.g. `-d /workspace/...`
+        # continues to work.
         local_backend = LocalShellBackend(
-            root_dir=str(working_dir),
+            root_dir=tempfile.mkdtemp(prefix="msagent_shell_"),
             inherit_env=True,
         )
         routes: dict[str, Any] = {}

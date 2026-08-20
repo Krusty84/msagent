@@ -31,6 +31,7 @@
 | 参数 | 规则 |
 |------|------|
 | 调优策略类型 | 用户指定优先；**不在此写死某一算法为全局默认**；由对话、`msmodelslim/skills` 命中的策略 Skill 或项目约定决定 |
+| 最大迭代轮次（`max_iterations`） | 用户指定优先；未指定时默认 `10` |
 | 调优历史记录路径 | 用户指定优先，否则 `{save_path}/tuning_history` 等可审计路径；**新任务**与**续跑**须与用户确认是否清空或沿用 |
 | **权重量化位数**（w_bit） | "8bit"/"int8"→8，"4bit"/"int4"→4；**未提及时常用 8**（与 `auto_config_generation.md` 位数表一致） |
 | **激活量化位数**（a_bit） | 常与 w_bit 一致，除非用户指定；组合见 `auto_config_generation.md` |

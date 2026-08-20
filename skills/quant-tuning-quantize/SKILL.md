@@ -3,7 +3,7 @@ name: quant-tuning-quantize
 description: 执行模型量化。通过 msmodelslim quant 依据 Practice YAML 对模型进行量化。
 license: Apache-2.0
 metadata:
-  version: 0.3.0
+  version: 0.3.1
   domain: quantization
   framework: msmodelslim
   protocol: cli
@@ -100,17 +100,17 @@ quant-tuning-quantize (tool)
 
 ```bash
 msmodelslim quant \
-  --model_path "${MODEL_PATH}" \
-  --save_path "${WORKDIR}/round_1/quantized" \
-  --device npu:0 \
-  --model_type "${MODEL_TYPE}" \
-  --config_path "${CONFIG_PATH}" \
-  --trust_remote_code False
+  --model_path "${model_path}" \
+  --save_path "${save_path}" \
+  --device "${device}" \
+  --model_type "${model_type}" \
+  --config_path "${config_path}" \
+  --trust_remote_code "${trust_remote_code}"
 ```
 
 `save_path` 必须包含轮次与产物目录层级，便于 orchestrator 区分各轮权重，例如 `{workdir}/round_1/quantized`、`{workdir}/round_2/quantized`。
 
-**成功判定**：exit code 为 0，且 `${SAVE_PATH}` 下出现量化权重产物。
+**成功判定**：exit code 为 0，且 `${save_path}` 下出现量化权重产物。
 
 ### 错误处理
 
@@ -131,7 +131,7 @@ msmodelslim quant \
 
 ```
 量化完成:
-- 产物路径: /workspace/output/round_1/quantized  （与 `--save_path` 一致，须含 round_N/quantized）
+- 产物路径: ${save_path}  （回传时替换为实际产物路径；须含 round_N/quantized）
 - 耗时: （可选）
 ```
 

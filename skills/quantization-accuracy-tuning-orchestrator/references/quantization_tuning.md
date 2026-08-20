@@ -19,7 +19,7 @@
 
 | Skill | 脚本 | 功能用途 |
 | --- | --- | --- |
-| `quantization-accuracy-tuning-orchestrator` | `scripts/history_clear.py` | 清空当前调优历史，每次调优任务开始时用于初始化 |
+| `quantization-accuracy-tuning-orchestrator` | `scripts/history_clear.py` | 新调优任务开始时清空当前调优历史；续跑时按已确认的历史处理方式决定是否执行 |
 | `quantization-accuracy-tuning-orchestrator` | `scripts/history_append.py` | 记录一条调优历史 |
 | `quantization-accuracy-tuning-orchestrator` | `scripts/accuracy_append.py` | 将 practice + evaluate 评测结果写入精度缓存 |
 | `quantization-accuracy-tuning-orchestrator` | `scripts/accuracy_lookup.py` | 查询精度缓存，避免重复计算 |
@@ -35,7 +35,7 @@
 
 ## 详细步骤
 
-完整的调优循环流程图如下。在执行该流程前和流程中，须遵守后续小节列出的约束规则。
+完整的调优循环流程图如下。在执行该流程前和流程中，须遵守后续小节列出的约束规则。图中的 `history_clear` 仅在新调优任务开始时执行一次；续跑任务按用户确认决定是否保留已有历史。进入循环后不得再次执行。
 
 ```plaintext
              ┌───────────────┐
@@ -45,18 +45,18 @@
              │ (生成测评配置) │
              └───────┬───────┘
                      ▼
+            ┌─────────────────┐
+            │ Script:         │
+            │ history_clear   │
+            │ (新任务初始化)   │
+            └────────┬────────┘
+                     ▼
              (>>> 循环开始 <<<) ◄────────────┐
                      ▼                      │
             ┌────────────────────┐          │
             │ 输出:              │          │
             │ "第X次调优循环"     │          │
             └────────┬───────────┘          │
-                     ▼                      │
-            ┌─────────────────┐             │
-            │ Script:         │             │
-            │ history_clear   │             │
-            │ (初始化历史)     │             │
-            └────────┬────────┘             │
                      ▼                      │
             ┌─────────────────┐             │
             │ Agent:          │             │
@@ -128,6 +128,10 @@
 （1）如果用户描述"不低于浮点精度超过 1%"，则 target = FP baseline - 1%。
 （2）如果描述"某数据集相比浮点模型多错一道题"，则需要通过计算该数据集一道题目对应的精度数值，然后 target = FP baseline - 一题对应的数值。
 
+### 最大迭代轮次
+
+`max_iterations` 由总体编排持有，只用于判断调优循环是否退出，不得传给 Practice Generator、Quantizer 或 Evaluator。未由用户指定时使用已确认的默认值；每次委派 Practice Generator 时只传当前 `round`。
+
 ### standing_high 摸高二分搜索
 
 采用 standing_high 策略时，调优循环不是"达标即停"，而是二分搜索最少回退层数：
@@ -171,8 +175,7 @@
 | `save_path` | string | ✓ | 工作目录，Practice YAML 写入此目录 |
 | `device` | string | ✓ | 如 `npu:2,3` |
 | `strategy` | string | ✓ | 搜索算法：`standing_high` 或 `standing_high_with_experience`； |
-| `calib_dataset` | string | ✓ | 已确定并经用户确认的校准数据集 |
-| `max_iterations` | int | ✓ | 最大迭代轮次 |
+| `calib_dataset` | string\|null | | 可选的校准数据集覆盖值；为 `null` 时由敏感层分析按默认规则确定 |
 | `round` | int | ✓ | 当前调优轮次 |
 | `prev_result` | object\|null | | 上轮评测结果，首轮 `null` |
 | `anchor_practice` | string\|null | | 已知最优且达标的 Practice 路径 |
@@ -192,8 +195,7 @@
     "save_path": "",
     "device": "",
     "strategy": "standing_high",
-    "calib_dataset": "",
-    "max_iterations": 10,
+    "calib_dataset": null,
     "round": 1,
     "prev_result": null,
     "anchor_practice": null
@@ -300,7 +302,7 @@
 | `evaluate_id` | string | | 评测标识 |
 | `round` | int | | 建议填写当前轮次 |
 
-回传 `output` 必填：`overall_passed`，`datasets: [{ name, score, target, passed }]`，`commands`（须含 `inference_service` 与 `evaluation`）
+回传 `output` 必填：完整 `evaluate_result: { accuracies, expectations, is_satisfied }`，以及 `commands`（须含 `inference_service` 与 `evaluation`）。主 Agent 使用 `evaluate_result.is_satisfied` 判断是否达标，并将该 `evaluate_result` 直接用于精度缓存、调优历史和下一轮 `prev_result`。
 
 委派模板：
 

@@ -3,7 +3,7 @@ name: tune-practice-cfg
 description: Use when 量化调优闭环中需要生成或修改一轮调优所需的 Practice YAML，包括敏感层分析、策略决策、写出 YAML 文件和校验。
 license: Apache-2.0
 metadata:
-  version: 0.1.0
+  version: 0.1.1
   domain: quantization
   framework: msmodelslim
   protocol: cli
@@ -47,10 +47,9 @@ metadata:
 | `model_type` | `str` | 模型类型名 |
 | `model_path` | `str` | 模型路径 |
 | `save_path` | `str` | 工作目录，Practice YAML 写入此目录下 |
-| `device` | `str` | 分析设备，如 `"npu"`、`"npu:0"`、`"gpu:0,1"` |
+| `device` | `str` | 分析设备，如 `"npu"`、`"npu:0"` |
 | `strategy` | `str` | 调优策略：`"standing_high"` 或 `"standing_high_with_experience"` |
 | `calib_dataset` | `str \| None` | 可选的校准数据集覆盖值；默认值见 [敏感层分析](references/sensitive_layer_analysis.md) |
-| `max_iterations` | `int` | 最大迭代轮次，由用户指定 |
 | `round` | `int` | 当前调优轮次，用于生成本轮 Practice 文件名 |
 | `prev_result` | `dict \| None` | 上轮评测结果（EvaluateResult 结构），首轮为 `None` |
 | `anchor_practice` | `str \| None` | 当前已知最优且达标的 Practice YAML 路径（锚点） |
@@ -93,13 +92,9 @@ metadata:
          后续：model-quantize ──→ 下一轮 ─────┘
 ```
 
-**调度优化**
-
-- 如果你在进行敏感层分析的时候，还有其他卡闲置可用，如果敏感层分析时长较长，则你可以同步地使用其他卡拉起第一轮的量化（注意指定不同的卡，如使用ASCEND_RT_VISIBLE_DEVICES环境变量等方式）以减少串行等待时间。在量化结束后，如果测评需要使用的卡中包含正在进行敏感层分析的卡，则你**必须**等待敏感层分析任务结束后再进行测评任务。
-
 ### ① 读取或生成基准 Practice
 
-优先从 Practice 仓库中查找与当前 `model_type` 匹配的已验证 Practice；存在多个候选时，返回候选项，由主 Agent 确认后继续。未找到时，按照 [量化配置格式](references/practice_yaml_format.md) 生成保守基准 Practice，保存为 `{save_path}/practice_base.yaml`。基准 Practice 必须在敏感层分析前确定并通过校验。
+优先从 Practice 仓库中选择与当前 `model_type` 最匹配的一份已验证 Practice 作为当前任务的唯一基准；无法确定唯一匹配项时，按照 [量化配置格式](references/practice_yaml_format.md) 生成保守基准 Practice。基准保存为 `{save_path}/practice_base.yaml`，并在敏感层分析前完成结构校验。
 
 从基准 Practice 中继承：
 
@@ -114,11 +109,11 @@ metadata:
 
 按照[敏感层分析](references/sensitive_layer_analysis.md) 调用 `msmodelslim analyze layer`，获取各 Decoder Block 的量化敏感度得分。每个调优任务只执行一次，结果写入 `{save_path}/analysis_result.yaml`，供后续各轮复用。
 
-复用已有 `analysis_result.yaml` 前，必须按敏感层分析文档验证其结构；校验通过时跳过分析，校验失败时重新执行并覆盖旧结果。
+若当前 `{save_path}` 下已存在 `analysis_result.yaml`，按敏感层分析文档验证其结构；校验通过时视为当前任务结果并直接复用，校验失败时重新执行并覆盖。不得复用其他 `save_path` 下的分析结果。
 
-敏感层分析必须遵守基准 Practice 确定的量化边界：
+敏感层分析与基准 Practice 必须遵守以下边界：
 
-- 使用与后续 Practice `spec.dataset` 一致的校准数据；
+- 分析阶段根据可选的 `calib_dataset` 和默认规则确定唯一的 `effective_calib_dataset`，并将其写入基准 Practice 的 `spec.dataset`；后续所有轮次只继承该值；
 - 根据目标量化处理器的 `include` 确定分析范围；
 - 不得将静态 `exclude` 中的模块作为可调回退项。
 
@@ -172,7 +167,7 @@ metadata:
 **脚本调用**：
 
 ```bash
-python skills/tune-practice-cfg/scripts/validate_practice_yaml.py --practice-path /path/to/practice.yaml
+python skills/tune-practice-cfg/scripts/validate_practice_yaml.py --practice-path "${practice_path}"
 ```
 
 **返回**：

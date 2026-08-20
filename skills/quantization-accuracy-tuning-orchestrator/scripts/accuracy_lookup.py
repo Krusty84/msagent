@@ -49,7 +49,7 @@ def accuracy_lookup(save_path: str, evaluate_config_path: str, practice_path: st
         return {
             "ok": True,
             "cache_hit": True,
-            "evaluate_result": evaluate_result.model_dump(),
+            "evaluate_result": evaluate_result.model_dump(mode="json"),
         }
     except Exception as exc:
         return {"ok": False, "error": str(exc)}

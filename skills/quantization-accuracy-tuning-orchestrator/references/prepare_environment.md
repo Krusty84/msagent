@@ -52,7 +52,7 @@ python -c "import msmodelslim; print('ok')"
 - **编排层 / 校验 / 评测**：通过 `execute` 运行 skill 目录下脚本，例如：
 
 ```bash
-python skills/quantization-accuracy-tuning-orchestrator/scripts/history_clear.py --save-path /path/to/workdir
+python skills/quantization-accuracy-tuning-orchestrator/scripts/history_clear.py --save-path "${save_path}"
 ```
 
 编排脚本 **stdout** 输出单行 JSON（`{ok: ...}`）；CLI 以 **exit code** 判定成败。

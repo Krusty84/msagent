@@ -209,11 +209,16 @@ def _validate_quantizer_output(output_data: dict[str, Any]) -> list[str]:
 
 def _validate_evaluator_output(output_data: dict[str, Any]) -> list[str]:
     errors: list[str] = []
-    if output_data.get("overall_passed") is None:
-        errors.append("missing_overall_passed")
-    datasets = output_data.get("datasets")
-    if not isinstance(datasets, list):
-        errors.append("missing_datasets")
+    evaluate_result = output_data.get("evaluate_result")
+    if not isinstance(evaluate_result, dict):
+        errors.append("missing_evaluate_result")
+    else:
+        if not isinstance(evaluate_result.get("accuracies"), list):
+            errors.append("evaluate_result_missing_accuracies")
+        if not isinstance(evaluate_result.get("expectations"), list):
+            errors.append("evaluate_result_missing_expectations")
+        if not isinstance(evaluate_result.get("is_satisfied"), bool):
+            errors.append("evaluate_result_missing_is_satisfied")
     errors.extend(
         _validate_commands(
             output_data,
@@ -334,9 +339,17 @@ def _validate_model_adapt_output(output_data: dict[str, Any]) -> list[str]:
 
 def _validate_evaluation_generator_input(input_data: dict[str, Any]) -> list[str]:
     errors: list[str] = []
-    deprecated = {"target_datasets", "accuracy_targets", "accuracy_tolerance"} & input_data.keys()
+    deprecated = {"target_datasets", "accuracy_targets", "accuracy_tolerance", "device_count"} & input_data.keys()
     if deprecated:
         errors.append("deprecated_fields:" + ",".join(sorted(deprecated)))
+
+    device_indices = input_data.get("device_indices")
+    if (
+        not isinstance(device_indices, list)
+        or not device_indices
+        or any(not isinstance(index, int) or isinstance(index, bool) or index < 0 for index in device_indices)
+    ):
+        errors.append("invalid_device_indices")
 
     datasets = input_data.get("datasets")
     if not isinstance(datasets, list) or not datasets:
@@ -351,8 +364,9 @@ def _validate_evaluation_generator_input(input_data: dict[str, Any]) -> list[str
             errors.append(f"datasets[{index}]_missing_name")
         if item.get("target") is None:
             errors.append(f"datasets[{index}]_missing_target")
-        if not _coerce_str(item.get("config_name")):
-            errors.append(f"datasets[{index}]_missing_config_name")
+        config_name = item.get("config_name")
+        if config_name is not None and not _coerce_str(config_name):
+            errors.append(f"datasets[{index}]_invalid_config_name")
 
     return errors
 

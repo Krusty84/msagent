@@ -320,12 +320,12 @@ def test_delegation_event_records_datasets_when_evaluation_generator_input_valid
     "datasets": [
       {
         "name": "gpqa",
-        "config_name": "gpqa_gen",
+        "config_name": null,
         "target": 79.0,
         "tolerance": 1.0
       }
     ],
-    "device_count": 2
+    "device_indices": [0, 1]
   }
 }
 ```"""
@@ -353,6 +353,35 @@ def test_delegation_event_records_datasets_when_evaluation_generator_input_valid
     event = list(AuditReader(working_dir=tmp_path, thread_id="thread-eval").iter_events())[0]
     assert event["input_valid"] is True
     assert event["input"]["datasets"][0]["name"] == "gpqa"
+
+
+def test_protocol_marks_invalid_when_evaluation_generator_uses_device_count() -> None:
+    result = parse_delegation_input(
+        """\
+```msagent-io v1
+{
+  "protocol": "msagent.subagent_io",
+  "subagent_type": "quant-tuning-evaluation-generator",
+  "input": {
+    "model_name": "Qwen3-8B-w8a8",
+    "save_path": "/tmp/record/",
+    "datasets": [
+      {
+        "name": "gpqa",
+        "config_name": null,
+        "target": 79.0,
+        "tolerance": 1.0
+      }
+    ],
+    "device_count": 2
+  }
+}
+```""",
+        expected_subagent_type="quant-tuning-evaluation-generator",
+    )
+    assert result.valid is False
+    assert "deprecated_fields:device_count" in result.errors
+    assert "invalid_device_indices" in result.errors
 
 
 def test_audit_timestamp_formats_local_wall_clock_when_given_datetime() -> None:
@@ -440,8 +469,11 @@ def test_protocol_marks_valid_when_evaluator_output_includes_service_commands() 
   "subagent_type": "quant-tuning-evaluator",
   "status": "ok",
   "output": {
-    "overall_passed": true,
-    "datasets": [{ "name": "gpqa", "score": 80.0, "target": 79.0, "passed": true }],
+    "evaluate_result": {
+      "accuracies": [{ "dataset": "gpqa", "accuracy": "80.0" }],
+      "expectations": [{ "dataset": "gpqa", "target": "79.0", "tolerance": "0" }],
+      "is_satisfied": true
+    },
     "commands": [
       {
         "name": "inference_service",
@@ -458,6 +490,28 @@ def test_protocol_marks_valid_when_evaluator_output_includes_service_commands() 
         expected_subagent_type="quant-tuning-evaluator",
     )
     assert result.valid is True
+
+
+def test_protocol_marks_invalid_when_evaluator_output_missing_evaluate_result() -> None:
+    result = parse_completion_output(
+        """\
+```msagent-io v1
+{
+  "protocol": "msagent.subagent_io",
+  "subagent_type": "quant-tuning-evaluator",
+  "status": "ok",
+  "output": {
+    "commands": [
+      { "name": "inference_service", "command": "start server" },
+      { "name": "evaluation", "command": "run evaluation" }
+    ]
+  }
+}
+```""",
+        expected_subagent_type="quant-tuning-evaluator",
+    )
+    assert result.valid is False
+    assert "missing_evaluate_result" in result.errors
 
 
 def test_protocol_marks_valid_when_model_analysis_io_complete() -> None:

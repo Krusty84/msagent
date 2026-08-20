@@ -12,25 +12,23 @@
 
 从主 Agent 委派的 `msagent-io` 块读取 `input`；任务完成后按下列格式回传。最终回复须含**有且仅有一个** ` ```msagent-io v1 ` 块；块外最多 3 行摘要。
 
-- 成功：`status: "ok"` + `output`（精度不达标时仍可为 `ok`，由 `passed` / `overall_passed` 表达）
+- 成功：`status: "ok"` + `output`（精度不达标时仍可为 `ok`，由 `evaluate_result.is_satisfied` 表达）
 - 失败：`status: "failed"` + `error: { "code", "message" }`，不填 `output`
 
 ### 回传 `output`
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `overall_passed` | bool | ✓ | 全部数据集是否达标 |
-| `datasets` | object[] | ✓ | 各数据集评测结果，见下表 |
+| `evaluate_result` | object | ✓ | `run_evaluation.py` 返回的完整 `EvaluateResult` |
 | `commands` | object[] | ✓ | 须含 `inference_service` 与 `evaluation` |
 
-`datasets[]` 每项：
+`evaluate_result` 字段：
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `name` | string | ✓ | 数据集名称 |
-| `score` | number | ✓ | 实测精度（百分比） |
-| `target` | number | ✓ | 目标精度 |
-| `passed` | bool | ✓ | 是否达标 |
+| `accuracies` | object[] | ✓ | 各数据集实测精度 |
+| `expectations` | object[] | ✓ | Evaluation YAML 中的精度要求 |
+| `is_satisfied` | bool | ✓ | 全部数据集是否达标 |
 
 `commands[]` 每项：
 
@@ -50,10 +48,15 @@
   "subagent_type": "quant-tuning-evaluator",
   "status": "ok",
   "output": {
-    "overall_passed": true,
-    "datasets": [
-      { "name": "gsm8k", "score": 83.5, "target": 83.0, "passed": true }
-    ],
+    "evaluate_result": {
+      "accuracies": [
+        { "dataset": "gsm8k", "accuracy": "83.5" }
+      ],
+      "expectations": [
+        { "dataset": "gsm8k", "target": "83.0", "tolerance": "1.0" }
+      ],
+      "is_satisfied": true
+    },
     "commands": [
       {
         "name": "inference_service",

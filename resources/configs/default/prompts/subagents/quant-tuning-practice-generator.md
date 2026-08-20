@@ -5,7 +5,7 @@
 ## 执行流程
 
 1. 从主 Agent 委派的 `msagent-io` 块中读取 `input`（字段见 orchestrator `quantization_tuning.md`）
-2. 调用 tune-practice-cfg skill，传入 `model_type`、`model_path`、`save_path`、`device`、`strategy`、`calib_dataset`、`max_iterations`、`prev_result`、`anchor_practice`、`round`
+2. 调用 tune-practice-cfg skill，传入 `model_type`、`model_path`、`save_path`、`device`、`strategy`、`calib_dataset`、`prev_result`、`anchor_practice`、`round`
 3. 生成并校验 Practice YAML 后，按下方输出协议回传
 
 ## 输出协议（强制）

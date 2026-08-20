@@ -56,7 +56,7 @@ python -c "import ais_bench; print(ais_bench.__file__)"
 | 3 | 0-shot（zero-shot）优于 few-shot |
 | 4 | 避免使用 `llmjudge` |
 
-模型专用任务仅用于对应模型或具有相同特殊输出格式的模型。
+根据当前模型选择兼容的 AISBench 任务。优先使用数据集 README 标注支持当前模型的任务；不得仅因模型系列或版本号相近，就推断某个模型专用任务同样适用。按上述条件筛选后没有兼容任务时，返回 `VALIDATION_ERROR`，说明数据集、候选任务及各任务被排除的原因，请主 Agent 向用户确认。
 
 ### VLM 图片输入方式选择
 
@@ -70,13 +70,13 @@ python -c "import ais_bench; print(ais_bench.__file__)"
    - README 只提到数据集名称但未给出目录时，不得自行拼接路径。
 4. README 中的部署目录仅作为本地媒体根目录候选，不在本参考中执行路径安全校验或生成 YAML。
 
-用户明确指定 `config_name` 时不得静默替换，但仍须校验任务与当前模型和推理服务兼容。
+用户明确指定 `config_name` 时须校验任务与当前模型和推理服务兼容；校验失败时返回 `VALIDATION_ERROR`，说明用户指定的 `config_name` 和不兼容原因，请主 Agent 向用户确认。
 
 完成选择后向生成流程提供：
 
 - `selected_config_name`：最终选定或经校验的 AISBench 注册名；
 - `media_input_type`：`text`、`base64` 或 `local_path`；
-- `candidate_local_media_path`：README 可可靠解析的候选目录；非路径任务或无法解析时为 `null`；
+- `candidate_local_media_path`：仅当选中任务通过本地路径发送图片时，从数据集 README 明确记载的部署路径中解析出的媒体根目录候选值；该值仍需由生成流程校验后才能写入 YAML。文本或 base64 任务，以及无法可靠解析路径时为 `null`；
 - `selection_evidence`：任务表和部署说明中支持本次选择的依据。
 
 ## 示例

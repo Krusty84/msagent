@@ -3,7 +3,7 @@ name: quantization-accuracy-tuning-orchestrator
 description: End-to-end automated model quantization and accuracy tuning workflow. Use when user asks for automated model quantization and accuracy tuning, e.g. "自动量化", "量化调优", "一键量化", "精度调优", etc.
 license: Apache-2.0
 metadata:
-  version: 0.9.4
+  version: 0.9.5
   domain: quantization
   framework: msmodelslim
   protocol: mixed
@@ -132,7 +132,7 @@ metadata:
 
 | 脚本 | 用途 |
 |------|------|
-| `quantization-accuracy-tuning-orchestrator/scripts/history_clear.py` | 每轮循环开始前清空 history |
+| `quantization-accuracy-tuning-orchestrator/scripts/history_clear.py` | 新调优任务开始时清空一次 history；续跑按用户确认决定是否沿用；进入循环后不得再次清空 |
 | `quantization-accuracy-tuning-orchestrator/scripts/accuracy_lookup.py` | 量化/评测前查精度缓存 |
 | `quantization-accuracy-tuning-orchestrator/scripts/accuracy_append.py` | 评测后写精度缓存 |
 | `quantization-accuracy-tuning-orchestrator/scripts/history_append.py` | 每轮结束后追加调优历史 |

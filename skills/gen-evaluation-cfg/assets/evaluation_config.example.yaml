@@ -27,7 +27,7 @@ evaluation:
     timeout: 10800
     request_rate: 0.0001
     retry: 3
-    batch_size: 8
+    batch_size: 16
     max_out_len: 32768
     trust_remote_code: false
     pred_postprocessor: extract_non_reasoning_content

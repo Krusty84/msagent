@@ -104,13 +104,15 @@ quant-tuning-evaluate (tool)
 
 ```bash
 python skills/quant-tuning-evaluate/scripts/run_evaluation.py \
-  --quant-model-path /path/to/quantized \
-  --evaluate-id eval-round-1 \
-  --evaluate-config-path /path/to/evaluate.yaml \
-  --save-path /path/to/workdir \
-  --device npu \
-  --device-indices 0,1
+  --quant-model-path "${quant_model_path}" \
+  --evaluate-id "${evaluate_id}" \
+  --evaluate-config-path "${evaluate_config_path}" \
+  --save-path "${save_path}" \
+  --device "${device}" \
+  --device-indices "${device_indices}"
 ```
+
+执行前将 `device_indices` 列表转换为逗号分隔字符串，例如 `[0, 1]` 转换为 `0,1`。
 
 ### 错误处理
 
@@ -123,27 +125,29 @@ python skills/quant-tuning-evaluate/scripts/run_evaluation.py \
 
 ---
 
-## 输出结果
+## 脚本原始输出
 
 ### 成功
 
 ```json
 {
   "ok": true,
-  "results": {
-    "gsm8k": {
-      "score": 83.5,
-      "target": 83.0,
-      "passed": true
-    },
-    "aime25": {
-      "score": 52.0,
-      "target": 50.0,
-      "passed": true
-    }
-  },
-  "overall_passed": true,
-  "duration": 1800.5
+  "evaluate_result": {
+    "accuracies": [
+      {
+        "dataset": "gsm8k",
+        "accuracy": "83.5"
+      }
+    ],
+    "expectations": [
+      {
+        "dataset": "gsm8k",
+        "target": "83.0",
+        "tolerance": "1.0"
+      }
+    ],
+    "is_satisfied": true
+  }
 }
 ```
 
@@ -152,9 +156,7 @@ python skills/quant-tuning-evaluate/scripts/run_evaluation.py \
 ```json
 {
   "ok": false,
-  "error": "推理服务启动失败",
-  "error_code": "INFERENCE_ERROR",
-  "partial_results": {}
+  "error": "推理服务启动失败"
 }
 ```
 
@@ -166,42 +168,55 @@ python skills/quant-tuning-evaluate/scripts/run_evaluation.py \
 
 ### 2. 结果解析
 
-返回每个数据集的分数：
+脚本返回的 `evaluate_result` 字段：
 
 | 字段 | 说明 |
 |------|------|
-| `score` | 实际精度（百分比）|
-| `target` | 目标精度 |
-| `passed` | 是否达标（score >= target - tolerance）|
-| `overall_passed` | 所有数据集是否都达标 |
+| `accuracies[].dataset` | 数据集名称 |
+| `accuracies[].accuracy` | 实际精度（百分比）|
+| `expectations[].dataset` | 数据集名称 |
+| `expectations[].target` | 目标精度 |
+| `expectations[].tolerance` | 允许的精度偏差 |
+| `is_satisfied` | 所有已要求的数据集是否达标 |
 
-`run_evaluation.py` 必须在调用公共 `emit_result()` 前使用 Pydantic JSON 模式序列化 `EvaluateResult`。禁止直接返回 `model_dump()` 的 Python 模式结果，因为其中的 `Decimal`（如 `accuracy`、`target`、`tolerance`）无法由标准 `json.dumps()` 序列化。JSON 模式会将十进制值无损转换为字符串；下游通过 `EvaluateResult.model_validate()` 读取时会恢复为 `Decimal`。
+### 3. Agent 回传
 
----
+脚本返回 `ok: true` 时，`quant-tuning-evaluator` Agent 将完整的 `evaluate_result` 原样放入 `output.evaluate_result`，并按 Agent 输出协议补充 `commands` 和 `msagent-io` 包装，不得改名、删减或重新计算其中字段：
 
-## 执行示例
-
-### 标准调用
-
-```bash
-python skills/quant-tuning-evaluate/scripts/run_evaluation.py \
-  --quant-model-path /workspace/output/round_1/quantized \
-  --evaluate-id round-1 \
-  --evaluate-config-path /workspace/output/evaluate.yaml \
-  --save-path /workspace/output \
-  --device npu \
-  --device-indices 0,1
+```json
+{
+  "output": {
+    "evaluate_result": {
+      "accuracies": [
+        {
+          "dataset": "gsm8k",
+          "accuracy": "83.5"
+        }
+      ],
+      "expectations": [
+        {
+          "dataset": "gsm8k",
+          "target": "83.0",
+          "tolerance": "1.0"
+        }
+      ],
+      "is_satisfied": true
+    },
+    "commands": [
+      {
+        "name": "inference_service",
+        "command": "<本次实际执行的完整推理服务命令>"
+      },
+      {
+        "name": "evaluation",
+        "command": "<本次实际执行的完整评测命令>"
+      }
+    ]
+  }
+}
 ```
 
-### 结果返回给 orchestrator
-
-```
-评测完成:
-- gsm8k: 83.5% (目标: 83.0%) ✅
-- aime25: 52.0% (目标: 50.0%) ✅
-- 总体: 达标
-- 耗时: 1800.5s
-```
+脚本返回 `ok: false` 时，转换为 Agent 的失败协议，不填 `output`。
 
 ---
 
@@ -222,7 +237,6 @@ python skills/quant-tuning-evaluate/scripts/run_evaluation.py \
 | `HCCL init failed` | NPU 通信失败 | 检查 `device_indices` 和设备状态 |
 | `evaluate.yaml not found` | 配置文件不存在 | 检查 `config_path` |
 | `out of memory` | 设备内存不足 | 换设备 |
-| `Object of type Decimal is not JSON serializable` | 使用了 Python 模式 `model_dump()` | 改用 `model_dump(mode="json")`，且不得重新执行已完成的评测 |
 
 若错误不在上述常见错误中或者多次解决后依然未解决，依据[错误上报](references/error_handling.md)，按照错误上报格式返回至`quant-tuning-evaluator` Agent
 
@@ -237,4 +251,3 @@ python skills/quant-tuning-evaluate/scripts/run_evaluation.py \
 - [ ] 目标端口未被占用
 - [ ] NPU/GPU 设备可用
 - [ ] msmodelslim 已安装
-- [ ] 成功结果可被标准 `json.dumps()` 序列化，并可由 `EvaluateResult.model_validate()` 重新读取

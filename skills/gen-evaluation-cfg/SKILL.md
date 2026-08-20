@@ -3,7 +3,7 @@ name: gen-evaluation-cfg
 description: Generate msmodelslim evaluation YAML configuration (service_oriented + aisbench + vllm-ascend). Use when user asks for evaluation config generation.
 license: Apache-2.0
 metadata:
-  version: 0.9.8
+  version: 0.9.5
   domain: quantization
   framework: msmodelslim
   aliases:
@@ -110,7 +110,7 @@ inference_engine:
 | `evaluation.port` | int | 与 `inference_engine.port` 保持一致 |
 | `evaluation.served_model_name` | string | 与 `inference_engine.served_model_name` 保持一致 |
 | `inference_engine.type` | string | 必须为 `vllm-ascend` |
-| `inference_engine.env_vars.ASCEND_RT_VISIBLE_DEVICES` | string | 用户选择的物理设备索引，以逗号连接；如 `device_indices=[7]` 时填写 `"7"` |
+| `inference_engine.env_vars.ASCEND_RT_VISIBLE_DEVICES` | string | 用户选择的物理设备索引，以逗号连接；如 `device_indices=[0, 1]` 时填写 `"0,1"` |
 | `inference_engine.args.served-model-name` | string | 与 `served_model_name` 保持一致 |
 | `inference_engine.args.tensor-parallel-size` | int | 等于 `device_indices` 的元素数量 |
 
@@ -120,10 +120,10 @@ VLM 测评仍然生成同一类 `service_oriented + aisbench + vllm-ascend` YAML
 
 | 路径 | 类型 | 说明 |
 |------|------|------|
-| `evaluation.aisbench.max_out_len` | int | 优先采用模型卡、数据集官方配置或用户明确给出的建议；没有明确依据时使用 `32768` |
-| `evaluation.aisbench.batch_size` | int | 请求最大并发数；无通用默认值，信息不足时从 `8` 开始逐级测试 |
-| `inference_engine.args.max-model-len` | int | VLM 默认 `65536`；模型、数据集或用户明确指定时使用指定值，且不能超过模型上限 |
-| `inference_engine.args.max-num-batched-tokens` | int | 默认取 `min(max-model-len, 33792)`；显存充足但吞吐不足时再提高 |
+| `evaluation.aisbench.max_out_len` | int | 优先使用用户指定值或同一调优任务的已有浮点测评配置，其次参考 AISBench 数据集 README、任务配置，或模型 README、`generation_config.json` 中明确的生成长度建议；没有明确依据时使用模板回退值 `32768` |
+| `evaluation.aisbench.batch_size` | int | 优先使用用户指定值或已有浮点测评配置；信息不足时使用模板回退值 `16` |
+| `inference_engine.args.max-model-len` | int | 优先使用用户指定值或同一调优任务的已有浮点测评配置，其次参考模型 README 或 `config.json` 中明确的上下文长度上限；信息不足时使用模板回退值 `65536`，且不能超过模型上限 |
+| `inference_engine.args.max-num-batched-tokens` | int | 优先使用用户指定值或已有浮点测评配置；没有明确依据时使用模板回退值 `min(max-model-len, 33792)` |
 | `inference_engine.args.allowed-local-media-path` | string | 仅图片路径任务填写；必须是经过校验的可信绝对目录 |
 
 ### VLM 图片输入处理
@@ -153,7 +153,7 @@ VLM 测评仍然生成同一类 `service_oriented + aisbench + vllm-ascend` YAML
 - 使用 `assets/evaluation_config.example.yaml` 作为模板
 - 读取本 Skill 直接引用的 `references/` 文件
 - 读取 AISBench 数据集 README、模型官方 README/模型卡，以及模型目录中的 `config.json`、`generation_config.json`
-- 读取用户提供的已有 Evaluation YAML、AISBench 生成配置、summary、prediction 和服务日志，用于确认推理模式、长度截断与资源参数；只读分析，不修改这些评测产物
+- 读取用户提供的同一调优任务的已有 Evaluation YAML 或 AISBench 生成配置，优先复用已验证的推理模式、长度和资源参数；`device_indices` 及由其决定的 `tensor-parallel-size` 以本次输入为准。只读分析，不修改这些已有配置
 
 ## 常见错误
 

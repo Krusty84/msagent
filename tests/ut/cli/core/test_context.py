@@ -59,7 +59,33 @@ async def test_context_create_keeps_alias_and_exposes_resolved_model(
 
     assert context.model == "default"
     assert context.agent_description == agent_config.description
-    assert context.model_display == "deepseek-chat (openai)"
+    # When alias is the placeholder "default", show it so users see the actual
+    # model name they configured rather than the underlying LLM default.
+    assert context.model_display == "default (openai)"
+
+
+def test_format_model_display_prefers_alias_over_underlying_model() -> None:
+    """User-configured alias wins over llm_config.model (regression for #220)."""
+    llm_config = SimpleNamespace(
+        model="gpt-4o-mini",
+        provider=LLMProvider.OPENAI,
+    )
+
+    display = Context.format_model_display("deepseek-v4-flash", llm_config)
+
+    assert display == "deepseek-v4-flash (openai)"
+
+
+def test_format_model_display_falls_back_to_underlying_model_when_alias_empty() -> None:
+    """Empty alias falls back to llm_config.model to preserve prior behavior."""
+    llm_config = SimpleNamespace(
+        model="deepseek-chat",
+        provider=LLMProvider.OPENAI,
+    )
+
+    display = Context.format_model_display("", llm_config)
+
+    assert display == "deepseek-chat (openai)"
 
 
 def test_agent_context_defaults_to_cwd() -> None:

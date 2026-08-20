@@ -49,8 +49,14 @@ class Context(BaseModel):
 
     @staticmethod
     def format_model_display(model_alias: str, llm_config: object) -> str:
-        """Build a user-facing model label from alias and resolved config."""
-        resolved_model = getattr(llm_config, "model", None) or model_alias
+        """Build a user-facing model label from alias and resolved config.
+
+        Prefers the user-configured alias over the LLM config's underlying
+        ``model`` field so the welcome banner reflects what the user actually
+        configured (e.g. ``deepseek-v4-flash``) instead of leaking the default
+        fallback (``gpt-4o-mini``) when the alias is unset.
+        """
+        resolved_model = model_alias or getattr(llm_config, "model", None) or ""
         provider_label = Context.format_provider_label(llm_config)
 
         if provider_label:

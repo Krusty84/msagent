@@ -1,6 +1,7 @@
 # MSAgent 体验报告
 
 ## 一、报告基本信息
+
 | 项目             | 内容                                            |
 |----------------|-----------------------------------------------|
 | 报告编号           | 淬火行动-20260819-rociss周鹏-msagent使用体验报告          |
@@ -19,32 +20,11 @@
 | 项目 | 内容                                                                                                                                                                                                                                                                                                                     |
 |------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | 输入 Prompt | 从当前Profiling数据来看，有无集群快慢卡，有什么关键证据”，“造成快慢卡的原因是什么“                                                                                                                                                                                                                                                                        |
-| Agent 输出（文字摘要） | 总结
-  Rank 1 Host 侧 CANN API 变慢
-   （aclnnInnerFusedInferAttentionScore 1.55x, aclrtRecordEvent 1.58x, aclrtMemc
-          ↓
-  Host 下发速度跟不上 NPU 执行速度
-          ↓
-  NPU 空闲（Free = 877.52ms, 62.1%）
-          ↓
-  Rank 1 到达 AllReduce 同步点晚于其他 Rank
-          ↓
-  Rank 0/3 在通信点长时间等待（Comm = 448/445ms, Wait = 10.6/838.6ms）
-          ↓
-  Rank 1 通信看似"快"（203.81ms）→ 伪快卡现象
-          ↓
-  整体 Stage 耗时被 Rank 1/2 拖慢至 ~1414ms |
+| Agent 输出（文字摘要） | 总结<br>Rank 1 Host 侧 CANN API 变慢（aclnnInnerFusedInferAttentionScore 1.55x, aclrtRecordEvent 1.58x, aclrtMemc）<br>↓<br>Host 下发速度跟不上 NPU 执行速度<br>↓<br>NPU 空闲（Free = 877.52ms, 62.1%）<br>↓<br>Rank 1 到达 AllReduce 同步点晚于其他 Rank<br>↓<br>Rank 0/3 在通信点长时间等待（Comm = 448/445ms, Wait = 10.6/838.6ms）<br>↓<br>Rank 1 通信看似"快"（203.81ms）→ 伪快卡现象<br>↓<br>整体 Stage 耗时被 Rank 1/2 拖慢至 ~1414ms |
 
-| **输出截图** |![img.png](.assets/img.png)
-![img_1.png](.assets/img_1.png)
-![img_2.png](.assets/img_2.png)  
-![img_3.png](.assets/img_3.png)
-![img_4.png](.assets/img_4.png)
-![img_5.png](.assets/img_5.png)
+| **输出截图** | ![img.png](.assets/img.png)<br>![img_1.png](.assets/img_1.png)<br>![img_2.png](.assets/img_2.png)<br>![img_3.png](.assets/img_3.png)<br>![img_4.png](.assets/img_4.png)<br>![img_5.png](.assets/img_5.png) |
 | 是否符合预期 | ✅️是　□ 否                                                                                                                                                                                                                                                                                                                |
 | 评价 |                                                                                                                                                                                                                                                                                                                        |
-
-
 
 ## 三、交互整体评价
 

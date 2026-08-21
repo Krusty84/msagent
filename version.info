@@ -1,6 +1,6 @@
 [PACKAGE]
 Name=mindstudio-agent
-Version=26.1.0-alpha.2
+Version=26.1.0
 Commit=unknown
 Date=unknown
 Repo=https://gitcode.com/Ascend/msagent

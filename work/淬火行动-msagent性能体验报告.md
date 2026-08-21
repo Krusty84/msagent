@@ -20,7 +20,7 @@
 |------|------|
 | 输入 Prompt | msagent --version |
 | Agent 输出（文字摘要） | msAgent v26.1.0a2 |
-| **输出截图** | ![6ac1033571bc892ee7c922095f65f293](D:\wechatrecord\xwechat_files\wxid_pubr6f2id3jn22_bca5\temp\RWTemp\2026-08\9e20f478899dc29eb19741386f9343c8\6ac1033571bc892ee7c922095f65f293.png) |
+| **输出截图** | ![版本查询](images/6ac1033571bc892ee7c922095f65f293.png) |
 | 是否符合预期 | 是 |
 | 评价 | |
 
@@ -30,7 +30,7 @@
 |------|------|
 | 输入 Prompt | msagent config --show |
 | Agent 输出（文字摘要） | 如图 |
-| **输出截图             | ![c4b934223e1df79a054a183b4fd3c037](D:\wechatrecord\xwechat_files\wxid_pubr6f2id3jn22_bca5\temp\RWTemp\2026-08\9e20f478899dc29eb19741386f9343c8\c4b934223e1df79a054a183b4fd3c037.png) |
+| **输出截图** | ![配置显示](images/c4b934223e1df79a054a183b4fd3c037.png) |
 | 是否符合预期 | 是 |
 | 评价 | |
 
@@ -40,7 +40,7 @@
 |------|------|
 | 输入 Prompt | 你好 |
 | Agent 输出（文字摘要） | 如图 |
-| **输出截图** | ![0340e8a2c26ae409cd3b0e7e371be13f](D:\wechatrecord\xwechat_files\wxid_pubr6f2id3jn22_bca5\temp\RWTemp\2026-08\9e20f478899dc29eb19741386f9343c8\0340e8a2c26ae409cd3b0e7e371be13f.png) |
+| **输出截图** | ![打招呼](images/0340e8a2c26ae409cd3b0e7e371be13f.png) |
 | 是否符合预期 | |
 | 评价 | |
 
@@ -50,7 +50,7 @@
 | ---------------------- | ------------------------------------------------------------ |
 | 输入 Prompt            | “从当前Profiling数据来看，有无集群快慢卡，有什么关键证据”，“造成快慢卡的原因是什么”，“评估快慢卡问题造成的影响，拖慢了多少时间”等***\*多轮交互\****，记录每次对话的输出，判断是否符合预期。 |
 | Agent 输出（文字摘要） | 如图                                                         |
-| **输出截图**           | ![6b7f20bc6de01ef477b122ef18a94954](D:\wechatrecord\xwechat_files\wxid_pubr6f2id3jn22_bca5\temp\RWTemp\2026-08\9e20f478899dc29eb19741386f9343c8\6b7f20bc6de01ef477b122ef18a94954.png)![327c797de679a3cc92f91e48c0a4b702](D:\wechatrecord\xwechat_files\wxid_pubr6f2id3jn22_bca5\temp\RWTemp\2026-08\327c797de679a3cc92f91e48c0a4b702.png) |
+| **输出截图**           | ![分析1](images/6b7f20bc6de01ef477b122ef18a94954.png) ![分析2](images/327c797de679a3cc92f91e48c0a4b702.png) |
 | 是否符合预期           | 是                                                           |
 | 评价                   |                                                              |
 
@@ -78,4 +78,4 @@
 
 ### 改进建议
 
-3. **优化路径不可达的兜底流程与引导**：数据路径错误时，应主动提供多选引导（如检查路径、挂载数据，或**直接提供压缩包由Agent解压**），减少无效交互。
+1. **优化路径不可达的兜底流程与引导**：数据路径错误时，应主动提供多选引导（如检查路径、挂载数据，或**直接提供压缩包由Agent解压**），减少无效交互。

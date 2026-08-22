@@ -146,7 +146,7 @@ skills/
 
 ```text
 skills/
-  profiling/
+  profiler/
     my-skill/
       SKILL.md
 ```
@@ -192,7 +192,7 @@ skills/
 
 ```text
 skills/
-  profiling/
+  profiler/
     my-skill/
       SKILL.md
 ```
@@ -250,7 +250,7 @@ skills:
 ```yaml
 skills:
   patterns:
-    - profiling:my-skill
+    - profiler:my-skill
   use_catalog: false
 ```
 
@@ -279,7 +279,7 @@ skills:
 如果有重名 skill，建议写全：
 
 ```text
-/skills profiling/my-skill
+/skills profiler/my-skill
 ```
 
 (custom-skill-faq)=
@@ -303,3 +303,4 @@ skills:
 - 当前任务更匹配别的内置 skill，导致没有选中它
 
 建议先通过 `/skills` 确认可见性，再补充更明确的 `description` 和触发说明。
+

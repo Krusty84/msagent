@@ -13,5 +13,6 @@ tools:
   output_max_tokens: 10000
 skills:
   patterns:
-    - default:quant-tuning-evaluate
+    - quantizer:quant-tuning-evaluate
   use_catalog: false
+

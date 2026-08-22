@@ -163,7 +163,7 @@ must_tool_use:
 如果要评测某个 skill 是否能指导 Agent 完成任务，可以配置 `skill_path`：
 
 ```yaml
-skill_path: ../../../skills/profiling/profiling-analysis
+skill_path: ../../../skills/profiler/ascend-cluster-fast-slow-rank-detector
 ```
 
 runner 会把 skill 目录复制到隔离工作区的 `skill/`，并在提示词中要求 Agent 先阅读
@@ -244,9 +244,9 @@ scoring_prompt: >
 ```yaml
 id: cluster_fast_slow_rank_profiling_skill
 input_data_path: ../data/kv_cache_type_page_seqlen_4096_bs_1_profile_count_0
-skill_path: ../../../skills/profiling/profiling-analysis
+skill_path: ../../../skills/profiler/ascend-cluster-fast-slow-rank-detector
 prompt: >
-  请按照提供的 profiling-analysis skill 对 input_data 中的 Ascend 集群 profiling
+  请按照提供的 ascend-cluster-fast-slow-rank-detector skill 对 input_data 中的 Ascend 集群 profiling
   数据做性能瓶颈与快慢卡诊断。需要明确回答：是否存在快慢卡现象；真正的慢卡 Rank ID
   和候选快卡 Rank ID；瓶颈类型；关键证据；以及可执行优化建议。
 must_include:
@@ -287,3 +287,4 @@ scoring_prompt: >
 - 必须遵守的方法或工具写进了 `must_tool_use`。
 - `scoring_prompt` 能区分高质量答案和泛泛回答。
 - 至少跑过一次单 case，并检查了 `report.md`、`scores.json` 和 trace。
+

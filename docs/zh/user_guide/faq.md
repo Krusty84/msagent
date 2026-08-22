@@ -45,7 +45,7 @@
 如果你的 Skill 带分类目录，建议写全路径：
 
 ```text
-/skills profiling/my-skill
+/skills profiler/my-skill
 ```
 
 如果看不到，通常优先检查：

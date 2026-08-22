@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+﻿#!/usr/bin/env bash
 set -euo pipefail
 
 ENV_NAME="myenv"
@@ -12,7 +12,7 @@ MSMODELING_REPO_URL="https://gitcode.com/Ascend/msmodeling.git"
 
 usage() {
     cat <<'EOF'
-Usage: bash ./.agents/skills/msmodeling-env-installer/scripts/install-current-project-deps.sh [options]
+Usage: bash ./.agents/skills/modeling/msmodeling-env-installer/scripts/install-current-project-deps.sh [options]
 
 Options:
   --env-name <name>          Virtual environment directory name. Default: myenv
@@ -276,3 +276,4 @@ if [[ "$OSTYPE" == msys* || "$OSTYPE" == cygwin* ]]; then
 else
     echo "Done. Activation command: source $ENV_NAME/bin/activate"
 fi
+

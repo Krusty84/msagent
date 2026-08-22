@@ -333,7 +333,7 @@ class ConfigRegistry:
         """
         memory_path = self.working_dir / CONFIG_MEMORY_FILE_NAME
         if memory_path.exists():
-            content = await asyncio.to_thread(memory_path.read_text)
+            content = await asyncio.to_thread(memory_path.read_text, encoding="utf-8")
             content = content.strip()
             if content and not is_default_memory_content(content):
                 return f"<user-memory>\n{content}\n</user-memory>"

@@ -104,16 +104,16 @@ msagent
 
 ## 4. 压缩后，数据存在哪里
 
-压缩后的原始历史消息会写入当前工作目录下：
+压缩后的原始历史消息会写入当前项目的全局状态目录：
 
 ```text
-<working-dir>/.msagent/conversation_history/<thread_id>.md
+~/.msagent/state/projects/<project-id>/conversation_history/<thread_id>.md
 ```
 
 例如：
 
 ```text
-/path/to/project/.msagent/conversation_history/8d6c4f3f-....md
+~/.msagent/state/projects/my-project-a1b2c3d4e5f6/conversation_history/8d6c4f3f-....md
 ```
 
 这个文件是按时间追加写入的。每次压缩都会新增一个段落，类似：
@@ -141,7 +141,7 @@ Tool: ...
 它对应的实际磁盘目录就是上面的：
 
 ```text
-<working-dir>/.msagent/conversation_history/<thread_id>.md
+~/.msagent/state/projects/<project-id>/conversation_history/<thread_id>.md
 ```
 
 ## 5. 它具体是怎么工作的
@@ -224,7 +224,7 @@ compression:
 检查：
 
 ```text
-<working-dir>/.msagent/conversation_history/
+~/.msagent/state/projects/<project-id>/conversation_history/
 ```
 
 是否已经生成当前 `thread_id` 对应的 `.md` 文件。
@@ -254,7 +254,7 @@ compression:
 
 如果对话还不够长，压缩不会发生。
 
-### 4) 工作目录下是否能写入 `.msagent/conversation_history/`
+### 4) `MSAGENT_HOME` 下的项目状态目录是否可写
 
 如果历史文件写入失败，摘要仍可能生成，但原始消息不会成功落盘。此时终端会出现 warning。
 
@@ -284,4 +284,4 @@ compression:
 
 ## 11. 一句话总结
 
-对使用者来说，这个特性基本是“开箱即用”的：正常长时间使用 `msagent`，当上下文接近上限时，它会自动把旧消息总结并卸载到 `.msagent/conversation_history/`，从而释放上下文窗口，同时保留可追溯的原始历史。
+对使用者来说，这个特性基本是“开箱即用”的：正常长时间使用 `msagent`，当上下文接近上限时，它会自动把旧消息总结并卸载到全局目录中的项目状态区，从而释放上下文窗口，同时保留可追溯的原始历史。

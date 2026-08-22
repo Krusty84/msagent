@@ -21,7 +21,6 @@ from msagent.cli.ui.shared import (
     create_bottom_toolbar,
     create_prompt_style,
 )
-from msagent.core.constants import CONFIG_HISTORY_FILE_NAME
 from msagent.core.logging import get_logger
 from msagent.core.settings import settings
 
@@ -35,7 +34,8 @@ class InteractivePrompt:
         self.context = context
         self.commands = commands
         self.session = session
-        history_file = Path(context.working_dir) / CONFIG_HISTORY_FILE_NAME
+        state_dir = Path(context.state_dir) if context.state_dir is not None else Path(context.working_dir) / ".msagent"
+        history_file = state_dir / "history"
         history_file.parent.mkdir(parents=True, exist_ok=True)
         self.history = FileHistory(str(history_file))
         self.prompt_session: PromptSession[str]

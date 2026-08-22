@@ -53,7 +53,7 @@ class ModelHandler:
             selected_model_name = await self._get_model_selection(models, current_model_name, default_model_name)
 
             if selected_model_name:
-                await initializer.update_agent_llm(
+                await initializer.set_current_model(
                     self.session.context.agent,
                     selected_model_name,
                     self.session.context.working_dir,

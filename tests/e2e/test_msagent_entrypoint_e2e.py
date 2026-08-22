@@ -77,16 +77,41 @@ def _read_jsonl(path: Path) -> list[dict]:
 def test_entrypoint_version_and_config_show(tmp_path: Path) -> None:
     version = _run_msagent("--version", cwd=PROJECT_ROOT)
     assert version.returncode == 0
-    assert "msAgent" in version.stdout
+    assert "msagent" in _normalize_terminal_output(version.stdout).lower()
 
-    config = _run_msagent("config", "--show", "-w", str(tmp_path), cwd=PROJECT_ROOT)
+    config = _run_msagent(
+        "config",
+        "--show",
+        "-w",
+        str(tmp_path),
+        cwd=PROJECT_ROOT,
+        env={"MSAGENT_HOME": str(tmp_path / "global-home")},
+    )
     assert config.returncode == 0
     assert "Current Configuration" in config.stdout
     assert "LLM Provider" in config.stdout
+    assert not (tmp_path / ".msagent").exists()
+    assert (tmp_path / "global-home" / "state" / "projects").is_dir()
+
+    updated = _run_msagent(
+        "config",
+        "--llm-model",
+        "smoke-model",
+        "-w",
+        str(tmp_path),
+        cwd=PROJECT_ROOT,
+        env={"MSAGENT_HOME": str(tmp_path / "global-home")},
+    )
+    assert updated.returncode == 0
+    assert (tmp_path / "global-home" / "config" / "config.llms.yml").is_file()
+    assert not (tmp_path / "global-home" / "config" / "agents").exists()
 
 
 def test_entrypoint_one_shot_tool_call_and_todo_render(tmp_path: Path) -> None:
-    env = {"MSAGENT_FAKE_BACKEND": "1"}
+    env = {
+        "MSAGENT_FAKE_BACKEND": "1",
+        "MSAGENT_HOME": str(tmp_path / "global-home"),
+    }
 
     tool = _run_msagent(
         "-w",
@@ -123,7 +148,10 @@ def test_entrypoint_trace_jsonl_records_tools_tokens_and_time(tmp_path: Path) ->
         str(tmp_path),
         "please run one tool call",
         cwd=PROJECT_ROOT,
-        env={"MSAGENT_FAKE_BACKEND": "1"},
+        env={
+            "MSAGENT_FAKE_BACKEND": "1",
+            "MSAGENT_HOME": str(tmp_path / "global-home"),
+        },
     )
 
     assert result.returncode == 0

@@ -27,8 +27,6 @@ from typing import Any
 
 from msagent.audit.events import AuditEvent, UserResponseEvent, UserTurnEvent
 from msagent.audit.protocol import ProtocolParseResult
-from msagent.core.constants import CONFIG_AUDIT_DIR
-
 
 def resolve_audit_log_enabled(agent_config: object | None) -> bool:
     """Resolve per-agent audit logging from agent YAML."""
@@ -59,6 +57,7 @@ class AuditWriter:
         self,
         *,
         working_dir: Path,
+        state_dir: Path | None = None,
         thread_id: str,
         agent_name: str,
         enabled: bool | None = None,
@@ -67,7 +66,11 @@ class AuditWriter:
         self.thread_id = thread_id
         self.agent_name = agent_name
         self.enabled = False if enabled is None else enabled
-        self._audit_dir = self.working_dir / CONFIG_AUDIT_DIR
+        self._audit_dir = (
+            state_dir.resolve() / "audit_log"
+            if state_dir is not None
+            else self.working_dir / ".msagent" / "audit_log"
+        )
         self._path = self._audit_dir / build_audit_filename(
             agent_name=self.agent_name,
             thread_id=self.thread_id,

@@ -98,23 +98,20 @@ msagent --help
 
 ## 5. 升级与卸载
 
-`msagent` 会在当前工作目录下生成 `.msagent/` 本地目录，用于保存缓存、会话历史、日志和运行时配置等内容。
+`msagent` 将用户配置和运行状态保存在 `MSAGENT_HOME`（默认 `~/.msagent/`），不会在工作目录生成新的 `.msagent/`。
 
-- 升级前，先删除当前工作目录下的 `.msagent/` 文件夹，避免旧缓存影响新版本行为。
-- 卸载时，如果后续不再使用 `msagent`，也建议一并删除 `.msagent/` 文件夹。
+当前阶段尚未提供旧项目 `.msagent` 的自动迁移。升级或切换版本时请保留旧目录，不要将删除配置目录作为升级步骤。
 
 常见操作示例：
 
 - 升级
 
   ```shell
-  rm -rf .msagent
-  pip install mindstudio-agent
+  pip install -U mindstudio-agent
   ```
 
 - 卸载
 
   ```shell
-  rm -rf .msagent
   pip uninstall mindstudio-agent
   ```

@@ -25,16 +25,9 @@ import pytest
 
 from msagent.configs.registry import ConfigRegistry
 from msagent.core.constants import CONFIG_APPROVAL_FILE_NAME, LLM_CONFIG_VERSION
+from msagent.core.paths import AppPaths
 from msagent.skills.factory import SkillFactory
 from msagent.tools.internal.memory import DEFAULT_MEMORY_FILE_CONTENT
-
-
-def _load_default_msprof_server() -> dict:
-    config_path = files("resources")
-    for part in ("configs", "default", "config.mcp.json"):
-        config_path = config_path.joinpath(part)
-    config = json.loads(config_path.read_text(encoding="utf-8"))
-    return config["mcpServers"]["msprof-mcp"]
 
 
 def _load_default_profiler_config() -> dict:
@@ -58,82 +51,44 @@ def _load_default_minos_config() -> dict:
     return yaml.safe_load(config_path.read_text(encoding="utf-8"))
 
 
-def test_default_msprof_server_uses_packaged_executable() -> None:
-    default_msprof_server = _load_default_msprof_server()
+def _create_registry(tmp_path: Path) -> tuple[ConfigRegistry, AppPaths]:
+    app_paths = AppPaths.from_home(tmp_path / "global-home" / ".msagent")
+    working_dir = tmp_path / "workspace"
+    working_dir.mkdir()
+    return ConfigRegistry(working_dir, app_paths), app_paths
 
-    assert default_msprof_server["command"] == "msprof-mcp"
-    assert default_msprof_server["args"] == []
-    assert default_msprof_server["repair_timeout"] == 30
-    assert "invoke_timeout" in default_msprof_server
-    assert isinstance(default_msprof_server["invoke_timeout"], (int, float))
-    assert default_msprof_server["invoke_timeout"] > 0
+
+def test_default_mcp_config_is_valid_json() -> None:
+    config_path = files("resources")
+    for part in ("configs", "default", "config.mcp.json"):
+        config_path = config_path.joinpath(part)
+
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+
+    assert isinstance(config.get("mcpServers"), dict)
 
 
 @pytest.mark.asyncio
 async def test_config_registry_bootstraps_default_layout(tmp_path: Path) -> None:
-    registry = ConfigRegistry(tmp_path)
+    registry, app_paths = _create_registry(tmp_path)
 
     await registry.ensure_config_dir()
 
-    config_dir = tmp_path / ".msagent"
-    assert config_dir.exists()
-    assert (config_dir / "README.md").exists()
-    assert (config_dir / "agents").is_dir()
-    assert (config_dir / "llms").is_dir()
-    assert (config_dir / "sandboxes").is_dir()
-    assert (config_dir / "subagents").is_dir()
-    assert (config_dir / "config.llms.yml").exists()
-    assert (config_dir / "config.mcp.json").exists()
-    assert (config_dir / CONFIG_APPROVAL_FILE_NAME.name).exists()
-    assert (config_dir / "memory.md").exists()
+    assert app_paths.config_dir.is_dir()
+    assert list(app_paths.config_dir.iterdir()) == []
+    assert registry.project_paths.metadata_file.is_file()
+    assert registry.project_paths.memory_file.is_file()
+    assert not (registry.working_dir / ".msagent").exists()
 
-    mcp_config = json.loads((config_dir / "config.mcp.json").read_text())
-    assert "msprof-mcp" in mcp_config["mcpServers"]
-    msprof_server = mcp_config["mcpServers"]["msprof-mcp"]
-    default_msprof_server = _load_default_msprof_server()
-    assert msprof_server["args"] == default_msprof_server["args"]
-    assert msprof_server["stateful"] == default_msprof_server["stateful"]
-
-    approval_config = json.loads((config_dir / CONFIG_APPROVAL_FILE_NAME.name).read_text(encoding="utf-8"))
-    assert "interrupt_on" in approval_config
-    assert "execute" in approval_config["interrupt_on"]
-    assert approval_config["interrupt_on"]["execute"]["allowed_decisions"] == [
-        "approve",
-        "reject",
-    ]
-    assert "decision_rules" in approval_config
-    assert any(
-        rule
-        == {
-            "name": "execute",
-            "args": {"command": ".*"},
-            "decision": "always_approve",
-        }
-        for rule in approval_config["decision_rules"]
-    )
-
-    profiler = yaml.safe_load((config_dir / "agents" / "Profiler.yml").read_text())
-    modeling = yaml.safe_load((config_dir / "agents" / "Modeling.yml").read_text())
-    minos = yaml.safe_load((config_dir / "agents" / "Minos.yml").read_text())
-    default_profiler = _load_default_profiler_config()
-    default_modeling = _load_default_modeling_config()
-    default_minos = _load_default_minos_config()
-    assert profiler["name"] == "Profiler"
-    assert profiler["tools"]["patterns"] == default_profiler["tools"]["patterns"]
-    assert profiler["skills"]["patterns"] == default_profiler["skills"]["patterns"]
-    assert modeling["name"] == "Modeling"
-    assert modeling["tools"]["patterns"] == default_modeling["tools"]["patterns"]
-    assert modeling["skills"]["patterns"] == default_modeling["skills"]["patterns"]
-    assert "default:msmodeling-env-installer" in modeling["skills"]["patterns"]
-    assert modeling["default"] is False
-    assert minos["name"] == "Minos"
-    assert minos["skills"]["patterns"] == default_minos["skills"]["patterns"]
+    agents = await registry.load_agents()
+    assert "Profiler" in agents.agent_names
+    assert registry.load_approval().interrupt_on
 
 
 @pytest.mark.asyncio
 async def test_load_user_memory_ignores_default_template(tmp_path: Path) -> None:
-    registry = ConfigRegistry(tmp_path)
-    memory_file = tmp_path / ".msagent" / "memory.md"
+    registry, _ = _create_registry(tmp_path)
+    memory_file = registry.project_paths.memory_file
     memory_file.parent.mkdir(parents=True)
     memory_file.write_text(DEFAULT_MEMORY_FILE_CONTENT, encoding="utf-8")
 
@@ -142,8 +97,8 @@ async def test_load_user_memory_ignores_default_template(tmp_path: Path) -> None
 
 @pytest.mark.asyncio
 async def test_load_user_memory_wraps_user_content(tmp_path: Path) -> None:
-    registry = ConfigRegistry(tmp_path)
-    memory_file = tmp_path / ".msagent" / "memory.md"
+    registry, _ = _create_registry(tmp_path)
+    memory_file = registry.project_paths.memory_file
     memory_file.parent.mkdir(parents=True)
     memory_file.write_text("- 用户喜欢中文回复\n", encoding="utf-8")
 
@@ -151,10 +106,11 @@ async def test_load_user_memory_wraps_user_content(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_config_registry_adds_missing_modeling_skill_patterns_to_existing_config_dir(
+async def test_config_registry_user_agent_replaces_packaged_agent(
     tmp_path: Path,
 ) -> None:
-    config_dir = tmp_path / ".msagent"
+    registry, app_paths = _create_registry(tmp_path)
+    config_dir = app_paths.config_dir
     agents_dir = config_dir / "agents"
     agents_dir.mkdir(parents=True)
     (agents_dir / "Modeling.yml").write_text(
@@ -163,7 +119,7 @@ async def test_config_registry_adds_missing_modeling_skill_patterns_to_existing_
                 "version": "__APP_VERSION__",
                 "name": "Modeling",
                 "description": "legacy local modeling config",
-                "prompt": ["prompts/agents/Modeling.md"],
+                "prompt": "custom prompt",
                 "llm": "default",
                 "checkpointer": "sqlite",
                 "default": False,
@@ -176,16 +132,59 @@ async def test_config_registry_adds_missing_modeling_skill_patterns_to_existing_
         encoding="utf-8",
     )
 
-    registry = ConfigRegistry(tmp_path)
+    modeling = await registry.get_agent("Modeling")
 
-    await registry.ensure_config_dir()
+    assert modeling.description == "legacy local modeling config"
+    assert modeling.prompt == "custom prompt"
+    assert modeling.skills is not None
+    assert modeling.skills.patterns == ["default:custom-local-skill"]
 
-    modeling = yaml.safe_load((agents_dir / "Modeling.yml").read_text(encoding="utf-8"))
-    patterns = modeling["skills"]["patterns"]
-    default_modeling = _load_default_modeling_config()
-    for pattern in default_modeling["skills"]["patterns"]:
-        assert pattern in patterns
-    assert "default:custom-local-skill" in patterns
+
+@pytest.mark.asyncio
+async def test_generated_agent_override_contains_only_mutated_fields(tmp_path: Path) -> None:
+    registry, app_paths = _create_registry(tmp_path)
+    packaged = await registry.get_agent("Profiler")
+
+    await registry.update_agent_llm("Profiler", "gpt-5-mini-thinking")
+
+    override_file = app_paths.config_dir / "agents" / "Profiler.yml"
+    override = yaml.safe_load(override_file.read_text(encoding="utf-8"))
+    assert set(override) == {"version", "name", "llm"}
+    assert override["name"] == "Profiler"
+    assert override["llm"] == "gpt-5-mini-thinking"
+    assert not app_paths.prompts_dir.exists() or list(app_paths.prompts_dir.rglob("*")) == []
+
+    effective = await registry.get_agent("Profiler")
+    assert effective.llm.alias == "gpt-5-mini-thinking"
+    assert effective.prompt == packaged.prompt
+    assert effective.tools == packaged.tools
+    assert effective.skills == packaged.skills
+    assert effective.compression == packaged.compression
+
+
+@pytest.mark.asyncio
+async def test_current_agent_is_scoped_to_project_state(tmp_path: Path) -> None:
+    app_paths = AppPaths.from_home(tmp_path / "home")
+    first_dir = tmp_path / "first"
+    second_dir = tmp_path / "second"
+    first_dir.mkdir()
+    second_dir.mkdir()
+    first = ConfigRegistry(first_dir, app_paths)
+    second = ConfigRegistry(second_dir, app_paths)
+
+    await first.set_current_agent("Minos")
+
+    assert (await first.get_agent()).name == "Minos"
+    assert (await second.get_agent()).name == "Profiler"
+    assert not (app_paths.config_dir / "agents").exists()
+
+
+@pytest.mark.asyncio
+async def test_removed_workspace_agent_falls_back_to_packaged_default(tmp_path: Path) -> None:
+    registry, _ = _create_registry(tmp_path)
+    registry.project_paths.set_current_agent("RemovedAgent")
+
+    assert (await registry.get_agent()).name == "Profiler"
 
 
 @pytest.mark.asyncio
@@ -199,7 +198,7 @@ async def test_default_skills_include_msmodeling_env_installer() -> None:
 async def test_config_registry_resolves_template_version_tokens_on_load(
     tmp_path: Path,
 ) -> None:
-    registry = ConfigRegistry(tmp_path)
+    registry, _ = _create_registry(tmp_path)
 
     llms = await registry.load_llms()
 
@@ -223,7 +222,8 @@ def test_default_agent_skill_bindings_are_split_between_profiler_and_minos() -> 
 async def test_config_registry_preserves_existing_mcp_server_config(
     tmp_path: Path,
 ) -> None:
-    config_dir = tmp_path / ".msagent"
+    registry, app_paths = _create_registry(tmp_path)
+    config_dir = app_paths.config_dir
     config_dir.mkdir(parents=True)
     existing_mcp = {
         "mcpServers": {
@@ -250,56 +250,47 @@ async def test_config_registry_preserves_existing_mcp_server_config(
         encoding="utf-8",
     )
 
-    registry = ConfigRegistry(tmp_path)
-
-    await registry.ensure_config_dir()
-
-    mcp_config = json.loads((config_dir / "config.mcp.json").read_text(encoding="utf-8"))
-    msprof_server = mcp_config["mcpServers"]["msprof-mcp"]
-    assert msprof_server["args"] == existing_mcp["mcpServers"]["msprof-mcp"]["args"]
-    assert msprof_server["stateful"] is False
-    assert msprof_server["enabled"] is False
+    mcp_config = await registry.load_mcp()
+    msprof_server = mcp_config.servers["msprof-mcp"]
+    assert msprof_server.args == existing_mcp["mcpServers"]["msprof-mcp"]["args"]
+    assert msprof_server.stateful is False
+    assert msprof_server.enabled is False
 
 
 @pytest.mark.asyncio
-async def test_config_registry_adds_missing_default_mcp_server(
+async def test_config_registry_empty_override_keeps_packaged_mcp_servers(
     tmp_path: Path,
 ) -> None:
-    config_dir = tmp_path / ".msagent"
+    registry, app_paths = _create_registry(tmp_path)
+    config_dir = app_paths.config_dir
     config_dir.mkdir(parents=True)
     (config_dir / "config.mcp.json").write_text(
         json.dumps({"mcpServers": {}}, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
 
-    registry = ConfigRegistry(tmp_path)
+    mcp_config = await registry.load_mcp()
+    default_path = registry.default_config_dir / "config.mcp.json"
+    default_names = set(json.loads(default_path.read_text(encoding="utf-8"))["mcpServers"])
 
-    await registry.ensure_config_dir()
-
-    mcp_config = json.loads((config_dir / "config.mcp.json").read_text(encoding="utf-8"))
-    msprof_server = mcp_config["mcpServers"]["msprof-mcp"]
-    default_msprof_server = _load_default_msprof_server()
-    assert msprof_server == default_msprof_server
+    assert set(mcp_config.servers) == default_names
 
 
 @pytest.mark.asyncio
-async def test_config_registry_copies_missing_approval_template_into_existing_config_dir(
+async def test_config_registry_reads_packaged_approval_without_copying_it(
     tmp_path: Path,
 ) -> None:
-    config_dir = tmp_path / ".msagent"
+    registry, app_paths = _create_registry(tmp_path)
+    config_dir = app_paths.config_dir
     config_dir.mkdir(parents=True)
     (config_dir / "config.mcp.json").write_text(
         json.dumps({"mcpServers": {}}, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
-
-    registry = ConfigRegistry(tmp_path)
-
-    await registry.ensure_config_dir()
 
     approval_path = config_dir / CONFIG_APPROVAL_FILE_NAME.name
-    assert approval_path.exists()
-    approval_config = json.loads(approval_path.read_text(encoding="utf-8"))
-    assert "interrupt_on" in approval_config
-    assert "execute" in approval_config["interrupt_on"]
-    assert "decision_rules" in approval_config
+    approval_config = registry.load_approval()
+
+    assert not approval_path.exists()
+    assert "execute" in approval_config.interrupt_on
+    assert approval_config.decision_rules

@@ -28,6 +28,7 @@ from typing import Any
 from langchain_core.tools import ToolException, tool
 from pydantic import BaseModel, Field
 
+from msagent.core.paths import AppPaths
 from msagent.skills.factory import (
     DEFAULT_SKILL_CATEGORY,
     SkillFactory,
@@ -65,8 +66,8 @@ async def _fallback_skill_catalog() -> list[Any]:
     working_dir = Path.cwd()
     candidates = [
         working_dir / "skills",
+        AppPaths.resolve().skills_dir,
         default_dir,
-        working_dir / ".msagent" / "skills",
     ]
     unique: list[Path] = []
     seen: set[str] = set()

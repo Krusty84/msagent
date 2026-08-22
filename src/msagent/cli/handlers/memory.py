@@ -47,15 +47,31 @@ class MemoryHandler:
             console.print("")
             return
 
-        memory_path = await asyncio.to_thread(append_memory_entry, content, self.session.context.working_dir)
+        context = self.session.context
+        memory_path = await asyncio.to_thread(
+            append_memory_entry,
+            content,
+            context.working_dir,
+            state_dir=getattr(context, "state_dir", None),
+        )
         console.print_success(f"Saved memory to {memory_path}")
         console.print("")
 
     async def show(self, args: list[str]) -> None:
         """Show current project memory."""
         _ = args
-        await asyncio.to_thread(ensure_memory_file, self.session.context.working_dir)
-        content = await asyncio.to_thread(read_memory_file, self.session.context.working_dir)
+        context = self.session.context
+        state_dir = getattr(context, "state_dir", None)
+        await asyncio.to_thread(
+            ensure_memory_file,
+            context.working_dir,
+            state_dir=state_dir,
+        )
+        content = await asyncio.to_thread(
+            read_memory_file,
+            context.working_dir,
+            state_dir=state_dir,
+        )
         content = content.strip()
         if not content or is_default_memory_content(content):
             console.print_warning("No memory saved yet")

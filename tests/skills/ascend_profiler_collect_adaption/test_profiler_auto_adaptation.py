@@ -648,6 +648,36 @@ def test_real_npu_evidence_matches_committed_patches_and_adapter() -> None:
         }
 
 
+def test_complete_vllm_evidence_matches_reproducer() -> None:
+    evidence_path = (
+        ROOT
+        / "docs"
+        / "zh"
+        / "best_practices"
+        / "evidence"
+        / "profiler-auto-adaptation-20260820.json"
+    )
+    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+    result = evidence["complete_framework_tests"][0]
+    runner = ROOT / result["runner"]["path"]
+
+    assert hashlib.sha256(runner.read_bytes()).hexdigest() == result["runner"]["sha256"]
+    assert result["classification"].startswith(
+        "complete-framework integration validation"
+    )
+    assert result["source"]["source_trees_modified"] is False
+    assert result["business_result"]["baseline_equals_profiled"] is True
+    assert (
+        result["business_result"]["baseline_sha256"]
+        == result["business_result"]["profiled_sha256"]
+    )
+    assert result["profiler_output"]["trace"]["npu_async_pairs"] > 0
+    assert result["profiler_output"]["kernel_csv"]["valid_rows"] > 0
+    assert result["validator"]["passed"] is True
+    assert result["validator"]["visualizable"] is True
+    subprocess.run([sys.executable, "-m", "py_compile", str(runner)], check=True)
+
+
 def test_scaffolder_is_idempotent_and_refuses_overwrite(tmp_path: Path) -> None:
     script = SKILL / "scripts" / "scaffold_adapter.py"
     command = [

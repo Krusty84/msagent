@@ -243,12 +243,134 @@
       }
     }
   ],
+  "complete_framework_tests": [
+    {
+      "date": "2026-08-22",
+      "target": "complete vLLM with vLLM-Ascend NPU backend",
+      "classification": "complete-framework integration validation of an existing built-in PTA profiler path; not an unadapted-framework code adaptation",
+      "source": {
+        "vllm_commit": "e5588e49bc2642670116664a7fc4096e27adb179",
+        "vllm_version": "0.1.dev1+ge5588e49b",
+        "vllm_ascend_commit": "ccc0a3f1c9c6cc36b5ac38274bebf8e82019be05",
+        "vllm_ascend_version": "0.19.1rc2.dev1055+gccc0a3f1c",
+        "source_trees_modified": false
+      },
+      "environment": {
+        "device": "Ascend 910",
+        "visible_device": 0,
+        "cann": "9.1.0-beta.3",
+        "torch": "2.10.0+cpu",
+        "torch_npu": "2.10.0.post2"
+      },
+      "model": {
+        "repository": "Qwen/Qwen3-0.6B",
+        "snapshot": "c1899de289a04d12100db370d81485cdf75e47ca",
+        "weight_file": "model.safetensors",
+        "weight_bytes": 1503300328,
+        "weight_sha256": "f47f71177f32bcd101b7573ec9171e6a57f4f4d31148d38e382306f42996874b"
+      },
+      "runner": {
+        "path": "tests/skills/ascend_profiler_collect_adaption/full_frameworks/vllm/run_vllm_profile.py",
+        "sha256": "ec1cfb5eabae1d7131afadfb123a533796d68df4df03de863338aa3d470e05b9",
+        "engine": "vllm.LLM with the activated vllm_ascend platform plugin",
+        "flags": {
+          "dtype": "bfloat16",
+          "max_model_len": 256,
+          "gpu_memory_utilization": 0.2,
+          "enforce_eager": true,
+          "tensor_parallel_size": 1,
+          "seed": 123
+        }
+      },
+      "workload": {
+        "warmup_requests": 1,
+        "profiled_requests": 2,
+        "prompts": [
+          "The capital of France is",
+          "One plus one equals"
+        ],
+        "temperature": 0.0,
+        "max_tokens_per_request": 16,
+        "generated_tokens": 32
+      },
+      "commands": {
+        "baseline": "ASCEND_RT_VISIBLE_DEVICES=0 VLLM_PLUGINS=ascend <venv>/bin/python <runner> --model <Qwen3-0.6B> --result <new-baseline-dir>/result.json",
+        "profiled": "ASCEND_RT_VISIBLE_DEVICES=0 VLLM_PLUGINS=ascend <venv>/bin/python <runner> --model <Qwen3-0.6B> --result <new-profiled-dir>/result.json --profile-dir <new-profiled-dir>/profile",
+        "validate": "python skills/ascend-profiler-collect-adaption/scripts/validate_profile_output.py <new-profiled-dir>/profile --expect text --expected-sessions 1 --expected-ranks 0"
+      },
+      "business_result": {
+        "baseline_equals_profiled": true,
+        "comparison_scope": "prompts, generated text, token IDs, and finish reasons",
+        "bytes": 488,
+        "baseline_sha256": "7e12eb472eb89715371f9b3b2c7c91bc60b84d92203b6919ca34fd43cae01c8e",
+        "profiled_sha256": "7e12eb472eb89715371f9b3b2c7c91bc60b84d92203b6919ca34fd43cae01c8e"
+      },
+      "attempts": [
+        {
+          "name": "baseline-final",
+          "exit_code": 0
+        },
+        {
+          "name": "profiled-final",
+          "exit_code": 1,
+          "phase": "EngineCore KV cache initialization before profiler start",
+          "error": "No available memory for the cache blocks",
+          "artifact": "/workspace/msagent-profiler-vllm-20260822-001/profiled-final/stderr.log",
+          "disposition": "retained as a failed attempt; no profiler success claimed"
+        },
+        {
+          "name": "profiled-final-retry",
+          "exit_code": 0,
+          "same_command_and_configuration": true,
+          "precondition": "npu-smi reported no running NPU processes before retry"
+        }
+      ],
+      "profiler_output": {
+        "durable_workspace_root": "/workspace/msagent-profiler-vllm-20260822-001/profiled-final-retry/profile",
+        "worker": "vllm_complete_rank0",
+        "rank": 0,
+        "sessions": 1,
+        "trace": {
+          "events": 203470,
+          "duration_events": 154630,
+          "npu_async_pairs": 8266,
+          "bytes": 40867915,
+          "sha256": "195af8da7cbcb6d7c465776d9e7bbfc26f5e5d3a83126d88e255b4d5c13a245c"
+        },
+        "kernel_csv": {
+          "valid_rows": 7493,
+          "bytes": 2819046,
+          "sha256": "926ce7edb48e0260f777a775a035f0c2934f068e12a7302fd0baa2f4df8da7a4"
+        },
+        "database": {
+          "tables": 21,
+          "bytes": 12877824,
+          "sha256": "623cabcbd8fb7f86415206e2bc7abd54d036aaec25b7898f988408fad922ebad"
+        }
+      },
+      "validator": {
+        "passed": true,
+        "text_ready": true,
+        "db_ready": true,
+        "parsed_output_ready": true,
+        "visualizable": true,
+        "sha256": "609573544e6f0579f70cfd5466373fdf249ed4f131543a86aa97bd42b80e0c1d"
+      },
+      "limitations": [
+        "This validates a complete production framework and real NPU profiler path, but vLLM-Ascend already contains its own profiler implementation.",
+        "The test uses offline LLM inference with TP=1 and eager execution; online serving, multi-rank collection, soak stability, and performance overhead are not claimed.",
+        "One identical profiled attempt failed before profiler start because EngineCore reported no KV-cache memory; the failure is retained and the later clean-device retry is reported separately.",
+        "Visualization readiness is proven from the standard PTA trace, NPU timeline events, kernel CSV, and profiler database; no MindStudio GUI screenshot is archived."
+      ]
+    }
+  ],
   "agent_notes": [
     "All three code adaptations were generated by msAgent after loading the Skill; verification was then rerun independently with the same native entrypoints.",
     "The first Transformers validation attempt generated an rm -rf command, triggered msAgent approval, and stopped in non-interactive mode. No source was lost; verification was rerun with fresh mktemp directories and no deletion.",
     "The committed patch files are byte-for-byte the git diffs generated in the isolated target repositories.",
     "The three framework runs were repeated after adapter hardening; baseline, disabled and enabled results remained exactly equal and the stricter validator passed every fresh output.",
     "Generic-prompt forward tests used only the documented one-line request and target path; no callback, loop or step injection point was supplied in the prompt.",
-    "Raw profiler directories are intentionally not committed because they include large CANN artifacts; trace and kernel CSV sizes and SHA-256 values are recorded for integrity."
+    "Raw profiler directories are intentionally not committed because they include large CANN artifacts; trace and kernel CSV sizes and SHA-256 values are recorded for integrity.",
+    "The complete vLLM/vLLM-Ascend test is deliberately classified as integration validation rather than unadapted-framework code adaptation because that source version already contains a built-in torch_npu profiler wrapper."
   ]
 }

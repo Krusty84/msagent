@@ -206,6 +206,63 @@ CLI 配置和 controller 接线；安全开启复测得到 15 对 NPU async even
 再次满足 `baseline == disabled == enabled`，且新 validator 对新产物返回
 `passed=true, parsed_output_ready=true, visualizable=true`。
 
+
+## 完整 vLLM/vLLM-Ascend 真实工程验证
+
+2026-08-22 另外在完整 vLLM 与 vLLM-Ascend 源码、真实 `vllm.LLM` EngineCore 上执行了
+Qwen3-0.6B 离线推理。该测试使用仓库中的
+[`full_frameworks/vllm/run_vllm_profile.py`](../../../tests/skills/ascend_profiler_collect_adaption/full_frameworks/vllm/run_vllm_profile.py)
+可复现入口，没有修改 vLLM、vLLM-Ascend 或 vllm-omni 源码。
+
+源码与环境：
+
+- vLLM commit `e5588e49bc2642670116664a7fc4096e27adb179`；
+- vLLM-Ascend commit `ccc0a3f1c9c6cc36b5ac38274bebf8e82019be05`；
+- Ascend 910、CANN `9.1.0-beta.3`、torch_npu `2.10.0.post2`；
+- Qwen3-0.6B snapshot `c1899de289a04d12100db370d81485cdf75e47ca`，权重 SHA-256
+  `f47f71177f32bcd101b7573ec9171e6a57f4f4d31148d38e382306f42996874b`。
+
+复现时为 baseline 和 profiled 路径分别创建新目录，不删除任何旧产物：
+
+```bash
+ASCEND_RT_VISIBLE_DEVICES=0 VLLM_PLUGINS=ascend <venv>/bin/python \
+  tests/skills/ascend_profiler_collect_adaption/full_frameworks/vllm/run_vllm_profile.py \
+  --model <Qwen3-0.6B> --result <new-baseline-dir>/result.json
+
+ASCEND_RT_VISIBLE_DEVICES=0 VLLM_PLUGINS=ascend <venv>/bin/python \
+  tests/skills/ascend_profiler_collect_adaption/full_frameworks/vllm/run_vllm_profile.py \
+  --model <Qwen3-0.6B> --result <new-profiled-dir>/result.json \
+  --profile-dir <new-profiled-dir>/profile
+
+python skills/ascend-profiler-collect-adaption/scripts/validate_profile_output.py \
+  <new-profiled-dir>/profile --expect text --expected-sessions 1 --expected-ranks 0
+```
+
+两条路径都先完成一次 warmup，再以相同 seed 和确定性采样执行两条请求。生成文本、32 个
+token ID 与 finish reason 逐字节一致。开启路径生成一个 rank 0 PTA 会话：
+
+| 指标 | 结果 |
+| --- | ---: |
+| Trace events | 203470 |
+| Duration events | 154630 |
+| NPU async pairs | 8266 |
+| Valid kernel rows | 7493 |
+| Trace size | 40867915 bytes |
+| Profiler DB tables | 21 |
+
+严格校验返回 `passed=true`、`text_ready=true`、`db_ready=true`、
+`parsed_output_ready=true`、`visualizable=true`。完整环境、模型、命令、产物大小和 SHA-256 见同一
+[evidence JSON](evidence/profiler-auto-adaptation-20260820.json)。
+
+这项证据验证了完整生产级框架的模型加载、调度、推理、PTA 采集、同步解析和可视化产物链路。
+但该 vLLM-Ascend 版本已自带 PTA profiler wrapper，因此它只记为“完整框架集成验证”，不冒充前文
+三个“未适配框架的自动改码”证据。本次未声称在线服务、多 rank、长时稳定性或 profiler 性能开销已验证。
+
+最终脚本的首次 profiled 尝试在 profiler 开始前的 EngineCore KV-cache 初始化阶段失败，报错为
+`No available memory for the cache blocks`。该失败目录与日志被保留，不计为 profiler 成功。确认
+`npu-smi` 无残留 NPU 进程后，在新目录以完全相同命令和配置重试通过。这说明单次成功不能替代
+长时稳定性验收，后续若将它升级为生产稳定性证据，必须增加多轮启停和 soak 测试。
+
 附带的 `run_framework_npu_smoke.py` 只用于底层库兼容性快速检查，不能替代上述 msAgent 自动适配验收。
 
 ## 常见问题

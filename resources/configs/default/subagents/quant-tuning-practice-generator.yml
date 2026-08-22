@@ -13,5 +13,5 @@ tools:
   output_max_tokens: 10000
 skills:
   patterns:
-    - default:tune-practice-cfg
+    - quantizer:tune-practice-cfg
   use_catalog: false

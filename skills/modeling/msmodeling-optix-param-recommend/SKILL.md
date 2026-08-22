@@ -1,4 +1,4 @@
----
+﻿---
 name: msmodeling-optix-param-recommend
 description: 当首次使用 msmodeling optix 的用户需要根据硬件、模型、负载和优化目标推荐 MindIE/vLLM 寻优参数、搜索范围、benchmark 侧字段或 config.toml 片段时使用。
 version: 0.1.0
@@ -36,7 +36,7 @@ source: local-session-analysis
    - 优化目标：`throughput`、`ttft`、`tpot` 或 `balanced`
 2. **检查历史经验**：阅读 `references/historical-configs.md`，如果模型名、量化方式、平台等匹配已有经验条目，将匹配的 `historical_exp_id` 和关键参数写入 context。
 3. 将已收集信息写入一个 JSON context 文件。
-4. 执行 `skills/msmodeling-optix-param-recommend/scripts/recommend_params.py --context <context.json>`。
+4. 执行 `skills/modeling/msmodeling-optix-param-recommend/scripts/recommend_params.py --context <context.json>`。
 5. 如果脚本返回 `status: need_more_info`，只询问返回的 `next_question`，不要给最终范围。
 6. 如果脚本返回 `status: ok`，再总结推荐结果并附上 TOML 片段。
 
@@ -186,7 +186,7 @@ vLLM 的 presence flag 参数分两类处理：`ENABLE_PREFIX_CACHING` 和 `ENAB
 ### 场景模板配置
 
 ```bash
-python skills/msmodeling-optix-param-recommend/scripts/auto_config.py --scenario <场景> --engine <引擎> [选项]
+python skills/modeling/msmodeling-optix-param-recommend/scripts/auto_config.py --scenario <场景> --engine <引擎> [选项]
 ```
 
 | Scenario | n_particles | iters | sample_size | 适用场景 |
@@ -201,7 +201,7 @@ python skills/msmodeling-optix-param-recommend/scripts/auto_config.py --scenario
 **时间预算自动计算**：
 
 ```bash
-python skills/msmodeling-optix-param-recommend/scripts/auto_config.py --scenario deep-optimize --time-budget 8h
+python skills/modeling/msmodeling-optix-param-recommend/scripts/auto_config.py --scenario deep-optimize --time-budget 8h
 ```
 
 - 每个 seed 运行服务两次（预热 + 正式）
@@ -211,22 +211,22 @@ python skills/msmodeling-optix-param-recommend/scripts/auto_config.py --scenario
 
 ```bash
 # 整数参数
-python skills/msmodeling-optix-param-recommend/scripts/auto_config.py --add-search-param \
+python skills/modeling/msmodeling-optix-param-recommend/scripts/auto_config.py --add-search-param \
     --engine vllm --param-name MAX_BATCH_SIZE \
     --min 10 --max 400 --dtype int --value 100
 
 # 浮点参数
-python skills/msmodeling-optix-param-recommend/scripts/auto_config.py --add-search-param \
+python skills/modeling/msmodeling-optix-param-recommend/scripts/auto_config.py --add-search-param \
     --engine vllm --param-name GPU_MEMORY_UTILIZATION \
     --min 0.8 --max 0.95 --dtype float --value 0.9
 
 # 枚举参数
-python skills/msmodeling-optix-param-recommend/scripts/auto_config.py --add-search-param \
+python skills/modeling/msmodeling-optix-param-recommend/scripts/auto_config.py --add-search-param \
     --engine vllm --param-name TENSOR_PARALLEL_SIZE \
     --dtype enum --enum-values "[1,2,4,8,16]" --value 4
 
 # 比例参数
-python skills/msmodeling-optix-param-recommend/scripts/auto_config.py --add-search-param \
+python skills/modeling/msmodeling-optix-param-recommend/scripts/auto_config.py --add-search-param \
     --engine vllm --param-name MAX_PREFILL_RATIO \
     --min 0.1 --max 0.7 --dtype ratio --dtype-param max_batch_size --value 0.3
 ```
@@ -234,7 +234,7 @@ python skills/msmodeling-optix-param-recommend/scripts/auto_config.py --add-sear
 ### 添加固定参数
 
 ```bash
-python skills/msmodeling-optix-param-recommend/scripts/auto_config.py --add-fixed-param \
+python skills/modeling/msmodeling-optix-param-recommend/scripts/auto_config.py --add-fixed-param \
     --engine vllm --param-name MAX_MODEL_LEN \
     --value 16384 --dtype int
 ```
@@ -255,7 +255,7 @@ python skills/msmodeling-optix-param-recommend/scripts/auto_config.py --add-fixe
 
 ```bash
 # VLLM 命令配置（自动同步 model/served_name/port 到 vllm_benchmark）
-python skills/msmodeling-optix-param-recommend/scripts/auto_config.py --set-vllm-command \
+python skills/modeling/msmodeling-optix-param-recommend/scripts/auto_config.py --set-vllm-command \
     --model /path/to/model \
     --served-name my-model \
     --host 127.0.0.1 \
@@ -267,14 +267,14 @@ python skills/msmodeling-optix-param-recommend/scripts/auto_config.py --set-vllm
 
 ```bash
 # AISBench
-python skills/msmodeling-optix-param-recommend/scripts/auto_config.py --set-ais-bench \
+python skills/modeling/msmodeling-optix-param-recommend/scripts/auto_config.py --set-ais-bench \
     --models /path/to/models.yaml \
     --datasets /path/to/datasets.yaml \
     --mode perf \
     --ais-num-prompts 150
 
 # vllm_benchmark（自动同步 model/served_name/port 到 vllm.command）
-python skills/msmodeling-optix-param-recommend/scripts/auto_config.py --set-vllm-benchmark \
+python skills/modeling/msmodeling-optix-param-recommend/scripts/auto_config.py --set-vllm-benchmark \
     --model /path/to/model \
     --served-name my-model \
     --dataset-name random \
@@ -289,16 +289,16 @@ python skills/msmodeling-optix-param-recommend/scripts/auto_config.py --set-vllm
 所有命令支持 `--dry-run` 预览，不实际写入：
 
 ```bash
-python skills/msmodeling-optix-param-recommend/scripts/auto_config.py --scenario standard --engine vllm --dry-run
+python skills/modeling/msmodeling-optix-param-recommend/scripts/auto_config.py --scenario standard --engine vllm --dry-run
 ```
 
 ### 组合示例
 
 ```bash
-python skills/msmodeling-optix-param-recommend/scripts/auto_config.py --scenario standard --engine vllm && \
-python skills/msmodeling-optix-param-recommend/scripts/auto_config.py --set-vllm-command --model /data/model --served-name model && \
-python skills/msmodeling-optix-param-recommend/scripts/auto_config.py --add-search-param --engine vllm --param-name TP --dtype enum --enum-values "[1,2,4,8]" --value 4 && \
-python skills/msmodeling-optix-param-recommend/scripts/auto_config.py --set-vllm-benchmark --model /data/model --dataset-name random --others "--random-input-len 3000 --random-output-len 1000"
+python skills/modeling/msmodeling-optix-param-recommend/scripts/auto_config.py --scenario standard --engine vllm && \
+python skills/modeling/msmodeling-optix-param-recommend/scripts/auto_config.py --set-vllm-command --model /data/model --served-name model && \
+python skills/modeling/msmodeling-optix-param-recommend/scripts/auto_config.py --add-search-param --engine vllm --param-name TP --dtype enum --enum-values "[1,2,4,8]" --value 4 && \
+python skills/modeling/msmodeling-optix-param-recommend/scripts/auto_config.py --set-vllm-benchmark --model /data/model --dataset-name random --others "--random-input-len 3000 --random-output-len 1000"
 ```
 
 ### config_skill_handoff 交接对象
@@ -380,8 +380,9 @@ benchmark 的 I/O 长度必须反映实际业务负载。正确做法是先尝�
 
 ```bash
 # 打印 context 模板
-python skills/msmodeling-optix-param-recommend/scripts/recommend_params.py --print-template
+python skills/modeling/msmodeling-optix-param-recommend/scripts/recommend_params.py --print-template
 
 # 执行推荐
-python skills/msmodeling-optix-param-recommend/scripts/recommend_params.py --context /path/to/context.json
+python skills/modeling/msmodeling-optix-param-recommend/scripts/recommend_params.py --context /path/to/context.json
 ```
+

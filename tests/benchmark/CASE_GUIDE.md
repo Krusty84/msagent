@@ -163,7 +163,7 @@ must_tool_use:
 如果要评测某个 skill 是否能指导 Agent 完成任务，可以配置 `skill_path`：
 
 ```yaml
-skill_path: ../../../skills/profiling/profiling-analysis
+skill_path: ../../../skills/profiler/ascend-cluster-fast-slow-rank-detector
 ```
 
 runner 会把 skill 目录复制到隔离工作区的 `skill/`，并在提示词中要求 Agent 先阅读
@@ -238,34 +238,6 @@ scoring_prompt: >
 ```
 
 这个 case 主要考阅读完整性。`must_tool_use: read_file` 要求 Agent 确实读取资料。
-
-## 示例：profiling skill case
-
-```yaml
-id: cluster_fast_slow_rank_profiling_skill
-input_data_path: ../data/kv_cache_type_page_seqlen_4096_bs_1_profile_count_0
-skill_path: ../../../skills/profiling/profiling-analysis
-prompt: >
-  请按照提供的 profiling-analysis skill 对 input_data 中的 Ascend 集群 profiling
-  数据做性能瓶颈与快慢卡诊断。需要明确回答：是否存在快慢卡现象；真正的慢卡 Rank ID
-  和候选快卡 Rank ID；瓶颈类型；关键证据；以及可执行优化建议。
-must_include:
-  - rank3
-  - Host 下发慢或调度瓶颈
-  - Free Time 异常
-  - 不是通信慢链路
-must_include_regex:
-  - 'rank\s*3|Rank\s*3|rank3'
-tool_budget: 30
-scoring_prompt: >
-  按 0-5 分评分。高分答案必须正确指出慢卡是 rank3，解释 Host 下发慢/调度瓶颈，
-  引用 input_data 中的 Free/Compute/Communication/API 或 step_trace_time 证据，
-  排除通信慢链路，并给出具体可执行建议。结论错误、证据不来自输入数据或泛泛而谈
-  应明显扣分。
-```
-
-这个 case 主要考 Agent 是否能按 skill 方法分析真实 profiling 数据。`tool_budget` 调高到
-30，避免复杂任务在效率报告中显得过度苛刻。
 
 ## 新增 case 的建议流程
 

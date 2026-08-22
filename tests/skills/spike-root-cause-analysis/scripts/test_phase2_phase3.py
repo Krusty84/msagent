@@ -8,7 +8,10 @@ import sys
 import unittest
 
 sys.path.insert(
-    0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "skills", "spike-root-cause-analysis", "scripts")
+    0,
+    os.path.join(
+        os.path.dirname(__file__), "..", "..", "..", "..", "skills", "accuracy", "spike-root-cause-analysis", "scripts"
+    ),
 )
 
 from phase2_root_cause_selector import cross_step_root_cause, pick_root_coordinate

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Recommend first-run msmodeling optix search ranges.
 
 Input is a JSON context. The script deliberately returns `need_more_info`
@@ -19,7 +19,7 @@ GB = 1024**3
 DEFAULT_BENCHMARK = "vllm_benchmark"
 MINDIE_BENCHMARK = "ais_bench"      # MindIE only supports ais_bench
 TARGETS = {"throughput", "ttft", "tpot", "balanced"}
-CONFIG_SKILL_SCRIPT = "skills/msmodeling-optix-param-recommend/scripts/auto_config.py"
+CONFIG_SKILL_SCRIPT = "skills/modeling/msmodeling-optix-param-recommend/scripts/auto_config.py"
 CONFIG_PATH_HINT = "optix/config.toml"
 VLLM_COMMAND_ARG_BY_NAME = {
     "MAX_MODEL_LEN": "--max-model-len",
@@ -1500,3 +1500,4 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

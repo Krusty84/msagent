@@ -124,7 +124,7 @@ async def test_config_registry_bootstraps_default_layout(tmp_path: Path) -> None
     assert modeling["name"] == "Modeling"
     assert modeling["tools"]["patterns"] == default_modeling["tools"]["patterns"]
     assert modeling["skills"]["patterns"] == default_modeling["skills"]["patterns"]
-    assert "default:msmodeling-env-installer" in modeling["skills"]["patterns"]
+    assert "modeling:*" in modeling["skills"]["patterns"]
     assert modeling["default"] is False
     assert minos["name"] == "Minos"
     assert minos["skills"]["patterns"] == default_minos["skills"]["patterns"]
@@ -192,7 +192,7 @@ async def test_config_registry_adds_missing_modeling_skill_patterns_to_existing_
 async def test_default_skills_include_msmodeling_env_installer() -> None:
     skills = await SkillFactory().load_skills(SkillFactory.get_default_skills_dir())
 
-    assert "msmodeling-env-installer" in skills["default"]
+    assert "msmodeling-env-installer" in skills["modeling"]
 
 
 @pytest.mark.asyncio
@@ -211,12 +211,9 @@ def test_default_agent_skill_bindings_are_split_between_profiler_and_minos() -> 
     profiler = _load_default_profiler_config()
     minos = _load_default_minos_config()
 
-    assert "default:document-ux-review" not in profiler["skills"]["patterns"]
-    assert "default:gitcode-code-reviewer" not in profiler["skills"]["patterns"]
-    assert minos["skills"]["patterns"] == [
-        "default:document-ux-review",
-        "default:gitcode-code-reviewer",
-    ]
+    assert "minos:document-ux-review" not in profiler["skills"]["patterns"]
+    assert "minos:gitcode-code-reviewer" not in profiler["skills"]["patterns"]
+    assert minos["skills"]["patterns"] == ["minos:*", "default:*"]
 
 
 @pytest.mark.asyncio
@@ -303,3 +300,4 @@ async def test_config_registry_copies_missing_approval_template_into_existing_co
     assert "interrupt_on" in approval_config
     assert "execute" in approval_config["interrupt_on"]
     assert "decision_rules" in approval_config
+

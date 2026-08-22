@@ -1,4 +1,4 @@
-# 环境准备
+﻿# 环境准备
 
 **Load when:** 进入量化配置调优前，需确认硬件、运行环境就绪。
 
@@ -52,7 +52,7 @@ python -c "import msmodelslim; print('ok')"
 - **编排层 / 校验 / 评测**：通过 `execute` 运行 skill 目录下脚本，例如：
 
 ```bash
-python skills/quantization-accuracy-tuning-orchestrator/scripts/history_clear.py --save-path /path/to/workdir
+python skills/quantizer/quantization-accuracy-tuning-orchestrator/scripts/history_clear.py --save-path /path/to/workdir
 ```
 
 编排脚本 **stdout** 输出单行 JSON（`{ok: ...}`）；CLI 以 **exit code** 判定成败。
@@ -60,3 +60,4 @@ python skills/quantization-accuracy-tuning-orchestrator/scripts/history_clear.py
 ## 环境就绪确认
 
 向用户回显：msmodelslim 可 import、Ascend 环境变量已配置、NPU 卡号已确认。获得用户认可后再进入模型准备阶段。
+

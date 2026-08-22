@@ -19,8 +19,8 @@ tools:
   output_max_tokens: 10000
 skills:
   patterns:
-    - default:ops-performance-tuning
-    - default:msot-msopprof-operator-profiler
+    - operator:*
+    - default:*
   use_catalog: false
 compression:
   auto_compress_enabled: true

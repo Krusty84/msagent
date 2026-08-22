@@ -1,4 +1,4 @@
-import importlib.util
+﻿import importlib.util
 import json
 import shlex
 import subprocess
@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 SCRIPT = Path(__file__).with_name("recommend_params.py")
-CONFIG_SKILL_SCRIPT_PATH = "skills/msmodeling-optix-param-recommend/scripts/auto_config.py"
+CONFIG_SKILL_SCRIPT_PATH = "skills/modeling/msmodeling-optix-param-recommend/scripts/auto_config.py"
 
 
 def load_module():
@@ -265,3 +265,4 @@ def test_nested_text_config_loaded_correctly(tmp_path):
     # Verify nested fields were loaded (24 heads divisible by TP candidates)
     assert items["TENSOR_PARALLEL_SIZE"]["dtype"] == "enum"
     assert items["MAX_MODEL_LEN"]["value"] == 4608  # input_len_max(4096) + output_len_max(512)
+

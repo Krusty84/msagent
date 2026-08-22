@@ -62,7 +62,7 @@
       },
       {
         "name": "validate_practice_yaml",
-        "command": "python skills/tune-practice-cfg/scripts/validate_practice_yaml.py --practice-path /path/to/practice_round_N.yaml"
+        "command": "python skills/quantizer/tune-practice-cfg/scripts/validate_practice_yaml.py --practice-path /path/to/practice_round_N.yaml"
       }
     ]
   }
@@ -81,3 +81,4 @@
 # 注意事项
 
 如果你尝试处理同一问题或报错，5次都没有解决，则你需要将该问题或报错上报给主代理，向用户确认该问题的解决方案。
+

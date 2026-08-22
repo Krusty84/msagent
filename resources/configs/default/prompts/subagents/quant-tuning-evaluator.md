@@ -61,7 +61,7 @@
       },
       {
         "name": "evaluation",
-        "command": "python skills/quant-tuning-evaluate/scripts/run_evaluation.py --quant-model-path /path/to/quantized --evaluate-id eval-round-1 --evaluate-config-path /path/to/evaluate.yaml --save-path /path/to/workdir --device npu --device-indices 0,1"
+        "command": "python skills/quantizer/quant-tuning-evaluate/scripts/run_evaluation.py --quant-model-path /path/to/quantized --evaluate-id eval-round-1 --evaluate-config-path /path/to/evaluate.yaml --save-path /path/to/workdir --device npu --device-indices 0,1"
       }
     ]
   }
@@ -72,3 +72,4 @@
 # 注意事项
 
 如果你尝试处理同一问题或报错，5次都没有解决，则你需要将该问题或报错上报给主代理，向用户确认该问题的解决方案。
+

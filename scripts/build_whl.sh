@@ -290,6 +290,33 @@ find_built_wheel() {
   find "${DIST_DIR}" -maxdepth 1 -type f -name '*.whl' | sort | tail -n 1
 }
 
+verify_wheel_metadata() {
+  local python_bin="$1"
+  local wheel_path="$2"
+
+  "${python_bin}" - "${wheel_path}" <<'PY'
+import email
+import sys
+import zipfile
+
+wheel_path = sys.argv[1]
+
+with zipfile.ZipFile(wheel_path) as zf:
+    metadata_files = [name for name in zf.namelist() if name.endswith(".dist-info/METADATA")]
+    if not metadata_files:
+        raise SystemExit(f"wheel metadata check failed: no .dist-info/METADATA in {wheel_path}")
+
+    payload = zf.read(metadata_files[0]).decode("utf-8", errors="replace")
+    message = email.message_from_string(payload)
+    if not message.get("Name") or not message.get("Version"):
+        raise SystemExit(
+            f"wheel metadata check failed: missing Name/Version in {metadata_files[0]}"
+        )
+
+print("wheel metadata check passed")
+PY
+}
+
 resolve_venv_python() {
   local venv_dir="$1"
 
@@ -390,6 +417,7 @@ main() {
     fail "Build failed: no wheel generated in ${DIST_DIR}"
   fi
 
+  verify_wheel_metadata "${python_bin}" "${wheel_path}"
   verify_wheel_install "${python_bin}" "${wheel_path}"
 
   log "Wheel generated: ${wheel_path}"

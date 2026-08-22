@@ -51,8 +51,8 @@ tools:
 ```yaml
 skills:
   patterns:
-    - default:ascend-profiler-data-validation
-    - default:ascend-profiler-db-explorer
+    - profiler:ascend-profiler-data-validation
+    - profiler:ascend-profiler-db-explorer
     - "!default:op-*"
   use_catalog: false
 ```
@@ -101,8 +101,8 @@ tools:
 
 skills:
   patterns:
-    - default:ascend-profiler-data-validation
-    - default:ascend-profiler-db-explorer
+    - profiler:ascend-profiler-data-validation
+    - profiler:ascend-profiler-db-explorer
   use_catalog: false
 ```
 
@@ -119,3 +119,4 @@ skills:
 - skills 仅返回 `patterns` 允许的集合
 - tools 仅返回允许的 `impl:deepagents:*` + `mcp:msprof-mcp:*`
 - 不应再出现被排除的 skill/tool
+

@@ -1,4 +1,4 @@
----
+﻿---
 name: ascend-profiler-collect-adaption
 description: >
   Adapt torch_npu.profiler interface for AI frameworks and training/inference code on Ascend NPU.
@@ -107,7 +107,7 @@ DB类型交付件校验示例：
 ls {OUTPUTDIR}/*/ASCEND_PROFILER_OUTPUT/ascend_pytorch_profiler_*.db
 ```
 
-具体的 profiler 交付件完整性校验方法，可参考 [ascend-profiler-data-validation](https://gitcode.com/Ascend/msagent/blob/master/skills/ascend-profiler-data-validation/SKILL.md)。
+具体的 profiler 交付件完整性校验方法，可参考 [ascend-profiler-data-validation](https://gitcode.com/Ascend/msagent/blob/master/skills/profiler/ascend-profiler-data-validation/SKILL.md)。
 
 ## 规则
 
@@ -130,3 +130,4 @@ ls {OUTPUTDIR}/*/ASCEND_PROFILER_OUTPUT/ascend_pytorch_profiler_*.db
 | [`references/api_reference.md`](references/api_reference.md) | `torch_npu.profiler` 关键 API、常用参数、`_ExperimentalConfig` 字段及基础使用方式。 | 当需要确认接口定义、参数含义、默认值、`with` / `start-stop` 用法时读取。 |
 
 > 按需读取原则：先根据任务场景选择对应 reference；仅在需要确认接口或参数细节时补充读取 `references/api_reference.md`，避免无关 reference 混读。
+

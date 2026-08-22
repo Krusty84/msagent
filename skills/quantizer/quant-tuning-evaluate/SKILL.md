@@ -1,4 +1,4 @@
----
+﻿---
 name: quant-tuning-evaluate
 description: 执行模型测评。通过 scripts/run_evaluation.py 依据 Evaluation YAML 对量化模型进行评测。
 license: Apache-2.0
@@ -103,7 +103,7 @@ quant-tuning-evaluate (tool)
 ## 脚本调用
 
 ```bash
-python skills/quant-tuning-evaluate/scripts/run_evaluation.py \
+python skills/quantizer/quant-tuning-evaluate/scripts/run_evaluation.py \
   --quant-model-path /path/to/quantized \
   --evaluate-id eval-round-1 \
   --evaluate-config-path /path/to/evaluate.yaml \
@@ -184,7 +184,7 @@ python skills/quant-tuning-evaluate/scripts/run_evaluation.py \
 ### 标准调用
 
 ```bash
-python skills/quant-tuning-evaluate/scripts/run_evaluation.py \
+python skills/quantizer/quant-tuning-evaluate/scripts/run_evaluation.py \
   --quant-model-path /workspace/output/round_1/quantized \
   --evaluate-id round-1 \
   --evaluate-config-path /workspace/output/evaluate.yaml \
@@ -236,3 +236,4 @@ python skills/quant-tuning-evaluate/scripts/run_evaluation.py \
 - [ ] 目标端口未被占用
 - [ ] NPU/GPU 设备可用
 - [ ] msmodelslim 已安装
+

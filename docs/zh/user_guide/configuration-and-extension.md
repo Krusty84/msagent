@@ -146,7 +146,7 @@ skills/
 
 ```text
 skills/
-  profiling/
+  profiler/
     my-skill/
       SKILL.md
 ```
@@ -192,7 +192,7 @@ skills/
 
 ```text
 skills/
-  profiling/
+  profiler/
     my-skill/
       SKILL.md
 ```
@@ -250,7 +250,7 @@ skills:
 ```yaml
 skills:
   patterns:
-    - profiling:my-skill
+    - profiler:my-skill
   use_catalog: false
 ```
 
@@ -279,7 +279,7 @@ skills:
 如果有重名 skill，建议写全：
 
 ```text
-/skills profiling/my-skill
+/skills profiler/my-skill
 ```
 
 (custom-skill-faq)=

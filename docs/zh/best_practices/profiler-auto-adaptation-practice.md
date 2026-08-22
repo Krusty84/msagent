@@ -206,7 +206,6 @@ CLI 配置和 controller 接线；安全开启复测得到 15 对 NPU async even
 再次满足 `baseline == disabled == enabled`，且新 validator 对新产物返回
 `passed=true, parsed_output_ready=true, visualizable=true`。
 
-
 ## 完整 vLLM/vLLM-Ascend 真实工程验证
 
 2026-08-22 另外在完整 vLLM 与 vLLM-Ascend 源码、真实 `vllm.LLM` EngineCore 上执行了

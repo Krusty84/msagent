@@ -1,4 +1,4 @@
----
+﻿---
 name: msmodeling-env-installer
 description: Install and verify the msmodeling development environment. Use when the user explicitly asks to install msmodeling dependencies, set up this repository, create `myenv` with `uv`, install this repository's `requirements.txt`, set project `PYTHONPATH`, or configure `HF_ENDPOINT`; if the user only says to install an environment, ask whether they mean msmodeling dependencies before proceeding.
 version: 0.2.2
@@ -53,8 +53,8 @@ source: local-session-analysis
 | 当前环境 | 优先命令 |
 |:---|:---|
 | Windows PowerShell | `.\\skills\\msmodeling-env-installer\\scripts\\install-current-project-deps.ps1` |
-| Linux/macOS Bash | `bash ./skills/msmodeling-env-installer/scripts/install-current-project-deps.sh` |
-| WSL/Git Bash | `bash ./skills/msmodeling-env-installer/scripts/install-current-project-deps.sh` |
+| Linux/macOS Bash | `bash ./skills/modeling/msmodeling-env-installer/scripts/install-current-project-deps.sh` |
+| WSL/Git Bash | `bash ./skills/modeling/msmodeling-env-installer/scripts/install-current-project-deps.sh` |
 
 如果当前 shell 与操作系统不匹配，优先选择当前 shell 可直接执行的脚本。例如在 Windows 的 Git Bash 中使用 `.sh`，在 Windows PowerShell 中使用 `.ps1`。
 
@@ -172,15 +172,15 @@ Bash 参数：
 示例：
 
 ```powershell
-.\skills\msmodeling-env-installer\scripts\install-current-project-deps.ps1
-.\skills\msmodeling-env-installer\scripts\install-current-project-deps.ps1 -SetProjectEnv -UseHFMirror
-.\skills\msmodeling-env-installer\scripts\install-current-project-deps.ps1 -UseExistingEnv
+.\skills\modeling\msmodeling-env-installer\scripts\install-current-project-deps.ps1
+.\skills\modeling\msmodeling-env-installer\scripts\install-current-project-deps.ps1 -SetProjectEnv -UseHFMirror
+.\skills\modeling\msmodeling-env-installer\scripts\install-current-project-deps.ps1 -UseExistingEnv
 ```
 
 ```bash
-bash ./skills/msmodeling-env-installer/scripts/install-current-project-deps.sh
-bash ./skills/msmodeling-env-installer/scripts/install-current-project-deps.sh --set-project-env --use-hf-mirror
-bash ./skills/msmodeling-env-installer/scripts/install-current-project-deps.sh --use-existing-env
+bash ./skills/modeling/msmodeling-env-installer/scripts/install-current-project-deps.sh
+bash ./skills/modeling/msmodeling-env-installer/scripts/install-current-project-deps.sh --set-project-env --use-hf-mirror
+bash ./skills/modeling/msmodeling-env-installer/scripts/install-current-project-deps.sh --use-existing-env
 ```
 
 ## 安全规则
@@ -201,3 +201,4 @@ bash ./skills/msmodeling-env-installer/scripts/install-current-project-deps.sh -
 - `pip check` 或 `uv pip check --python <venv-python>` 已执行并报告结果。
 - 输出用户后续可直接执行的激活命令。
 - 明确说明当前会话是否设置了 `PYTHONPATH` 或 `HF_ENDPOINT`。
+

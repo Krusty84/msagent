@@ -16,7 +16,18 @@ import unittest
 from contextlib import redirect_stdout
 
 sys.path.insert(
-    0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "skills", "memory-analysis", "scripts")
+    0,
+    os.path.join(
+        os.path.dirname(__file__),
+        "..",
+        "..",
+        "..",
+        "..",
+        "skills",
+        "profiler",
+        "memory-analysis",
+        "scripts",
+    ),
 )
 
 import aggregate_dump as agg

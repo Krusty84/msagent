@@ -39,10 +39,10 @@ npx skills add . --all -a trae
 git clone https://gitcode.com/Ascend/msagent.git
 
 # opencode
-cp -r msagent/skills/ascend-profiler-db-explorer ~/.config/opencode/skills/
+cp -r msagent/skills/profiler/ascend-profiler-db-explorer ~/.config/opencode/skills/
 
 # claude
-cp -r msagent/skills/ascend-profiler-db-explorer ~/.claude/skills/
+cp -r msagent/skills/profiler/ascend-profiler-db-explorer ~/.claude/skills/
 ```
 
 安装后，在对话中输入匹配 Skill 描述的任务，agent 会自动读取 `SKILL.md` 并按照其中流程执行。

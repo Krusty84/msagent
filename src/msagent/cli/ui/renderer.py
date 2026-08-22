@@ -30,6 +30,7 @@ from msagent.cli.ui.tool_display import order_tool_arg_items
 from msagent.core.constants import UNKNOWN
 from msagent.core.settings import settings
 from msagent.agents.state import Todo
+from msagent.skills.factory import DEFAULT_SKILL_CATEGORY
 from msagent.tools.internal.todo import parse_todos_for_panel, render_todos_panel
 from msagent.utils.version import get_version
 
@@ -412,6 +413,14 @@ class Renderer:
         self.context = context
 
     @staticmethod
+    def _format_welcome_skill_name(skill: Any) -> str:
+        name = str(getattr(skill, "name", "")).strip()
+        if not name:
+            return ""
+        category = str(getattr(skill, "category", DEFAULT_SKILL_CATEGORY)).strip() or DEFAULT_SKILL_CATEGORY
+        return f"{category}:{name}"
+
+    @staticmethod
     def show_welcome(context: Context) -> None:
         """Display the msAgent welcome banner with legacy TUI styling."""
         from msagent.cli.bootstrap.initializer import initializer
@@ -421,7 +430,13 @@ class Renderer:
             agent_description=context.agent_description,
             model_label=context.model_display or context.model,
             mcp_servers=initializer.cached_mcp_server_names,
-            loaded_skills=[skill.name for skill in initializer.cached_agent_skills],
+            loaded_skills=[
+                formatted
+                for formatted in (
+                    Renderer._format_welcome_skill_name(skill) for skill in initializer.cached_agent_skills
+                )
+                if formatted
+            ],
         )
 
         console.print(banner.render())

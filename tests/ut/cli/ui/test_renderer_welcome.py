@@ -45,7 +45,11 @@ def test_show_welcome_uses_legacy_banner(monkeypatch) -> None:
     monkeypatch.setattr(
         initializer,
         "cached_agent_skills",
-        [SimpleNamespace(name="profiling-skill")],
+        [
+            SimpleNamespace(name="skill-creator", category="default"),
+            SimpleNamespace(name="github-raw-fetch", category="basic"),
+            SimpleNamespace(name="ascend-npu-snapshot-analyzer", category="profiler"),
+        ],
     )
 
     context = Context(
@@ -67,8 +71,10 @@ def test_show_welcome_uses_legacy_banner(monkeypatch) -> None:
     assert "Model: default" in output
     assert "MCP (1)" in output
     assert "msprof-mcp" in output
-    assert "Skills (1)" in output
-    assert "profiling-skill" in output
+    assert "Skills (3)" in output
+    assert "default:skill-creator" in output
+    assert "basic:github-raw-fetch" in output
+    assert "profiler:ascend-npu-snapshot-analyzer" in output
 
 
 def test_show_welcome_prefers_resolved_model_display(monkeypatch) -> None:
@@ -78,7 +84,7 @@ def test_show_welcome_prefers_resolved_model_display(monkeypatch) -> None:
     monkeypatch.setattr(
         initializer,
         "cached_agent_skills",
-        [SimpleNamespace(name="profiling-skill")],
+        [SimpleNamespace(name="skill-creator", category="default")],
     )
 
     context = Context(

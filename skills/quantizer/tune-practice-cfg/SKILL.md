@@ -1,4 +1,4 @@
----
+﻿---
 name: tune-practice-cfg
 description: Use when 量化调优闭环中需要生成或修改一轮调优所需的 Practice YAML，包括敏感层分析、策略决策、写出 YAML 文件和校验。
 license: Apache-2.0
@@ -161,7 +161,7 @@ msmodelslim analyze layer \
 **脚本调用**：
 
 ```bash
-python skills/tune-practice-cfg/scripts/validate_practice_yaml.py --practice-path /path/to/practice.yaml
+python skills/quantizer/tune-practice-cfg/scripts/validate_practice_yaml.py --practice-path /path/to/practice.yaml
 ```
 
 **返回**：
@@ -215,3 +215,4 @@ python skills/tune-practice-cfg/scripts/validate_practice_yaml.py --practice-pat
 - `type` 与字段不匹配（如 `flex_awq_ssz` 缺少 `qconfig`），参见 [量化配置格式](references/practice_yaml_format.md)
 - `valid=false` 仍继续后续步骤
 - 命令行参数 `--device` 未使用 `npu:0` 这种格式，错误地使用了 `DeviceType.NPU`
+

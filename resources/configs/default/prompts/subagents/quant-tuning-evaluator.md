@@ -61,7 +61,7 @@
       },
       {
         "name": "evaluation",
-        "command": "python skills/quant-tuning-evaluate/scripts/run_evaluation.py --quant-model-path /path/to/quantized --evaluate-id eval-round-1 --evaluate-config-path /path/to/evaluate.yaml --save-path /path/to/workdir --device npu --device-indices 0,1"
+        "command": "python skills/quantizer/quant-tuning-evaluate/scripts/run_evaluation.py --quant-model-path /path/to/quantized --evaluate-id eval-round-1 --evaluate-config-path /path/to/evaluate.yaml --save-path /path/to/workdir --device npu --device-indices 0,1"
       }
     ]
   }

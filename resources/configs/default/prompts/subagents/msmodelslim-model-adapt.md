@@ -58,10 +58,10 @@
     },
     "commands": [
       { "name": "install", "command": "bash install.sh" },
-      { "name": "verification_step1", "command": "python skills/msmodelslim-adapter-verification/scripts/step1_generate_test_model.py ..." },
-      { "name": "verification_step2", "command": "python skills/msmodelslim-adapter-verification/scripts/step2_run_quantization.py ..." },
-      { "name": "verification_step3", "command": "python skills/msmodelslim-adapter-verification/scripts/step3_verify_weights.py ..." },
-      { "name": "verification_step4", "command": "python skills/msmodelslim-adapter-verification/scripts/step4_verify_quant_description.py ..." }
+      { "name": "verification_step1", "command": "python skills/quantizer/msmodelslim-adapter-verification/scripts/step1_generate_test_model.py ..." },
+      { "name": "verification_step2", "command": "python skills/quantizer/msmodelslim-adapter-verification/scripts/step2_run_quantization.py ..." },
+      { "name": "verification_step3", "command": "python skills/quantizer/msmodelslim-adapter-verification/scripts/step3_verify_weights.py ..." },
+      { "name": "verification_step4", "command": "python skills/quantizer/msmodelslim-adapter-verification/scripts/step4_verify_quant_description.py ..." }
     ]
   }
 }

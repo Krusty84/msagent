@@ -10,7 +10,10 @@ import unittest
 from contextlib import redirect_stderr
 
 sys.path.insert(
-    0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "skills", "compare-result-analyzer", "scripts")
+    0,
+    os.path.join(
+        os.path.dirname(__file__), "..", "..", "..", "..", "skills", "accuracy", "compare-result-analyzer", "scripts"
+    ),
 )
 
 import _common

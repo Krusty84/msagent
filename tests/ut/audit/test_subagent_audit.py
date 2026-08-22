@@ -69,7 +69,7 @@ Practice YAML ready.
       },
       {
         "name": "validate_practice_yaml",
-        "command": "python skills/tune-practice-cfg/scripts/validate_practice_yaml.py --practice-path /tmp/practice_round_1.yaml"
+        "command": "python skills/quantizer/tune-practice-cfg/scripts/validate_practice_yaml.py --practice-path /tmp/practice_round_1.yaml"
       }
     ]
   }
@@ -87,7 +87,7 @@ PRACTICE_GENERATOR_OUTPUT = {
         },
         {
             "name": "validate_practice_yaml",
-            "command": "python skills/tune-practice-cfg/scripts/validate_practice_yaml.py --practice-path /tmp/practice_round_1.yaml",
+            "command": "python skills/quantizer/tune-practice-cfg/scripts/validate_practice_yaml.py --practice-path /tmp/practice_round_1.yaml",
         },
     ],
 }
@@ -449,7 +449,7 @@ def test_protocol_marks_valid_when_evaluator_output_includes_service_commands() 
       },
       {
         "name": "evaluation",
-        "command": "python skills/quant-tuning-evaluate/scripts/run_evaluation.py --quant-model-path /tmp/quantized --evaluate-id e1 --evaluate-config-path /tmp/evaluate.yaml --save-path /tmp/work --device npu --device-indices 0,1"
+        "command": "python skills/quantizer/quant-tuning-evaluate/scripts/run_evaluation.py --quant-model-path /tmp/quantized --evaluate-id e1 --evaluate-config-path /tmp/evaluate.yaml --save-path /tmp/work --device npu --device-indices 0,1"
       }
     ]
   }

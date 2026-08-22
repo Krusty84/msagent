@@ -9,7 +9,9 @@ import sys
 import tempfile
 import unittest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "skills", "ascend-npu-snapshot-analyzer", "scripts"))
+sys.path.insert(
+    0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "skills", "profiler", "ascend-npu-snapshot-analyzer", "scripts")
+)
 
 import snapshot_queries as q
 from snapshot_analyze import (

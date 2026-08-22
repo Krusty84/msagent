@@ -9,7 +9,10 @@ import tempfile
 import unittest
 
 sys.path.insert(
-    0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "skills", "compare-result-analyzer", "scripts")
+    0,
+    os.path.join(
+        os.path.dirname(__file__), "..", "..", "..", "..", "skills", "accuracy", "compare-result-analyzer", "scripts"
+    ),
 )
 
 from _noise_filter import (

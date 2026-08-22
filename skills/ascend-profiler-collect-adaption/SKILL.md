@@ -1,5 +1,5 @@
 ---
-name: torch-npu-profiler-adaptation
+name: ascend-profiler-collect-adaption
 description: >
   Automatically adapt torch_npu.profiler collection to an Ascend PyTorch training, inference,
   or reinforcement-learning framework while preserving its behavior. Use when a framework has no

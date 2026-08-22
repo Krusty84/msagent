@@ -21,7 +21,6 @@ tools:
   output_max_tokens: 10000
 skills:
   patterns:
-    - default:torch-npu-profiler-adaptation
     - default:ascend-profiler-db-explorer
     - default:ascend-computation-analysis
     - default:ascend-schedule-analysis
@@ -34,6 +33,7 @@ skills:
     - default:op-mfu-calculator
     - default:op-mfu-profiler
     - default:ascend-fusion-op-replace
+    - default:ascend-profiler-collect-adaption
   use_catalog: false
 compression:
   auto_compress_enabled: true

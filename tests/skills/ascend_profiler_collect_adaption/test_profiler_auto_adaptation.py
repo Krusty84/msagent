@@ -120,7 +120,7 @@ def test_profiler_agent_loads_adaptation_skill_by_default() -> None:
     config = (
         ROOT / "resources" / "configs" / "default" / "agents" / "Profiler.yml"
     ).read_text(encoding="utf-8")
-    assert "default:torch-npu-profiler-adaptation" in config
+    assert "default:ascend-profiler-collect-adaption" in config
 
 
 def test_enabled_controller_owns_idempotent_lifecycle(tmp_path: Path) -> None:

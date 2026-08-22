@@ -28,12 +28,7 @@ from msagent.configs import (
     MCPConfig,
     ToolApprovalConfig,
 )
-from msagent.core.constants import (
-    CONFIG_CHECKPOINTS_URL_FILE_NAME,
-    CONFIG_MCP_CACHE_DIR,
-    CONFIG_MCP_OAUTH_DIR,
-    CONFIG_SKILLS_DIR,
-)
+from msagent.core.paths import AppPaths, ProjectPaths
 from msagent.llms.factory import LLMFactory
 from msagent.mcp.factory import MCPFactory
 from msagent.skills.factory import Skill, SkillFactory
@@ -49,7 +44,8 @@ if TYPE_CHECKING:
 class Initializer:
     """Centralized service for initializing and caching runtime resources."""
 
-    def __init__(self) -> None:
+    def __init__(self, app_paths: AppPaths | None = None) -> None:
+        self.app_paths = app_paths or AppPaths.resolve()
         self.tool_factory = ToolFactory()
         self.skill_factory = SkillFactory()
         self.llm_factory = LLMFactory()
@@ -67,9 +63,13 @@ class Initializer:
         self._registries: dict[Path, ConfigRegistry] = {}
 
     def get_registry(self, working_dir: Path) -> ConfigRegistry:
-        if working_dir not in self._registries:
-            self._registries[working_dir] = ConfigRegistry(working_dir)
-        return self._registries[working_dir]
+        canonical = working_dir.expanduser().resolve()
+        if canonical not in self._registries:
+            self._registries[canonical] = ConfigRegistry(canonical, self.app_paths)
+        return self._registries[canonical]
+
+    def get_project_paths(self, working_dir: Path) -> ProjectPaths:
+        return self.app_paths.for_project(working_dir)
 
     async def load_llms_config(self, working_dir: Path) -> BatchLLMConfig:
         return await self.get_registry(working_dir).load_llms()
@@ -95,8 +95,18 @@ class Initializer:
     async def update_agent_llm(self, agent_name: str, new_llm_name: str, working_dir: Path) -> None:
         await self.get_registry(working_dir).update_agent_llm(agent_name, new_llm_name)
 
+    async def set_current_agent(self, agent_name: str, working_dir: Path) -> None:
+        await self.get_registry(working_dir).set_current_agent(agent_name)
+
+    async def get_current_model(self, agent_name: str, working_dir: Path) -> str | None:
+        return await self.get_registry(working_dir).get_current_model(agent_name)
+
+    async def set_current_model(self, agent_name: str, model_name: str, working_dir: Path) -> None:
+        await self.get_registry(working_dir).set_current_model(agent_name, model_name)
+
     async def update_default_agent(self, agent_name: str, working_dir: Path) -> None:
-        await self.get_registry(working_dir).update_default_agent(agent_name)
+        """Compatibility alias for workspace-scoped Agent selection."""
+        await self.set_current_agent(agent_name, working_dir)
 
     async def add_agent_skill_pattern(self, agent_name: str, skill_pattern: str, working_dir: Path) -> bool:
         return await self.get_registry(working_dir).add_agent_skill_pattern(agent_name, skill_pattern)
@@ -112,9 +122,11 @@ class Initializer:
     async def get_checkpointer(self, agent: str, working_dir: Path) -> AsyncIterator[BaseCheckpointSaver]:
         """Open the configured checkpointer for a given agent."""
         agent_config = await self.load_agent_config(agent, working_dir)
+        project_paths = self.get_project_paths(working_dir)
+        await asyncio.to_thread(project_paths.ensure)
         checkpointer_ctx = self._create_checkpointer(
             cast(CheckpointerConfig | None, agent_config.checkpointer),
-            str(working_dir / CONFIG_CHECKPOINTS_URL_FILE_NAME),
+            str(project_paths.checkpoints_db),
         )
         checkpointer = await checkpointer_ctx.__aenter__()
         try:
@@ -145,6 +157,7 @@ class Initializer:
             return fake_graph, fake_cleanup
 
         registry = self.get_registry(working_dir)
+        project_paths = getattr(registry, "project_paths", self.get_project_paths(working_dir))
 
         with timer("Load configs"):
             if model:
@@ -171,7 +184,7 @@ class Initializer:
         with timer("Create checkpointer"):
             checkpointer_ctx = self._create_checkpointer(
                 cast(CheckpointerConfig | None, agent_config.checkpointer),
-                str(working_dir / CONFIG_CHECKPOINTS_URL_FILE_NAME),
+                str(project_paths.checkpoints_db),
             )
             checkpointer = await checkpointer_ctx.__aenter__()
 
@@ -181,8 +194,8 @@ class Initializer:
             )
             mcp_client = await self.mcp_factory.create(
                 config=mcp_config,
-                cache_dir=working_dir / CONFIG_MCP_CACHE_DIR,
-                oauth_dir=working_dir / CONFIG_MCP_OAUTH_DIR,
+                cache_dir=self.app_paths.mcp_cache_dir,
+                oauth_dir=self.app_paths.mcp_oauth_dir,
                 sandbox_bindings=None,
                 default_invoke_timeout=default_timeout,
             )
@@ -206,6 +219,7 @@ class Initializer:
             graph = await self.agent_factory.create(
                 config=agent_config,
                 working_dir=working_dir,
+                project_state_dir=project_paths.root,
                 context_schema=AgentContext,
                 checkpointer=checkpointer,
                 mcp_client=mcp_client,
@@ -236,8 +250,8 @@ class Initializer:
     def _resolve_skills_dirs(self, working_dir: Path) -> list[Path]:
         candidates = [
             working_dir / "skills",
+            self.app_paths.skills_dir,
             self.skill_factory.get_default_skills_dir(),
-            working_dir / CONFIG_SKILLS_DIR,
         ]
 
         unique_paths: list[Path] = []

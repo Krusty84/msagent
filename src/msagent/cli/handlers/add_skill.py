@@ -27,7 +27,10 @@ class AddSkillHandler:
                 self.session.context.agent,
                 self.session.context.working_dir,
             )
-            installer = SkillInstaller(self.session.context.working_dir)
+            installer = SkillInstaller(
+                self.session.context.working_dir,
+                skills_dir=initializer.app_paths.skills_dir,
+            )
             result = await installer.install(args[0])
             await initializer.add_agent_skill_pattern(
                 current_agent.name,

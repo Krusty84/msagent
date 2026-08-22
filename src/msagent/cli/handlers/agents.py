@@ -47,27 +47,44 @@ class AgentHandler:
                 selected_agent_config = await initializer.load_agent_config(
                     selected_agent_name, self.session.context.working_dir
                 )
+                selected_model = await initializer.get_current_model(
+                    selected_agent_name,
+                    self.session.context.working_dir,
+                )
+                selected_llm = (
+                    await initializer.load_llm_config(
+                        selected_model,
+                        self.session.context.working_dir,
+                    )
+                    if selected_model
+                    else selected_agent_config.llm
+                )
+                selected_model = selected_model or selected_agent_config.llm.alias
+
+                await initializer.set_current_agent(
+                    selected_agent_name,
+                    self.session.context.working_dir,
+                )
 
                 # Update context with both agent and its configured model
                 self.session.update_context(
                     agent=selected_agent_name,
                     agent_description=selected_agent_config.description or None,
-                    model=selected_agent_config.llm.alias,
+                    model=selected_model,
                     model_display=Context.format_model_display(
-                        selected_agent_config.llm.alias, selected_agent_config.llm
+                        selected_model,
+                        selected_llm,
                     ),
+                    context_window=getattr(selected_llm, "context_window", None),
                     audit_log_enabled=resolve_audit_log_enabled(selected_agent_config),
                     # Agent prompts must not inherit another agent's checkpointed conversation.
                     thread_id=str(uuid.uuid4()),
                     current_input_tokens=None,
                     current_output_tokens=None,
                 )
-                logger.info(f"Switched to Agent: {selected_agent_name}, Model: {selected_agent_config.llm.alias}")
+                logger.info(f"Switched to Agent: {selected_agent_name}, Model: {selected_model}")
                 console.print_warning(f"Switched to Agent: {selected_agent_name}. A new conversation has started.")
                 console.print("")
-
-                # Mark this agent as the new default
-                await initializer.update_default_agent(selected_agent_name, self.session.context.working_dir)
 
         except Exception as e:
             console.print_error(f"Error switching agents: {e}")

@@ -1,16 +1,18 @@
 # 配置与扩展
 
-本文档汇总 `msAgent` 当前代码实现中的项目本地配置、MCP 扩展和 Skills 扩展方式。
+本文档汇总 `msAgent` 当前代码实现中的全局配置、项目状态、MCP 扩展和 Skills 扩展方式。
 
-## 项目本地配置目录
+## 全局配置目录
 
-`msAgent` 使用项目本地配置。首次在某个工作目录运行时，会自动把 `resources/configs/default/` 中的默认模板复制到：
+`msAgent` 将用户配置统一保存在 `MSAGENT_HOME`。未设置该环境变量时，默认目录为：
 
 ```text
-<working-dir>/.msagent/
+~/.msagent/
 ```
 
-如果当前工作目录是 Git 仓库，运行时还会尝试把 `.msagent/` 加入 `.git/info/exclude`，避免本地配置被误提交。
+工作目录只作为 Agent 和工具的执行根目录，不再生成项目内 `.msagent/`。安装包中的默认配置直接从 wheel 读取；全局目录只保存用户覆盖项。
+
+现阶段不会自动导入已有的 `<working-dir>/.msagent/`，请先保留旧目录，等待后续迁移功能。
 
 ## 默认模板与运行时文件
 
@@ -18,58 +20,63 @@
 
 | 路径 | 说明 |
 |---|---|
-| `.msagent/config.llms.yml` | 默认模型配置入口文件。 |
-| `.msagent/llms/*.yml` | 额外的模型别名配置。 |
-| `.msagent/agents/*.yml` | Agent 定义。当前默认包含 `Profiler.yml`、`Accuracy.yml`、`Quantizer.yml`、`Modeling.yml`、`Operator.yml`、`Minos.yml`。 |
-| `.msagent/subagents/*.yml` | SubAgent 定义。 |
-| `.msagent/checkpointers/*.yml` | Checkpointer 配置。当前默认包含 `memory.yml`、`sqlite.yml`。 |
-| `.msagent/sandboxes/*.yml` | Sandbox 配置模板。 |
-| `.msagent/prompts/` | Agent / SubAgent 使用的 Prompt 模板。 |
-| `.msagent/skills/` | 随模板分发的内置 Skills。 |
-| `.msagent/config.mcp.json` | MCP 服务器配置。 |
-| `.msagent/config.approval.json` | 工具审批规则配置。 |
-| `.msagent/README.md` | 本地配置目录说明。 |
+| `~/.msagent/config/config.llms.yml` | 默认模型覆盖配置。 |
+| `~/.msagent/config/llms/*.yml` | 额外的模型别名覆盖配置。 |
+| `~/.msagent/config/agents/*.yml` | 高级扩展使用的 Agent 最小覆盖或新增定义；正常切换不会生成。 |
+| `~/.msagent/config/subagents/*.yml` | 高级扩展使用的 SubAgent 最小覆盖或新增定义。 |
+| `~/.msagent/config/checkpointers/*.yml` | Checkpointer 覆盖配置。 |
+| `~/.msagent/config/sandboxes/*.yml` | Sandbox 覆盖配置。 |
+| `~/.msagent/prompts/` | 用户 Prompt 文件。 |
+| `~/.msagent/skills/` | 用户安装的 Skills。 |
+| `~/.msagent/config/config.mcp.json` | MCP 服务器覆盖配置。 |
+| `~/.msagent/config/config.approval.json` | 工具审批规则覆盖配置。 |
 
 运行时会按需生成以下文件或目录：
 
 | 路径 | 说明 |
 |---|---|
-| `.msagent/config.checkpoints.db` | 会话 checkpoint 数据库。 |
-| `.msagent/.history` | 输入历史。 |
-| `.msagent/memory.md` | 用户偏好和项目上下文记忆。 |
-| `.msagent/cache/mcp/` | MCP 运行缓存。 |
-| `.msagent/oauth/mcp/` | MCP OAuth 相关缓存。 |
-| `.msagent/logs/` | 本地日志目录。 |
-| `.msagent/conversation_history/` | 会话历史目录。 |
+| `~/.msagent/state/projects/<project-id>/project.json` | 工作目录标识，以及该项目当前 Agent、各 Agent 的模型偏好。 |
+| `~/.msagent/state/projects/<project-id>/checkpoints.sqlite` | 当前项目的 checkpoint 数据库。 |
+| `~/.msagent/state/projects/<project-id>/history` | 当前项目的输入历史。 |
+| `~/.msagent/state/projects/<project-id>/memory.md` | 当前项目的长期记忆。 |
+| `~/.msagent/state/projects/<project-id>/conversation_history/` | 当前项目的会话历史。 |
+| `~/.msagent/state/projects/<project-id>/audit_log/` | 当前项目的审计日志。 |
+| `~/.msagent/cache/mcp/` | 全局 MCP 运行缓存。 |
+| `~/.msagent/oauth/mcp/` | 全局 MCP OAuth 数据。 |
+| `~/.msagent/logs/` | 全局日志目录。 |
 
 ## 项目长期记忆
 
-`.msagent/memory.md` 用于保存当前项目的长期记忆，典型内容包括用户偏好、项目背景、长期有效的路径说明和后续任务需要持续参考的事实。可以在交互式会话中使用以下命令维护：
+`~/.msagent/state/projects/<project-id>/memory.md` 用于保存当前项目的长期记忆。可以在交互式会话中使用以下命令维护：
 
 | 命令 | 说明 |
 |---|---|
-| `/remember <content>` | 追加一条长期记忆。首次使用时会自动创建 `.msagent/memory.md`。 |
+| `/remember <content>` | 追加一条长期记忆。首次使用时会自动创建项目 memory 文件。 |
 | `/showmemory` | 查看当前项目已保存的长期记忆。 |
 
-后续会话会自动读取 `.msagent/memory.md` 中的有效内容，并作为 `<user-memory>` 上下文提供给 Agent。默认模板内容不会作为有效记忆注入。
+后续会话会自动读取对应项目的 memory 文件，并作为 `<user-memory>` 上下文提供给 Agent。默认模板内容不会作为有效记忆注入。
 
-长期记忆适合保存稳定信息，不建议写入 API Key、密码、令牌等敏感数据。需要删除或修改记忆时，可以直接编辑 `.msagent/memory.md`。
+长期记忆适合保存稳定信息，不建议写入 API Key、密码、令牌等敏感数据。
 
 ## 配置读取方式
 
 当前实现支持“单文件配置”和“目录配置”两种方式并存：
 
-- LLM：读取 `.msagent/config.llms.yml` 与 `.msagent/llms/*.yml`
-- Agent：优先读取 `.msagent/config.agents.yml`（如果存在）以及 `.msagent/agents/*.yml`
-- SubAgent：优先读取 `.msagent/config.subagents.yml`（如果存在）以及 `.msagent/subagents/*.yml`
-- Checkpointer：优先读取 `.msagent/config.checkpointers.yml`（如果存在）以及 `.msagent/checkpointers/*.yml`
-- Sandbox：读取 `.msagent/sandboxes/*.yml`
+- LLM：内置默认值叠加 `~/.msagent/config/config.llms.yml` 与 `config/llms/*.yml`
+- Agent：内置默认值叠加 `~/.msagent/config/config.agents.yml` 与 `config/agents/*.yml`
+- SubAgent：内置默认值叠加 `~/.msagent/config/config.subagents.yml` 与 `config/subagents/*.yml`
+- Checkpointer：内置默认值叠加 `~/.msagent/config/config.checkpointers.yml` 与 `config/checkpointers/*.yml`
+- Sandbox：内置默认值叠加 `~/.msagent/config/sandboxes/*.yml`
 
 默认模板当前以目录式配置为主。
 
+内置 Agent 的 Prompt、Tools、Skills、SubAgent 等完整定义由安装包维护，普通用户无需复制或编辑。`/agents` 切换结果保存在当前项目的 `project.json`；`/models` 的选择也按 Agent 保存在同一项目状态中。启动时的选择优先级为：显式 `--agent`/`--model` 参数、当前项目偏好、安装包默认值。
+
+只有高级扩展或显式修改 Agent 字段时才会生成 `config/agents/*.yml`。生成文件采用字段级最小覆盖，未出现的字段继续继承安装包默认定义。
+
 ## MCP 配置
 
-默认模板会启用 `msprof-mcp`。当前默认配置等价于：
+内置 MCP 定义来自安装包中的 `resources/configs/default/config.mcp.json`，用户文件按 server name 覆盖内置定义。以下是一个本地 stdio 服务示例：
 
 ```json
 {
@@ -118,21 +125,21 @@
 日常使用方式：
 
 - 用 `/mcp` 在会话中切换已有 MCP 服务的启用状态
-- 直接编辑 `.msagent/config.mcp.json` 来新增、删除或调整服务定义
+- 直接编辑 `~/.msagent/config/config.mcp.json` 来新增、删除或调整服务定义
 
 ## Skills 扩展
 
 当前 Skills 会按以下顺序扫描：
 
 1. `<working-dir>/skills`
-2. 内置 Skills 目录：优先使用仓库根目录 `skills/`；已安装 wheel 时使用打包后的 `resources/configs/default/skills/`
-3. `<working-dir>/.msagent/skills`
+2. `~/.msagent/skills`
+3. 内置 Skills 目录：优先使用仓库根目录 `skills/`；已安装 wheel 时使用打包后的资源
 
 同名 Skill 按“先加载优先”处理，因此当前优先级是：
 
 1. 项目根目录下的 `skills/`
-2. 内置 Skills
-3. `.msagent/skills/`
+2. 全局用户 Skills
+3. 内置 Skills
 
 ## Skill 目录结构
 

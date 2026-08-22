@@ -16,6 +16,7 @@ from msagent.cli.bootstrap.legacy import (
 )
 from msagent.cli.theme import console
 from msagent.core.logging import configure_logging, get_logger
+from msagent.core.paths import AppPaths
 
 
 def create_parser():
@@ -45,7 +46,11 @@ async def main() -> int:
         args = parser.parse_args(argv)
 
     working_dir = Path(getattr(args, "working_dir", Path.cwd()))
-    configure_logging(show_logs=getattr(args, "verbose", False), working_dir=working_dir)
+    configure_logging(
+        show_logs=getattr(args, "verbose", False),
+        working_dir=working_dir,
+        log_dir=AppPaths.resolve().logs_dir,
+    )
     logger = get_logger(__name__)
 
     try:

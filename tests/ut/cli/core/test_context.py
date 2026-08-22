@@ -48,7 +48,11 @@ async def test_context_create_keeps_alias_and_exposes_resolved_model(
     async def fake_load_agent_config(agent, working_dir):
         return agent_config
 
+    async def fake_get_current_model(agent, working_dir):
+        return None
+
     monkeypatch.setattr(initializer, "load_agent_config", fake_load_agent_config)
+    monkeypatch.setattr(initializer, "get_current_model", fake_get_current_model)
 
     context = await Context.create(
         agent=None,
@@ -60,6 +64,54 @@ async def test_context_create_keeps_alias_and_exposes_resolved_model(
     assert context.model == "default"
     assert context.agent_description == agent_config.description
     assert context.model_display == "deepseek-chat (openai)"
+
+
+@pytest.mark.asyncio
+async def test_context_create_uses_workspace_model_preference(monkeypatch) -> None:
+    default_llm = SimpleNamespace(
+        alias="default",
+        model="default-model",
+        provider=LLMProvider.OPENAI,
+        context_window=64000,
+    )
+    preferred_llm = SimpleNamespace(
+        alias="fast",
+        model="fast-model",
+        provider=LLMProvider.OPENAI,
+        context_window=128000,
+    )
+    agent_config = SimpleNamespace(
+        name="Profiler",
+        description="Profiler",
+        llm=default_llm,
+        tools=None,
+        recursion_limit=80,
+    )
+
+    async def fake_load_agent_config(_agent, _working_dir):
+        return agent_config
+
+    async def fake_get_current_model(_agent, _working_dir):
+        return "fast"
+
+    async def fake_load_llm_config(model, _working_dir):
+        assert model == "fast"
+        return preferred_llm
+
+    monkeypatch.setattr(initializer, "load_agent_config", fake_load_agent_config)
+    monkeypatch.setattr(initializer, "get_current_model", fake_get_current_model)
+    monkeypatch.setattr(initializer, "load_llm_config", fake_load_llm_config)
+
+    context = await Context.create(
+        agent=None,
+        model=None,
+        approval_mode=ApprovalMode.SEMI_ACTIVE,
+        working_dir=Path.cwd(),
+    )
+
+    assert context.agent == "Profiler"
+    assert context.model == "fast"
+    assert context.model_display == "fast-model (openai)"
 
 
 def test_agent_context_defaults_to_cwd() -> None:

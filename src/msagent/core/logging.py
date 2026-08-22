@@ -23,7 +23,6 @@ from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 from typing import Any, cast
 
-from msagent.core.constants import CONFIG_LOG_DIR
 from msagent.core.settings import settings
 
 # File format includes full context (for log file)
@@ -58,12 +57,17 @@ def _install_unraisablehook_filter() -> None:
         sys.unraisablehook = _filtered_hook
 
 
-def configure_logging(show_logs: bool = False, working_dir: Path | None = None) -> None:
+def configure_logging(
+    show_logs: bool = False,
+    working_dir: Path | None = None,
+    log_dir: Path | None = None,
+) -> None:
     """Configure application logging.
 
     Args:
         show_logs: Enable file logging and show log location hint.
-        working_dir: Working directory for log file.
+        working_dir: Legacy base directory used when ``log_dir`` is omitted.
+        log_dir: Explicit global log directory.
     """
     if working_dir is None:
         working_dir = Path.cwd()
@@ -113,7 +117,7 @@ def configure_logging(show_logs: bool = False, working_dir: Path | None = None) 
     )
 
     # Always write logs to disk so they are available without -v.
-    log_dir = working_dir / CONFIG_LOG_DIR
+    log_dir = log_dir or working_dir / ".msagent" / "logs"
     log_file_path = log_dir / "app.log"
     try:
         log_dir.mkdir(parents=True, exist_ok=True)

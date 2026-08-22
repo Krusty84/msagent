@@ -8,6 +8,8 @@ import yaml
 from msagent.cli.dispatchers.commands import CommandDispatcher
 from msagent.cli.handlers import add_skill as add_skill_module
 from msagent.cli.handlers.add_skill import AddSkillHandler
+from msagent.cli.bootstrap.initializer import Initializer
+from msagent.core.paths import AppPaths
 from msagent.skills.installer import SkillInstallError, SkillInstaller
 
 
@@ -51,6 +53,8 @@ async def test_add_skill_handler_installs_skill_and_updates_agent_patterns(
     session = _build_session(tmp_path)
     handler = AddSkillHandler(session)
     messages: list[str] = []
+    app_paths = AppPaths.from_home(tmp_path / "global-home" / ".msagent")
+    monkeypatch.setattr(add_skill_module, "initializer", Initializer(app_paths))
 
     monkeypatch.setattr(add_skill_module.console, "print_success", messages.append)
     monkeypatch.setattr(add_skill_module.console, "print_error", messages.append)
@@ -58,10 +62,10 @@ async def test_add_skill_handler_installs_skill_and_updates_agent_patterns(
 
     await handler.handle([str(skill_dir)])
 
-    installed_skill = tmp_path / ".msagent" / "skills" / "custom_skill" / "SKILL.md"
+    installed_skill = app_paths.skills_dir / "custom_skill" / "SKILL.md"
     assert installed_skill.exists()
 
-    profiler_config = yaml.safe_load((tmp_path / ".msagent" / "agents" / "Profiler.yml").read_text(encoding="utf-8"))
+    profiler_config = yaml.safe_load((app_paths.config_dir / "agents" / "Profiler.yml").read_text(encoding="utf-8"))
     assert "default:custom_skill" in profiler_config["skills"]["patterns"]
     assert session.needs_reload is True
     assert session.running is False

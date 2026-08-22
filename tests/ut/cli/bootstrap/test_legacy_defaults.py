@@ -21,7 +21,7 @@ from pathlib import Path
 import pytest
 
 from msagent.cli.bootstrap.initializer import Initializer
-from msagent.core.constants import CONFIG_SKILLS_DIR
+from msagent.core.paths import AppPaths
 from msagent.skills.factory import DEFAULT_SKILL_CATEGORY, SkillFactory
 
 
@@ -101,7 +101,8 @@ content
 
 
 def test_initializer_resolves_default_skill_search_order(tmp_path: Path) -> None:
-    init = Initializer()
+    app_paths = AppPaths.from_home(tmp_path / "global-home" / ".msagent")
+    init = Initializer(app_paths)
     default_skills = tmp_path / "bundled-skills"
 
     init.skill_factory.get_default_skills_dir = lambda: default_skills
@@ -110,8 +111,8 @@ def test_initializer_resolves_default_skill_search_order(tmp_path: Path) -> None
 
     assert skill_dirs == [
         tmp_path / "skills",
+        app_paths.skills_dir,
         default_skills,
-        tmp_path / CONFIG_SKILLS_DIR,
     ]
 
 

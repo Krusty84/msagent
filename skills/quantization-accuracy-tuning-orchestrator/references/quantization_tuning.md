@@ -45,6 +45,13 @@
              │ (生成测评配置) │
              └───────┬───────┘
                      ▼
+            ┌──────────────────────────┐
+            │ Agent:                   │
+            │ quantization-expert-     │
+            │ experience-tuning-rules  │
+            │ (结构化回退意见，二分前)  │
+            └───────────┬──────────────┘
+                        ▼
              (>>> 循环开始 <<<) ◄────────────┐
                      ▼                      │
             ┌────────────────────┐          │
@@ -62,7 +69,8 @@
             │ Agent:          │             │
             │ practice-       │             │
             │ generator       │             │
-            │ (生成量化配置)   │             │
+            │ (生成量化配置，   │             │
+            │ 应用结构化回退)   │             │
             └────────┬────────┘             │
                      ▼                      │
             ┌─────────────────┐             │
@@ -116,13 +124,16 @@
  	 
 以下规则对上方流程图中的各个环节施加额外约束，执行调优时必须一并遵守。
 
-### FP baseline 获取（循环前强制前置）
+### FP baseline 获取（循环前前置）
 
-若用户未提供 FP baseline：
-1. 生成浮点模型的评测配置（不含 quantization 相关参数）
-2. 对浮点模型执行评测，记录 baseline 精度
-3. 将 baseline 值写入 evaluate_config.yaml 的 target 字段（target = FP baseline - tolerance, 其中 tolerance 为用户容差）
-4. 然后才进入循环
+**分两种情况**：
+
+1. **用户提供了绝对精度目标**（如「gsm8k 精度 ≥ 83%」）：直接将该数值作为 target，**不需要**执行浮点基线测评。
+2. **用户未提供绝对目标**（如「精度损失 ≤ 2%」「尽量保持精度」等相对/模糊描述）：**必须**先对浮点模型执行评测获取 baseline，禁止猜测或使用默认值：
+   1. 生成浮点模型的评测配置（不含 quantization 相关参数）
+   2. 对浮点模型执行评测，记录 baseline 精度
+   3. 将 baseline 值写入 evaluate_config.yaml 的 target 字段（target = FP baseline - tolerance, 其中 tolerance 为用户容差）
+   4. 然后才进入循环
 
 注意：target 不要随意计算。参照以下示例进行计算：
 （1）如果用户描述"不低于浮点精度超过 1%"，则 target = FP baseline - 1%。
@@ -150,9 +161,39 @@
 - 截断 exclude 列表时，不能在 gate_proj/up_proj 配对中间截断
 - 若中位数截断点落在配对中间，向上取整到配对末尾
 
-### 精简数据集的使用
+### 结构化回退经验（二分前接入）
 
-若用户提供了精简数据集和全量数据集，则进行精度调优使用精简数据集进行。当调优（摸高二分搜索）结束后，将数据集切换为全量数据集，并且分别测一次浮点权重和量化权重在全量数据集上的精度表现，作为最终是否达标的结论。
+采用 `standing_high_with_experience` 策略时，**进入二分搜索前**，主 Agent 应先委派 `quantization-expert-experience-tuning-rules` 取得「结构化回退意见」，作为 practice-generator 生成/修改 Practice YAML 时 `exclude` / 高精度档位 / 提级项的**初始化候选**，再跑二分。
+
+- **接入时机**：FP baseline 获取与压缩数据集来源确认之后、`(>>> 循环开始 <<<)` 之前执行一次；拿到回退意见后随每轮 `prev_result` 一起传给 practice-generator，由后者在生成 Practice 时落地（因此该意见**不参与、也不替代** standing_high 的二分搜索逻辑本身）。
+- **委派 `input` 参考**：模型结构类型、`quant_type`（`w8a8`/`w4a8`/`w4a4`）、是否 MoE / EP、routed/shared experts 与 gate/router 命名、当前 `include`/`exclude`、浮点基线与敏感层分析、可引用 `lab_practice` YAML 路径。
+- **回退意见用途**：优先回退候选（如 `mlp.down_proj`、`o_proj`、MoE `gate`/`router`、`shared_experts`、MLA 低秩投影等）与置信度/证据等级，供 practice-generator 作为初值；最终是否回退、回退哪些层，仍以敏感层分析 + 本轮精度结果 + 二分收敛为准。
+- **只回答问题、不执行**：`quantization-expert-experience-tuning-rules` 仅输出「哪些层需要回退」，不改 YAML、不量化、不做 EP 检查 / 服务化 / 评测；这些动作仍由 practice-generator / quantizer / evaluator / EP 适配承接。
+- **策略为 `standing_high`（不含 experience）时**：不强制委派该 skill，可按需作为参考，不改变二分流程。
+
+### 压缩数据集的使用（默认）
+
+**默认的量化调优过程均使用压缩数据集**进行快速迭代，只有在用户确认不使用压缩数据集时，才退回全集测试。
+
+进入调优循环前，主 Agent **必须**向用户确认压缩数据集的来源，三选一：
+
+1. **用户自备已压缩数据集**：用户直接提供精简数据集路径，调优迭代直接使用。
+2. **委派 `aisbench-dataset-compression-herding` skill 生成**：用户未自备但同意生成时，委派该 skill，用 RBF Kernel Herding 算法从全集生成 coreset 子集。
+   - 当前仅支持 `aime2025` 与 `gpqa` 两个数据集；
+   - 压缩耗时约 30 分钟（CPU 实现），执行前须向用户说明成本并获确认；
+   - 生成「全集 + 子集」两份测试脚本，子集携带 `indices.json` 可追溯复现；
+   - 压缩集结果仅用于调优迭代的快速反馈，最终精度仍以全量数据集验收为准。
+3. **用户两者都不愿意**：既不提供已压缩数据集、也不生成时，退回**全集测试**——直接使用全量数据集进行调优迭代，并向用户说明反馈周期会变长。
+
+流程约束：
+
+- 只有当用户明确选择第 1 或第 2 项时，调优迭代使用压缩数据集；选择第 3 项时使用全集。
+- **迭代期达标口径（子集 vs 全集，逐步迭代）**：子集只用于快速迭代，其出口标准**初始与全集一致**——均为**分数不低于浮点基线（或损失 ≤ 1%）**。调优循环内的「达标」判断（如 standing_high 二分收敛、摸高更新 best）初始以该口径为准。
+- **最终以全集出口为准**：调优（摸高二分搜索）结束后，将数据集切换为全量数据集，分别测一次浮点权重和量化权重在全量数据集上的精度表现，作为最终是否达标的结论。
+- **全集不达预期时的渐进收紧**：若全集验收分数不达预期（子集达标但全集不达标），则**逐步提高子集出口标准**，再以更高标准的子集重新迭代筛选，随后再次用全集验收；如此循环，直至全集达标。
+- **收紧步长固定 1 个百分点，无需询问用户，但须在过程中告知**：每次**子集达标、最终全集不达标**时，才触发收紧——子集出口标准按**固定步长 1 个百分点**自动逐档加严（如上轮损失要求 ≤ 1%，下轮收紧为「不低于浮点基线」，再下一轮为「高于浮点基线 1 个百分点」，依此类推），内置步长、每次自动递增，不再逐次询问用户；但**每一轮收紧子集出口标准时，都必须向用户明确告知当前采用的标准档位与数值**。
+
+> 前置约束：进入调优循环前，须先确定精度基线——用户提供绝对目标则免测浮点，否则先完成 FP baseline 获取（见上文「FP baseline 获取」）。
 
 ## 拉起 subagent 的格式（MSAGENT_IO v1）
 
@@ -175,6 +216,7 @@
 | `round` | int | ✓ | 当前调优轮次 |
 | `prev_result` | object\|null | | 上轮评测结果，首轮 `null` |
 | `anchor_practice` | string\|null | | 已知最优且达标的 Practice 路径 |
+| `experience_hints` | object\|null | | 结构化回退意见（由 `quantization-expert-experience-tuning-rules` 回传），供生成 Practice 时作为 `exclude`/高精度档位初值；`standing_high` 策略时为 `null` |
 
 回传 `output` 必填：`practice_path`，`validation: { ok, valid, errors }`，`commands`（须含 `sensitive_layer_analysis` 与 `validate_practice_yaml`；跳过敏感层分析时前者 `skipped: true`）
 
@@ -190,11 +232,12 @@
     "model_path": "",
     "save_path": "",
     "device": "",
-    "strategy": "standing_high",
+    "strategy": "standing_high_with_experience",
     "max_iterations": 10,
     "round": 1,
     "prev_result": null,
-    "anchor_practice": null
+    "anchor_practice": null,
+    "experience_hints": null
   }
 }
 ```

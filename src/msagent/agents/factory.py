@@ -336,6 +336,7 @@ class AgentFactory:
         self,
         config: AgentConfig,
         working_dir: Path | None = None,
+        project_state_dir: Path | None = None,
         context_schema: type[Any] | None = None,
         mcp_client: Any | None = None,
         skills_dir: Path | list[Path] | None = None,
@@ -350,6 +351,7 @@ class AgentFactory:
         patch_third_party_prompt_defaults()
         patch_deepagents_windows_absolute_paths()
         working_dir = (working_dir or Path.cwd()).resolve()
+        state_dir = project_state_dir.resolve() if project_state_dir is not None else working_dir
         resolved_llm = llm_config or config.llm
         retry_cfg = getattr(config, "retry", None)
         tool_retry_cfg = getattr(retry_cfg, "tool", None) if retry_cfg is not None else None
@@ -417,7 +419,7 @@ class AgentFactory:
         all_tools = [*runtime_tools, *mcp_tools]
 
         skills_sources = self._resolve_existing_paths(skills_dir)
-        memory_sources = self._resolve_memory_sources(working_dir)
+        memory_sources = self._resolve_memory_sources(state_dir)
         enable_skills_middleware = self._should_enable_skills_middleware(
             config=config,
             skills_sources=skills_sources,
@@ -453,6 +455,7 @@ class AgentFactory:
         middleware: list[AgentMiddleware[Any, Any, Any]] = []
         agent_backend = self._build_agent_backend(
             working_dir,
+            conversation_history_dir=state_dir / "conversation_history",
             enable_large_results=needs_large_results,
             enable_conversation_history=needs_conversation_history,
         )
@@ -1067,20 +1070,21 @@ class AgentFactory:
         return any(pattern and not pattern.startswith("!") for pattern in patterns)
 
     @staticmethod
-    def _resolve_memory_sources(working_dir: Path) -> list[str]:
-        memory_content = read_memory_file(working_dir)
+    def _resolve_memory_sources(state_dir: Path) -> list[str]:
+        memory_content = read_memory_file(state_dir=state_dir)
         if not memory_content or is_default_memory_content(memory_content):
             return []
 
         from msagent.tools.internal.memory import ensure_memory_file
 
-        memory_file = ensure_memory_file(working_dir)
+        memory_file = ensure_memory_file(state_dir=state_dir)
         return [str(memory_file)]
 
     @staticmethod
     def _build_agent_backend(
         working_dir: Path,
         *,
+        conversation_history_dir: Path | None = None,
         enable_large_results: bool,
         enable_conversation_history: bool,
     ) -> CompositeBackend | LocalShellBackend:
@@ -1097,7 +1101,7 @@ class AgentFactory:
             )
         if enable_conversation_history:
             routes["/conversation_history/"] = FilesystemBackend(
-                root_dir=working_dir / CONFIG_CONVERSATION_HISTORY_DIR,
+                root_dir=conversation_history_dir or working_dir / CONFIG_CONVERSATION_HISTORY_DIR,
                 virtual_mode=True,
             )
         if not routes:

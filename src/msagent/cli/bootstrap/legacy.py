@@ -15,7 +15,7 @@ from msagent.cli.bootstrap.initializer import initializer
 from msagent.cli.theme import console
 from msagent.configs import ApprovalMode
 from msagent.configs.llm import LLMProvider
-from msagent.core.constants import APP_NAME, CONFIG_LLMS_FILE_NAME
+from msagent.core.constants import APP_NAME
 
 LEGACY_PROVIDER_MAP = {
     "openai": LLMProvider.OPENAI,
@@ -59,7 +59,7 @@ Optional arguments:
   -V, --version                            Show version information and exit.
       --stream                             Stream output.
       --no-stream                          Render the final reply without token streaming.
-  -v, --verbose                            Enable verbose logging to console and .msagent/app.log.
+  -v, --verbose                            Enable verbose logging to console and ~/.msagent/logs.
   -w, --working-dir <DIR>                  Working directory for the session [default: current directory]
   -a, --agent <NAME>                       Agent name. Available: Profiler, Accuracy, Quantizer, Modeling, Operator, Minos.
   -m, --model <NAME>                       LLM model alias.
@@ -96,14 +96,14 @@ Usage:
 
 Optional arguments:
   -h, --help                               Show help message and exit.
-  -v, --verbose                            Enable verbose logging to console and .msagent/app.log.
+  -v, --verbose                            Enable verbose logging to console and ~/.msagent/logs.
   -s, --show                               Show current configuration.
       --llm-provider <NAME>                LLM provider. Available: openai, anthropic, gemini, google.
       --llm-api-key <KEY>                  LLM API key for this process only.
       --llm-max-tokens <INT>               Max output tokens (0 means provider/model default).
       --llm-base-url <URL>                 Custom provider base URL for a compatible service or proxy.
   -m, --llm-model <NAME>                   Model name.
-  -w, --working-dir <DIR>                  Working directory for project-local .msagent config [default: current directory]
+  -w, --working-dir <DIR>                  Project working directory [default: current directory]
 
 Examples:
   # Show current project-local configuration
@@ -211,7 +211,7 @@ def create_legacy_parser() -> argparse.ArgumentParser:
         "-v",
         "--verbose",
         action="store_true",
-        help="Enable verbose logging to console and .msagent/app.log",
+        help="Enable verbose logging to console and ~/.msagent/logs",
     )
     config_parser.add_argument(
         "--show",
@@ -238,7 +238,7 @@ def create_legacy_parser() -> argparse.ArgumentParser:
         "-w",
         "--working-dir",
         default=os.getcwd(),
-        help="Working directory for project-local .msagent config",
+        help="Project working directory",
     )
 
     return parser
@@ -275,7 +275,7 @@ def create_session_parser() -> argparse.ArgumentParser:
         "-v",
         "--verbose",
         action="store_true",
-        help="Enable verbose logging to console and .msagent/app.log",
+        help="Enable verbose logging to console and ~/.msagent/logs",
     )
     _add_runtime_options(parser, include_timer=True)
     return parser
@@ -387,13 +387,13 @@ async def _handle_config(args: argparse.Namespace) -> int:
         "context_window": current_llm.context_window,
     }
 
-    llm_config_path = working_dir / CONFIG_LLMS_FILE_NAME
+    llm_config_path = registry.llms_file
+    llm_config_path.parent.mkdir(parents=True, exist_ok=True)
     llm_config_path.write_text(
         yaml.safe_dump({"llms": [llm_data]}, sort_keys=False, allow_unicode=True),
         encoding="utf-8",
     )
 
-    await registry.update_agent_llm(agent_config.name, "default")
     registry.invalidate_cache()
 
     if args.llm_api_key:
@@ -408,7 +408,8 @@ async def _handle_config(args: argparse.Namespace) -> int:
 
 async def _show_config(registry, working_dir: Path) -> int:
     agent_config = await registry.get_agent(None)
-    llm_config = agent_config.llm
+    workspace_model = await registry.get_current_model(agent_config.name)
+    llm_config = await registry.get_llm(workspace_model) if workspace_model else agent_config.llm
     mcp_config = await registry.load_mcp()
 
     provider_label = "gemini" if llm_config.provider == LLMProvider.GOOGLE else llm_config.provider.value
@@ -449,5 +450,5 @@ async def _show_config(registry, working_dir: Path) -> int:
             )
         console.print(mcp_table)
 
-    console.print(f"\n[dim]Config dir: {working_dir / '.msagent'}[/dim]")
+    console.print(f"\n[dim]Config dir: {registry.config_dir}[/dim]")
     return 0

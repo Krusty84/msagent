@@ -2,20 +2,22 @@
 
 ## 1. msagent 第一次启动时会生成哪些本地文件？
 
-`msagent` 使用项目本地配置。首次在某个工作目录启动时，会自动生成：
+`msagent` 使用全局配置目录。默认位置为：
 
 ```text
-.msagent/
+~/.msagent/
 ```
+
+其中 `config/` 保存用户覆盖配置，`state/projects/<project-id>/` 保存各项目独立的 memory、history、checkpoint 和会话历史。工作目录不会生成新的 `.msagent/`。
 
 这个目录里通常会包含：
 
 - LLM 配置
-- Agent / SubAgent 配置
 - MCP 配置
-- Prompt 模板
-- Skills
+- 用户安装的 Skills
 - 日志、缓存、会话历史和 checkpoint 数据
+
+内置 Agent / SubAgent 定义和 Prompt 默认由安装包直接提供，不会在首次启动时复制到这里。当前 workspace 选择的 Agent 和 Model 记录在对应项目的 `project.json` 中。
 
 更完整的目录说明见 [配置与扩展](configuration-and-extension.md)。
 
@@ -24,7 +26,7 @@
 有两种常见方式：
 
 - 在会话里通过 `/mcp` 查看和切换已配置的 MCP 服务
-- 直接编辑 `.msagent/config.mcp.json`
+- 直接编辑 `~/.msagent/config/config.mcp.json`
 
 默认模板会启用 `msprof-mcp`。如果你要接入新的本地或远程 MCP 服务，建议先参考 [配置与扩展](configuration-and-extension.md) 里的字段说明。
 
@@ -59,10 +61,10 @@
 
 ## 4. 运行日志在哪里看？
 
-启用后，日志会写到当前工作目录下：
+日志统一写到全局目录：
 
 ```text
-.msagent/logs/app.log
+~/.msagent/logs/app.log
 ```
 
 如果你想看到更详细的日志，可以开启：

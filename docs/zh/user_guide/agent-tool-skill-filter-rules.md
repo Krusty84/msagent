@@ -51,8 +51,8 @@ tools:
 ```yaml
 skills:
   patterns:
-    - default:ascend-profiler-data-validation
-    - default:ascend-profiler-db-explorer
+    - profiler:ascend-profiler-data-validation
+    - profiler:ascend-profiler-db-explorer
     - "!default:op-*"
   use_catalog: false
 ```
@@ -101,8 +101,8 @@ tools:
 
 skills:
   patterns:
-    - default:ascend-profiler-data-validation
-    - default:ascend-profiler-db-explorer
+    - profiler:ascend-profiler-data-validation
+    - profiler:ascend-profiler-db-explorer
   use_catalog: false
 ```
 

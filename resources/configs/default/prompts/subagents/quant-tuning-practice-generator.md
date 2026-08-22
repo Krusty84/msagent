@@ -62,7 +62,7 @@
       },
       {
         "name": "validate_practice_yaml",
-        "command": "python skills/tune-practice-cfg/scripts/validate_practice_yaml.py --practice-path /path/to/practice_round_N.yaml"
+        "command": "python skills/quantizer/tune-practice-cfg/scripts/validate_practice_yaml.py --practice-path /path/to/practice_round_N.yaml"
       }
     ]
   }

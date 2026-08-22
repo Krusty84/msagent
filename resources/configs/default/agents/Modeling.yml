@@ -18,12 +18,9 @@ tools:
   output_max_tokens: 10000
 skills:
   patterns:
-    - default:msmodeling-env-installer
-    - default:msmodeling-device-config
-    - default:msmodeling-text-generate-executor
-    - default:msmodeling-throughput-optimizer-executor
-    - default:msmodeling-optix-deploy
-    - default:msmodeling-optix-param-recommend
+    - modeling:*
+    - basic:*
+    - default:*
   use_catalog: false
 compression:
   auto_compress_enabled: true

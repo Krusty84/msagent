@@ -120,23 +120,6 @@ PYTHONPATH=src python3 -m run_benchmark \
   --timeout-seconds 1800
 ```
 
-## 6. 跑 profiling skill case
-
-profiling 相关 case 会把 `skill_path` 指向仓库内的 skill 目录，Agent 会在隔离工作区中看到
-复制后的 `skill/`：
-
-```bash
-PYTHONPATH=src python3 -m run_benchmark \
-  --config benchmarks/cluster_fast_slow_rank_profiling_skill.yaml \
-  --out runs/profiling-skill \
-  --agent msagent-cli \
-  --judge msagent-cli \
-  --msagent-agent Hermes \
-  --timeout-seconds 1800
-```
-
-真实 profiling 数据可能较大，建议适当调高 `--timeout-seconds`。
-
 ## 7. 跑整个目录
 
 ```bash

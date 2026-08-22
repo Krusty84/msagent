@@ -684,8 +684,8 @@ tools:
 
 skills:
   patterns:
-    - default:ascend-profiler-db-explorer
-    - "!default:op-mfu-calculator"
+    - profiler:ascend-profiler-db-explorer
+    - "!profiler:op-mfu-calculator"
 ```
 
 #### 2.3 MCP 配置
@@ -715,8 +715,8 @@ MCP 配置位于 `.msagent/config.mcp.json`。默认服务如下：
 
 推荐优先放在以下位置之一：
 
-- `<working-dir>/skills/<skill-name>/SKILL.md`
-- `<working-dir>/.msagent/skills/<skill-name>/SKILL.md`
+- `<working-dir>/skills/<category>/<skill-name>/SKILL.md`
+- `<working-dir>/.msagent/skills/<category>/<skill-name>/SKILL.md`
 
 同时需要在目标 Agent 配置中放开对应 `skills.patterns`。
 

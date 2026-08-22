@@ -1,4 +1,4 @@
-# mindstudio-cpu-binding
+﻿# mindstudio-cpu-binding
 
 `mindstudio-cpu-binding` 是一个面向 **NPU + PyTorch / LLM Serving Host CPU 亲和性优化** 的通用 Agent Skill。它关注的不是单一框架或单一运行时，而是帮助任何支持读取 Skill 目录的 Agent Runtime，围绕以下问题做证据化分析：
 
@@ -28,7 +28,7 @@ skills/
 └── tests/
 ```
 
-其中 `skills/tests/` 是仓库内用于保障脚本正确性的测试目录，不属于用户安装 Skill 时必须携带的运行内容。`skills/mindstudio-cpu-binding/samples/` 可作为本地开发验证数据目录存在，用于离线示例验证；它不是运行真实节点诊断的必需内容。
+其中 `skills/tests/` 是仓库内用于保障脚本正确性的测试目录，不属于用户安装 Skill 时必须携带的运行内容。`skills/profiler/mindstudio-cpu-binding/samples/` 可作为本地开发验证数据目录存在，用于离线示例验证；它不是运行真实节点诊断的必需内容。
 
 ## 核心特色
 
@@ -217,7 +217,7 @@ pytest skills/tests -v
 从仓库根目录执行 README 检查：
 
 ```bash
-pre-commit run --files skills/mindstudio-cpu-binding/README.md
+pre-commit run --files skills/profiler/mindstudio-cpu-binding/README.md
 ```
 
 ## 说明与边界
@@ -226,3 +226,4 @@ pre-commit run --files skills/mindstudio-cpu-binding/README.md
 - 不会自动改写 Docker、K8s、Slurm 或节点级配置。
 - 不以 Claude-only 为前提，可用于任何兼容的 Agent Runtime。
 - 所有状态变更动作都必须先确认，再执行。
+

@@ -1,6 +1,6 @@
 ---
 name: quantization-accuracy-tuning-orchestrator
-description: End-to-end automated model quantization and accuracy tuning workflow. Use when user asks for automated model quantization and accuracy tuning, e.g. "自动量化", "量化调优", "一键量化", "精度调优", etc.
+description: End-to-end automated model quantization and accuracy tuning workflow. Use when user asks for automated model quantization and accuracy tuning, e.g. "自动量化", "量化调优", "一键量化", "精度调优", etc. 当用户给出多卡（≥2 卡）卡号时，量化阶段通过 EP 并行适配（msmodelslim-ep-parallel-adaptation）保证多卡 EP 并行，调优主流程仍在本 Skill。
 license: Apache-2.0
 metadata:
   version: 0.9.4
@@ -91,6 +91,22 @@ metadata:
 
 在你认为已经获得足够信息来执行调优流程后，你**必须**总结所有参数（包括你自动推导的默认值），并将这些参数以清晰的方式回显给用户，**获得用户的认可**后才可以进入下一步。如果用户对回显的参数有任何异议或需要修改的地方，你必须根据用户的反馈继续调整参数，并再次回显确认，直到用户完全认可为止。
 
+在参数回显获得用户认可后，**必须**执行[路由决策](./references/routing.md)（见下方「1.5 EP 并行适配」），再进入环境准备阶段。
+
+#### 1.5 EP 并行适配（多卡自动切入）
+
+当用户在设备索引处给出**多卡卡号**（≥2 张卡，如 `npu:0,1`、`npu:2,3`、`[0,1,2,3]`）时，本 Skill **主流程保持不变**，仅在量化前委派 **EP 并行适配** Skill（`msmodelslim-ep-parallel-adaptation`），保证后续量化全程以 EP 并行进行：
+
+- **触发条件**：用户给出的设备卡号数量 ≥ 2。
+- **动作**：在「模型准备 → 量化配置调优」之间，委派 `msmodelslim-ep-parallel-adaptation` 完成 **MoE 检查 + EP 就绪检查与适配 + `[EP_CHECK]` 验证**，并回传 `EP_ADAPT_RESULT` 与 `requires_ep`。本 Skill 据此决定后续量化是否走 EP：
+  - `requires_ep=true`（MoE，EP 已适配）→ **后续调优全程开启 EP 并行**：每一轮量化命令固定使用多卡（`--device npu:0,1,...`），每轮量化日志均须含 `[EP_CHECK]`，评测服务同样保持多卡，中途不得退回单卡 / DP；
+  - `requires_ep=false`（非 MoE）→ 退回本 Skill 的普通多卡 / 单卡流程，不涉及专家分片。
+- **例外**：若用户明确说明本次任务**不需要**多卡 / EP（如「虽然有多卡，但只用单卡量化」），则仍走本 Skill 的单卡普通流程，不委派 EP 适配。
+
+结构化回退经验（`quantization-expert-experience-tuning-rules`）不属 EP 适配范围：当调优策略为 `standing_high_with_experience` 时，在量化配置调优阶段、进入二分搜索前委派它取得「哪些层需要回退」的结构化意见，作为 practice-generator 生成 Practice 的初值（见[量化配置调优](./references/quantization_tuning.md)「结构化回退经验」）。
+
+详见[路由决策](./references/routing.md)。
+
 ### 2. 环境准备
 
 《环境准备》：[环境准备](./references/prepare_environment.md)。该文档会指导你检查和准备执行量化和评估所需的环境，包括必要的库、工具和硬件资源等。如果环境不满足要求，该文档还会指导你协助用户安装或配置必要的环境。你必须确保在进入量化配置调优之前，环境已经准备就绪。
@@ -138,7 +154,9 @@ metadata:
 | `quantization-accuracy-tuning-orchestrator/scripts/accuracy_cleanup.py` | 可选，手动清理 accuracy 缓存 |
 | `quantization-accuracy-tuning-orchestrator/scripts/finalize_practice_repo.py` | 调优收敛后写入 practice 仓库 |
 
-子步骤见对应 Skill：`tune-practice-cfg`（`msmodelslim analyze` + 校验脚本）、`quant-tuning-quantize`（`msmodelslim quant`）、`quant-tuning-evaluate`（评测脚本）。
+子步骤见对应 Skill：`tune-practice-cfg`（`msmodelslim analyze` + 校验脚本）、`quant-tuning-quantize`（`msmodelslim quant`）、`quant-tuning-evaluate`（评测脚本）；结构化回退意见见 `quantization-expert-experience-tuning-rules`（`standing_high_with_experience` 策略二分前委派）。
+
+**压缩数据集（默认）**：默认的量化调优过程均使用压缩数据集进行快速迭代。进入循环前**必须**向用户确认来源，三选一：①用户自备已压缩数据集；②委派 `aisbench-dataset-compression-herding` skill 用 RBF Kernel Herding 生成 coreset（仅支持 `aime2025`/`gpqa`，耗时约 30 分钟，已获用户确认后执行）；③用户两者都不愿意时退回全集测试。主流程采用「**子集调优 → 全集验证 → 不通过改全集调优**」：先用子集调优直到子集达标，再全集验证，全集不达标则**直接切换到全集进行调优**，保证最终与全集一致；**不再**采用固定步长逐步收紧子集出口标准的容忍性做法。进入循环前须先确定**子集与全集两个出口标准**：先询问用户是否分别给出，不给出的一方在当前环境跑浮点模型测 FP 基线（**浮点基线评测会额外占用卡数，须向用户提示并确认可用卡**）。详见 `references/quantization_tuning.md` 的「压缩数据集的使用」。
 
 ## 执行注意事项
 

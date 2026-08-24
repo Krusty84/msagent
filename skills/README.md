@@ -158,11 +158,11 @@ git clone https://gitcode.com/Ascend/msagent.git
 cd msagent/
 
 # opencode
-cp -r skills/ascend-profiler-db-explorer ~/.config/opencode/skills/
+cp -r skills/profiler/ascend-profiler-db-explorer ~/.config/opencode/skills/
 
 # claude
-cp -r skills/ascend-profiler-db-explorer ~/.claude/skills/
+cp -r skills/profiler/ascend-profiler-db-explorer ~/.claude/skills/
 
 # codex
-cp -r skills/ascend-profiler-db-explorer ~/.codex/skills/
+cp -r skills/profiler/ascend-profiler-db-explorer ~/.codex/skills/
 ```

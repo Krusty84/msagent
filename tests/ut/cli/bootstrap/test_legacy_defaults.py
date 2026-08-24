@@ -22,7 +22,7 @@ import pytest
 
 from msagent.cli.bootstrap.initializer import Initializer
 from msagent.core.constants import CONFIG_SKILLS_DIR
-from msagent.skills.factory import DEFAULT_SKILL_CATEGORY, SkillFactory
+from msagent.skills.factory import BASIC_SKILL_CATEGORY, DEFAULT_SKILL_CATEGORY, SkillFactory
 
 
 def test_legacy_system_prompt_is_preserved() -> None:
@@ -98,6 +98,27 @@ content
     assert DEFAULT_SKILL_CATEGORY in skills
     assert "op-mfu-calculator" in skills[DEFAULT_SKILL_CATEGORY]
     assert skills[DEFAULT_SKILL_CATEGORY]["op-mfu-calculator"].display_name == "op-mfu-calculator"
+
+
+@pytest.mark.asyncio
+async def test_skill_factory_loads_basic_category_skills(tmp_path: Path) -> None:
+    basic_skill_dir = tmp_path / "skills" / "basic" / "github-raw-fetch"
+    basic_skill_dir.mkdir(parents=True)
+    (basic_skill_dir / "SKILL.md").write_text(
+        """---
+name: github-raw-fetch
+description: test basic skill
+---
+content
+""",
+        encoding="utf-8",
+    )
+
+    skills = await SkillFactory().load_skills(tmp_path / "skills")
+
+    assert BASIC_SKILL_CATEGORY in skills
+    assert "github-raw-fetch" in skills[BASIC_SKILL_CATEGORY]
+    assert skills[BASIC_SKILL_CATEGORY]["github-raw-fetch"].display_name == "basic/github-raw-fetch"
 
 
 def test_initializer_resolves_default_skill_search_order(tmp_path: Path) -> None:

@@ -29,6 +29,7 @@ from yaml import YAMLError  # type: ignore[import-untyped]
 from msagent.core.constants import DEFAULT_CONFIG_DIR
 
 DEFAULT_SKILL_CATEGORY = "default"
+BASIC_SKILL_CATEGORY = "basic"
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +50,10 @@ class Skill:
         if self.category == DEFAULT_SKILL_CATEGORY:
             return self.name
         return f"{self.category}/{self.name}"
+
+    @property
+    def welcome_name(self) -> str:
+        return f"{self.category}:{self.name}"
 
     def get_script_relative_paths(self, limit: int = 8) -> list[str]:
         scripts_dir = self.root_dir / "scripts"

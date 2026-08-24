@@ -210,16 +210,16 @@ async def test_fetch_skills_returns_display_name_and_filters(tmp_path: Path) -> 
             path=tmp_path / "analysis" / "ascend-cluster-fast-slow-rank-detector" / "SKILL.md",
         ),
         Skill(
-            name="op-mfu-calculator",
-            description="Compute operator MFU",
-            category="default",
-            path=tmp_path / "op-mfu-calculator" / "SKILL.md",
+            name="github-raw-fetch",
+            description="Fetch raw files from GitHub",
+            category="basic",
+            path=tmp_path / "basic" / "github-raw-fetch" / "SKILL.md",
         ),
     ]
 
     result = await fetch_skills.coroutine(
         runtime=_make_runtime(skills=skills),
-        pattern="analysis|mfu",
+        pattern="analysis|github",
     )
     payload = json.loads(result)
 
@@ -231,10 +231,10 @@ async def test_fetch_skills_returns_display_name_and_filters(tmp_path: Path) -> 
             "description": "Detect slow ranks in distributed runs",
         },
         {
-            "display_name": "op-mfu-calculator",
-            "category": "default",
-            "name": "op-mfu-calculator",
-            "description": "Compute operator MFU",
+            "display_name": "basic/github-raw-fetch",
+            "category": "basic",
+            "name": "github-raw-fetch",
+            "description": "Fetch raw files from GitHub",
         },
     ]
 

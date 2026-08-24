@@ -34,6 +34,7 @@ skills:
     - default:op-mfu-profiler
     - default:ascend-fusion-op-replace
     - default:ascend-profiler-collect-adaption
+    - default:mindstudio-storage-analysis
   use_catalog: false
 compression:
   auto_compress_enabled: true

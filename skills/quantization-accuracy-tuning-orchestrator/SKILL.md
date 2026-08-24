@@ -156,7 +156,7 @@ metadata:
 
 子步骤见对应 Skill：`tune-practice-cfg`（`msmodelslim analyze` + 校验脚本）、`quant-tuning-quantize`（`msmodelslim quant`）、`quant-tuning-evaluate`（评测脚本）；结构化回退意见见 `quantization-expert-experience-tuning-rules`（`standing_high_with_experience` 策略二分前委派）。
 
-**压缩数据集（默认）**：默认的量化调优过程均使用压缩数据集进行快速迭代。进入循环前**必须**向用户确认来源，三选一：①用户自备已压缩数据集；②委派 `aisbench-dataset-compression-herding` skill 用 RBF Kernel Herding 生成 coreset（仅支持 `aime2025`/`gpqa`，耗时约 30 分钟，已获用户确认后执行）；③用户两者都不愿意时退回全集测试。迭代期用子集做「达标」判断，**初始与全集出口标准一致**（分数不低于浮点基线/损失 ≤ 1%）；最终以全集验收为准，若**子集达标、最终全集不达标**则**逐步提高子集出口标准**后重新迭代，循环直至全集达标。**收紧步长固定 1 个百分点、自动递增，无需询问用户，但每轮收紧时须向用户告知当前采用的子集出口标准档位**。详见 `references/quantization_tuning.md` 的「压缩数据集的使用」。
+**压缩数据集（默认）**：默认的量化调优过程均使用压缩数据集进行快速迭代。进入循环前**必须**向用户确认来源，三选一：①用户自备已压缩数据集；②委派 `aisbench-dataset-compression-herding` skill 用 RBF Kernel Herding 生成 coreset（仅支持 `aime2025`/`gpqa`，耗时约 30 分钟，已获用户确认后执行）；③用户两者都不愿意时退回全集测试。主流程采用「**子集调优 → 全集验证 → 不通过改全集调优**」：先用子集调优直到子集达标，再全集验证，全集不达标则**直接切换到全集进行调优**，保证最终与全集一致；**不再**采用固定步长逐步收紧子集出口标准的容忍性做法。进入循环前须先确定**子集与全集两个出口标准**：先询问用户是否分别给出，不给出的一方在当前环境跑浮点模型测 FP 基线（**浮点基线评测会额外占用卡数，须向用户提示并确认可用卡**）。详见 `references/quantization_tuning.md` 的「压缩数据集的使用」。
 
 ## 执行注意事项
 

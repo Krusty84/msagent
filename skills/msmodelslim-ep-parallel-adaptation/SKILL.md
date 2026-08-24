@@ -3,7 +3,8 @@ name: msmodelslim-ep-parallel-adaptation
 description: |
   为 MoE 模型提供 EP（Expert Parallel）多卡并行适配：确认 MoE 架构 → 检查 EP 是否就绪 →
   未就绪时完成 EP 代码改造（专家按 rank 分片构造、权重按 rank 加载、Smooth/QuaRot/LN fuse 等量化映射本地化）→
-  用真实多卡日志 `[EP_CHECK]` 验证，最终回传 `EP_ADAPT_RESULT=PASS`。
+  用真实多卡日志 `[EP_CHECK]` 验证结构分片，再用 `[EP_ACT_GATE]`（单卡 vs 多卡激活值余弦相似度 + 幅度比）验证数值一致，
+  最终回传 `EP_ADAPT_RESULT=PASS`。
   本 Skill 只保证「后续调优全程以 EP 并行进行」，不承担量化、测评迭代、结构化回退与最终交付；
   调优主流程由 quantization-accuracy-tuning-orchestrator 承接。
 license: Apache-2.0
@@ -27,7 +28,9 @@ metadata:
     - Expert Parallel
     - MoE 专家分片
     - EP_CHECK
+    - EP_ACT_GATE
     - 多卡并行
+    - 激活值余弦相似度门禁
 ---
 
 # EP 并行适配 Skill（适配层）
@@ -65,7 +68,11 @@ metadata:
   │     └── 未就绪 → 完成 EP 代码改造（见 references/ep_implementation_guide.md）
   │
   └── 第 3 步：EP 验证
-        └── 多卡日志含 `[EP_CHECK]` 且全部硬检查通过 → 回传 EP_ADAPT_RESULT=PASS
+        ├── 3a 结构门禁：多卡日志含 `[EP_CHECK]` 且 Check 1~6 全部通过
+        ├── 3b 数值门禁：单卡 vs 多卡激活值余弦相似度 + 幅度比（`[EP_ACT_GATE]`）
+        │     ├── 结构 FAIL → 直接 EP_ADAPT_RESULT=FAIL（不跑数值门禁）
+        │     └── 结构 PASS + 数值 PASS → EP_ADAPT_RESULT=PASS
+        └── 数值 FAIL → EP_ADAPT_RESULT=FAIL，回传 first_diverged_layer
 ```
 
 ## 职责边界
@@ -80,12 +87,13 @@ metadata:
 |------|---------|------|
 | 第 1 步：MoE 模型检查 | `references/ep_checklist.md` | 确认 MoE 架构与专家参数 |
 | 第 2 步：EP 就绪检查与改造 | `references/ep_implementation_guide.md` | 专家分片、权重按 rank 加载、mapping 本地化 |
-| 第 3 步：EP 验证 | `references/ep_checklist.md` | `[EP_CHECK]` 硬检查与适配交付验收 |
+| 第 3 步：EP 验证 | `references/ep_checklist.md` | `[EP_CHECK]` 结构硬检查 + `[EP_ACT_GATE]` 数值门禁 |
 
 ## 参考资料
 
 | 文件 | 说明 |
 |------|------|
-| [EP 验收检查清单](references/ep_checklist.md) | EP 适配硬检查（EP Check 1~6）与交付验收 |
+| [EP 验收检查清单](references/ep_checklist.md) | EP 适配硬检查（EP Check 1~6）+ 数值门禁（EP Check 7）与交付验收 |
 | [EP 实施指南](references/ep_implementation_guide.md) | 真实 EP 代码改造参考（专家分片、权重加载、mapping 本地化） |
 | [量化映射适配指南](references/ep_quant_mapping_guide.md) | Smooth/QuaRot/LN fuse 等量化映射的 EP 本地化 |
+| [EP 激活值数值门禁](references/ep_activation_gate.md) | 单卡 vs 多卡激活值余弦相似度 + 幅度比（EP Check 7） |

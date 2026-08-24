@@ -244,7 +244,26 @@ logger.info(
 若采用 compact local expert container，统计容器中实际 materialized 数量并打印
 对应 global expert ids。
 
-## 9. 通用检查项
+## 9. EP_ACT_GATE 日志模板（数值门禁）
+
+结构日志 `[EP_CHECK]` 通过后，再输出数值门禁日志：
+
+```python
+logger.info(
+    "[EP_ACT_GATE] rank=%d ep_size=%d anchors=%d min_cos=%.6f worst_norm_dev=%.2e verdict=%s",
+    global_rank, ep_size, len(anchor_names), min_cos, worst_norm_dev, verdict,
+)
+```
+
+若失败，追加输出最早发散的层：
+
+```python
+logger.info("[EP_ACT_GATE] first_diverged_layer=%s cos=%.6f", first_layer, first_cos)
+```
+
+数值门禁的完整原理、阈值与参考实现见 `ep_activation_gate.md`（EP Check 7）。
+
+## 10. 通用检查项
 
 1. `num_experts % ep_size == 0`；
 2. expert container 中非本地槽位为 `None` / 未 materialize；

@@ -76,6 +76,28 @@ layer-wise loading   PASS/FAIL
 - 所有 rank 的 expert_range 连续覆盖 [0, total_experts)
 - 若日志中无 `[EP_CHECK]` → EP 未生效 → **FAIL**
 
+### EP Check 7：单卡 vs 多卡激活值数值门禁
+
+EP Check 1~6 是结构检查，只能证明「分片形态正确」；还需证明「EP 并行的 forward 数值 == 单卡全量专家」。
+用**同一份输入**，比较「单卡（EP 关闭）」与「多卡 EP」前向激活值，以余弦相似度为主指标 + 幅度比为护栏。
+
+```text
+[EP_ACT_GATE] rank=0 ep_size=4 anchors=62 min_cos=0.99982 worst_norm_dev=3.2e-6 verdict=PASS
+```
+
+| 档位 | cosine | norm_ratio | 判定 |
+|---|---|---|---|
+| 通过 | `min_cos >= 0.999` | 偏差 `<= 1e-3` | PASS |
+| 复核 | `0.99 <= min_cos < 0.999` | 偏差 `<= 1e-3` | WARN，需定位 first_diverged_layer |
+| 失败 | `min_cos < 0.99` | 或偏差 `> 1e-3` | FAIL |
+
+要点：
+
+- 输入 `seq_len=1`，锚点为每层 decoder 输出 `model.layers.<i>` hidden_states。
+- `norm_ratio` 偏差 `> 1e-3` 直接 FAIL（覆盖 all_reduce 翻倍/漏做/未平均等整体缩放缺陷）。
+- 结构任一检查失败 → 直接 FAIL，不跑数值门禁；结构 PASS + 数值 PASS → 才可回传 PASS。
+- 完整实现与定位方法见 `ep_activation_gate.md`。
+
 ## 三、适配交付验收
 
 适配完成后，向 orchestrator 回传结构化结论，而非继续量化调优：
@@ -90,6 +112,8 @@ coverage=PASS
 local_only=PASS
 mapping_local_only=PASS
 ep_check_log=<[EP_CHECK] 日志文件绝对路径>
+ep_act_gate=min_cos=<最差层余弦> norm_dev=<最大幅度偏差> verdict=<PASS|WARN|FAIL>
+ep_act_gate_log=<[EP_ACT_GATE] 日志文件绝对路径>
 ```
 
 或（非 MoE，无需 EP）：
@@ -113,6 +137,8 @@ EP_ADAPT_RESULT=FAIL
 | EP Check 3 | forward 只走本地专家，但 `state_dict` 仍读全部权重 | FAIL |
 | EP Check 5 | 忘记修改 `get_rotate_map` / `get_adapter_config_for_subgraph` | FAIL |
 | EP Check 6 | 使用单卡，无 EP_CHECK 日志 | FAIL |
+| EP Check 7 | 多卡专家输出与单卡不一致：`all_reduce` 翻倍/漏做/未平均、DP token 切回错位 | cosine < 0.99 或 norm_dev > 1e-3 | FAIL |
 
-> 改造细节见 `ep_implementation_guide.md`（专家分片、权重按 rank 加载、mapping 本地化）
-> 与 `ep_quant_mapping_guide.md`（Smooth/QuaRot/LN fuse 等量化映射的 EP 本地化）。
+> 改造细节见 `ep_implementation_guide.md`（专家分片、权重按 rank 加载、mapping 本地化）、
+> `ep_quant_mapping_guide.md`（Smooth/QuaRot/LN fuse 等量化映射的 EP 本地化）
+> 与 `ep_activation_gate.md`（EP Check 7 数值门禁）。

@@ -297,7 +297,7 @@ cp <aisbench-code-path>/tools/herding_coreset_selector/datasets/gpqa/herding/Qwe
 #### 注意
 
 - **不改 msmodelslim 评测层**：`run_evaluation.py` / `ServiceOrientedEvaluateService` 只认 `config_name`，不认数据路径；切子集只能在 ais_bench 数据集配置层做，不要尝试改评测脚本。
-- **达标口径由编排层负责**：子集初始与全集出口一致、全集不达预期时按固定 1 个百分点逐步收紧等规则，统一由 `quantization-accuracy-tuning-orchestrator` 的 `quantization_tuning.md` 负责，本 Skill 只提供可供切换的 config_name。
+- **达标口径由编排层负责**：本 Skill 只回传「全集 config_name + coreset config_name」两套配置，供编排层切换。编排层 `quantization_tuning.md` 采用「**子集调优 → 全集验证 → 不通过改全集调优**」的闭环：子集出口标准与全集出口标准是**两个**独立标准（先询问用户，不给出的一方由当前环境跑浮点模型测 FP 基线，且浮点基线评测会额外占用卡数）；子集达标只代表可进入全集验证，全集不达标时**直接切全集重跑调优**，保证与全集一致（不再采用固定步长逐步收紧子集出口标准的做法）。本 Skill 仅提供 config_name，不参与达标/调优决策。
 
 ---
 

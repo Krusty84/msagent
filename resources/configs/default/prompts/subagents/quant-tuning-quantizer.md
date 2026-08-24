@@ -50,7 +50,7 @@
     "commands": [
       {
         "name": "quantize",
-        "command": "msmodelslim quant --model_path /data/models/Qwen3-8B/ --save_path /path/to/round_1/quantized --device npu:2 --model_type Qwen3-8B --config_path /path/to/practice_round_1.yaml --trust_remote_code True"
+        "command": "<本次实际执行的完整量化命令>"
       }
     ]
   }

@@ -57,11 +57,11 @@
     "commands": [
       {
         "name": "inference_service",
-        "command": "python -m vllm.entrypoints.openai.api_server --model /path/to/quantized --served-model-name Qwen3-8B-w8a8 --host localhost --port 8000 --tensor-parallel-size 2 --trust-remote-code --quantization ascend"
+        "command": "<本次实际执行的完整推理服务命令>"
       },
       {
         "name": "evaluation",
-        "command": "python skills/quant-tuning-evaluate/scripts/run_evaluation.py --quant-model-path /path/to/quantized --evaluate-id eval-round-1 --evaluate-config-path /path/to/evaluate.yaml --save-path /path/to/workdir --device npu --device-indices 0,1"
+        "command": "<本次实际执行的完整评测命令>"
       }
     ]
   }

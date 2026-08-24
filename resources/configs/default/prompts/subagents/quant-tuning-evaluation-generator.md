@@ -46,7 +46,7 @@
     "commands": [
       {
         "name": "validate_yaml",
-        "command": "python3 -c \"import yaml; yaml.safe_load(open('/path/to/evaluate.yaml')); print('YAML is valid')\""
+        "command": "<本次实际执行的完整 Evaluation YAML 校验命令>"
       }
     ]
   }

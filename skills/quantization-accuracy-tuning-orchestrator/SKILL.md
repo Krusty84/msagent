@@ -3,7 +3,7 @@ name: quantization-accuracy-tuning-orchestrator
 description: End-to-end automated model quantization and accuracy tuning workflow. Use when user asks for automated model quantization and accuracy tuning, e.g. "自动量化", "量化调优", "一键量化", "精度调优", etc.
 license: Apache-2.0
 metadata:
-  version: 0.9.4
+  version: 0.9.5
   domain: quantization
   framework: msmodelslim
   protocol: mixed

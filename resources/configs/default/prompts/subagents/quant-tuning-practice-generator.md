@@ -62,7 +62,7 @@
       },
       {
         "name": "validate_practice_yaml",
-        "command": "python skills/tune-practice-cfg/scripts/validate_practice_yaml.py --practice-path /path/to/practice_round_N.yaml"
+        "command": "<本次实际执行的完整 Practice YAML 校验命令>"
       }
     ]
   }

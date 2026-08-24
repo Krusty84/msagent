@@ -3,7 +3,7 @@ name: gen-evaluation-cfg
 description: Generate msmodelslim evaluation YAML configuration (service_oriented + aisbench + vllm-ascend). Use when user asks for evaluation config generation.
 license: Apache-2.0
 metadata:
-  version: 0.9.8
+  version: 0.9.5
   domain: quantization
   framework: msmodelslim
   aliases:

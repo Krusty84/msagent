@@ -3,7 +3,7 @@ name: tune-practice-cfg
 description: Use when 量化调优闭环中需要生成或修改一轮调优所需的 Practice YAML，包括敏感层分析、策略决策、写出 YAML 文件和校验。
 license: Apache-2.0
 metadata:
-  version: 0.1.0
+  version: 0.1.1
   domain: quantization
   framework: msmodelslim
   protocol: cli

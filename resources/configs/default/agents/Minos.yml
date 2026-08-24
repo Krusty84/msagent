@@ -17,8 +17,9 @@ tools:
   output_max_tokens: 10000
 skills:
   patterns:
-    - default:document-ux-review
-    - default:gitcode-code-reviewer
+    - minos:*
+    - basic:*
+    - default:*
   use_catalog: false
 compression:
   auto_compress_enabled: true

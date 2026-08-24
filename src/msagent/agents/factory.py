@@ -43,6 +43,7 @@ from msagent.configs import AgentConfig, BaseAgentConfig, RetryPolicyConfig, Sub
 from msagent.core.constants import CONFIG_CONVERSATION_HISTORY_DIR
 from msagent.llms.factory import LLMFactory
 from msagent.middlewares.tool_result_eviction import ToolResultEvictionMiddleware
+from msagent.skills.factory import DEFAULT_SKILL_CATEGORY
 from msagent.tools.catalog import (
     fetch_skills,
     fetch_tools,
@@ -248,7 +249,8 @@ class _FilteredSkillsMiddleware(SkillsMiddleware):
         lines: list[str] = []
         for skill in sorted_skills:
             category = str(skill.get("category", "default"))
-            lines.append(f"- `{category}/{skill['name']}`: {skill['description']}")
+            display_name = skill["name"] if category == DEFAULT_SKILL_CATEGORY else f"{category}/{skill['name']}"
+            lines.append(f"- `{display_name}`: {skill['description']}")
             lines.append(f"  Read `{skill['path']}` for full instructions.")
         return "\n".join(lines)
 

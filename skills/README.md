@@ -53,6 +53,7 @@ description: 技能的详细描述，说明它做什么，以及什么时候使�
 | `memory-analysis` | 显存数据全链路：按诉求指导 msMemScope 采集，并对 dump 做系统性解读与泄漏/OOM/调优诊断 | `帮我采集反向过程的显存数据` / `帮我解读这份显存数据，分析显存瓶颈` |
 | `op-mfu-calculator` | 计算算子 MFU | `按这个 shape 和耗时算 MFU` |
 | `op-mfu-profiler` | 采集profiling数据并解析算子 MFU | `这是我的程序，帮我分析算子的 MFU` |
+| `ascend-model-analysis` |  生成模型分析报告                   | `请帮生成deepseekv4-pro的模型分析报告` |
 
 ### 2.2 精度 Skills
 

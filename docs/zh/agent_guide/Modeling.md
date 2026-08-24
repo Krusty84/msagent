@@ -70,8 +70,8 @@
 | 场景 | 示例提示词 |
 |---|---|
 | 环境初始化 | `请帮我按 msmodeling README 初始化环境，创建 myenv 并安装 requirements.txt。` |
-| 单点仿真参数梳理 | `请帮我梳理 Qwen3-32B 在 A3 上跑 text_generate 需要补齐哪些参数。` |
+| 单点仿真参数梳理 | `请帮我梳理 Qwen3-32B 在昇腾A3系列产品上跑 text_generate 需要补齐哪些参数。` |
 | 吞吐规划咨询 | `我想比较同一个模型在两种硬件上的部署吞吐规划，应该怎么准备 throughput_optimizer 输入？` |
 | 设备建模入口 | `我要给一块新硬件做 device profile，先帮我确认需要哪些规格。` |
 | 服务化自动寻优部署 | `请帮我安装 msmodeling optix 寻优工具并验证是否可用。` |
-| 寻优参数推荐 | `我在 Atlas A3 上部署 Qwen3-32B，使用 vLLM，目标吞吐优先，帮我推荐寻优参数和 config.toml 配置。` |
+| 寻优参数推荐 | `我在昇腾A3系列产品上部署 Qwen3-32B，使用 vLLM，目标吞吐优先，帮我推荐寻优参数和 config.toml 配置。` |

@@ -19,7 +19,7 @@ tools:
   output_max_tokens: 10000
 skills:
   patterns:
-    - default:ascendc-operator-performance-optim
+    - default:ops-performance-tuning
     - default:msot-msopprof-operator-profiler
   use_catalog: false
 compression:

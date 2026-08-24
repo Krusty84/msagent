@@ -12,6 +12,7 @@ source: local-session-analysis
 本 skill 负责将工具装好并验证能用。
 
 其他内容由对应 skill 负责：
+
 - 运行环境检查：`msmodeling-env-installer`
 - 首次参数范围推荐与 `config.toml` 配置：`msmodeling-optix-param-recommend`
 
@@ -21,11 +22,11 @@ source: local-session-analysis
 
 |产品类型| 是否支持 |
 |--|:----:|
-|Atlas A3 训练系列产品/Atlas A3 推理系列产品|  √   |
-|Atlas A2 训练系列产品/Atlas A2 推理系列产品|  √   |
-|Atlas 200I/500 A2 推理产品|  √   |
-|Atlas 推理系列产品|  √   |
-|Atlas 训练系列产品|  x   |
+|昇腾A3系列产品|  √   |
+|昇腾A2系列产品|  √   |
+|昇腾310B系列产品|  √   |
+|昇腾310系列产品|  √   |
+|昇腾910系列产品|  x   |
 
 > - 目标运行环境不支持 Windows
 > - Atlas 训练系列产品不支持，请确认使用的是推理系列产品
@@ -68,7 +69,7 @@ cd msmodeling
 
 msmodeling 仓库结构：
 
-```
+```text
 msmodeling/                  ← 仓库根目录
 ├── pyproject.toml           ← optix 安装入口
 └── optix/

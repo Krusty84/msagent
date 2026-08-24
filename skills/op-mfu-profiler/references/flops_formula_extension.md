@@ -63,4 +63,5 @@ def my_new_op_flops(x, weight, *, transpose=False, group_list=None, **kwargs):
 2. 按 SKILL.md「第 4 步：解析」跑解析（默认 db 格式）。db 格式下产物为 `cluster_analysis_output/cluster_analysis.db`，打开其中的 `OperatorMFU` 表，检查**是否出现该新算子**（需直接看 Excel 时可加 `--export_type text` 导出 `OperatorMfu/operator_mfu_kernel_{rank_id}.xlsx`）：
 
 - **未出现**：说明 FLOPs 打点未生效，回头查公式注册是否有误后重试。
-- **已出现**：选个简单场景（如固定维度的 `torch.mm`）用公式手算 FLOPs，与记录的 `flops` 字段比对，一致才算闭环。
+- **已出现**：选个简单场景（如固定维度的 `torch.mm`）用公式手算 FLOPs，与记录的 `flops` 字段比对，一致才算闭环。完成后告知用户 profiling 数据和 MFU 分析结果的路径，方便查看。
+

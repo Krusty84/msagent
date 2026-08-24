@@ -640,6 +640,7 @@ def test_build_agent_backend_inherits_parent_environment(
 
     assert captured["root_dir"] == str(tmp_path)
     assert captured["inherit_env"] is True
+    assert captured["virtual_mode"] is False
 
 
 @pytest.mark.asyncio

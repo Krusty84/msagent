@@ -32,9 +32,10 @@ msmodelslim analyze layer \
 | `device` | 执行设备 | `npu` |
 
 - `model_type` 与模型 `config.json` 中的 `model_type` 并非同一概念，你应该参考 `msmodelslim/config/config.ini`，如 `Qwen3-32B` `DeepSeek-V3` 才是正确合法的 `model_type`。
-- 官方文档：[敏感层分析使用指南](https://gitcode.com/Ascend/msmodelslim/blob/master/docs/zh/feature_guide/sensitive_layer_analysis/usage.md)
+- 官方文档：[敏感层分析使用指南](https://gitcode.com/Ascend/msmodelslim/blob/master/docs/zh/user_guide/usage_sensitive_layer_wise_analysis.md)
 
 **注意事项**
+
 - 敏感层分析运行时长可能较长，必须按上方命令将输出直接写入日志文件，不得依赖 `tee` 保存结果。若外层执行超时，先确认原分析进程是否仍在运行；**务必避免**在上一个敏感层分析进程未结束时再次拉起一个敏感层分析进程。
 - 当使用 `mse_layer_wise` 时，`topk` 固定使用 `999`。该值是覆盖当前模型适配器全部分析单元的兼容上限，不代表语言层数或模型实际总层数；分析单元可能包括语言 Decoder 层、视觉模块整体、多模态投影层、MTP 及适配器定义的其他单元。
 

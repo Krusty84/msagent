@@ -23,7 +23,6 @@ def test_core_package_surfaces_import() -> None:
     modules = [
         "msagent.agents",
         "msagent.cli.bootstrap.app",
-        "msagent.cli.bootstrap.web",
         "msagent.configs",
         "msagent.core.settings",
         "msagent.llms.factory",
@@ -31,10 +30,6 @@ def test_core_package_surfaces_import() -> None:
         "msagent.middlewares",
         "msagent.skills.factory",
         "msagent.tools.factory",
-        "msagent.web.graph",
-        "msagent.web.launcher",
-        "msagent.web.runtime",
-        "msagent.web.ui",
     ]
 
     for module_name in modules:

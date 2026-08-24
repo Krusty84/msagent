@@ -1,4 +1,7 @@
+# msprof-mcp 设计文档
+
 ## 修订记录
+
 | 日期 | 修订版本 | 修改描述 | 作者 | RFC文档 |
 | -- | -- | -- | -- | -- |
 | 2026-06-03 | 1.0 | 补充 msprof-mcp 详细设计文档，覆盖架构、工具体系、数据流与测试设计 | kali20gakki1 |  |
@@ -303,6 +306,7 @@ FIELD_MAPPINGS = {
 msprof-mcp 支持两种集成方式：
 
 **PyPI 方式（推荐）**：
+
 ```json
 {
   "mcpServers": {
@@ -316,6 +320,7 @@ msprof-mcp 支持两种集成方式：
 ```
 
 **本地源码方式（开发调试）**：
+
 ```json
 {
   "mcpServers": {
@@ -330,6 +335,7 @@ msprof-mcp 支持两种集成方式：
 ```
 
 在 msAgent 中，默认 MCP 配置如下：
+
 ```json
 {
   "mcpServers": {
@@ -487,11 +493,13 @@ sequenceDiagram
 #### 9.1 快速开始
 
 **方式一：PyPI 直接运行**
+
 ```bash
 uvx msprof-mcp
 ```
 
 **方式二：本地开发运行**
+
 ```bash
 git clone <repository_url>
 cd msprof_mcp

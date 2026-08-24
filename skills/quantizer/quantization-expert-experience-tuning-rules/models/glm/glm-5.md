@@ -16,7 +16,3 @@
 - `linear_quant` 各段排除 `model.layers.78.*`；MLA 低秩投影 `*kv_b_proj`/`*wk`/`*weights_proj` 排除。
 - 原因：首层与尾部层对量化噪声最敏感，首层误差向后续所有层传播，尾部层输出直接决定最终质量。专家意见可信度：中。
 
-## 3. 校准集与分片
-
-- 校准集 `mix_calib.jsonl` 或 `qwen3_cot_w4a4.json`；`part_file_size: 4`。
-- 原因：混合校准数据策略覆盖更广分布，分片大小需与模型规模匹配。专家意见可信度：低。

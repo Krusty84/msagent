@@ -78,9 +78,27 @@ def test_rejects_every_legacy_marker_without_writing(tmp_path: Path, legacy_entr
 
     message = str(caught.value)
     assert str(paths.home) in message
-    assert legacy_entry in message
+    assert "请手动删除整个目录，然后重新启动 msAgent" in message
     assert {entry.name for entry in paths.home.iterdir()} == before
     assert not paths.metadata_file.exists()
+
+
+def test_legacy_error_requires_removing_the_whole_directory(tmp_path: Path) -> None:
+    paths = _paths(tmp_path)
+    marker = paths.home / "config.llms.yml"
+    marker.parent.mkdir(parents=True)
+    marker.write_text("legacy", encoding="utf-8")
+
+    with pytest.raises(StorageLayoutError) as caught:
+        validate_and_initialize_storage_layout(paths)
+
+    message = str(caught.value)
+    assert message.startswith("msAgent 启动已停止：发现旧版本配置目录。")
+    assert "新版 msAgent 无法使用以下旧版本目录" in message
+    assert str(paths.home) in message
+    assert "请手动删除整个目录，然后重新启动 msAgent" in message
+    assert "本次启动未修改该目录中的任何文件" in message
+    _assert_no_shell_commands(message)
 
 
 @pytest.mark.parametrize("shared_dir", ["skills", "prompts", "cache", "oauth", "logs"])
@@ -99,13 +117,42 @@ def test_rejects_mixed_layout_without_writing(tmp_path: Path) -> None:
     legacy = paths.home / "config.llms.yml"
     legacy.write_text("legacy", encoding="utf-8")
 
-    with pytest.raises(StorageLayoutError, match="Mixed old and new") as caught:
+    with pytest.raises(StorageLayoutError, match="检测到新旧版本配置混用") as caught:
         validate_and_initialize_storage_layout(paths)
 
-    assert "config/" in str(caught.value)
-    assert "config.llms.yml" in str(caught.value)
+    message = str(caught.value)
+    assert "config.llms.yml" in message
+    assert "要继续使用新版 msAgent，建议手动删除" in message
+    assert str(paths.home) in message
+    assert "删除会清除其中的新版配置、项目状态、对话历史和检查点" in message
+    assert "如有需要保留的数据，请在删除前自行备份" in message
+    assert "删除完成后，请重新启动 msAgent；程序会自动创建新版目录" in message
+    assert "本次启动未修改该目录中的任何文件" in message
+    _assert_no_shell_commands(message)
     assert not paths.metadata_file.exists()
     assert not paths.logs_dir.exists()
+
+
+def test_mixed_layout_warning_lists_all_legacy_entries_and_user_skills_risk(tmp_path: Path) -> None:
+    paths = _paths(tmp_path)
+    paths.config_dir.mkdir(parents=True)
+    paths.skills_dir.mkdir()
+    (paths.home / "config.llms.yml").write_text("legacy", encoding="utf-8")
+    (paths.home / "agents").mkdir()
+
+    with pytest.raises(StorageLayoutError) as caught:
+        validate_and_initialize_storage_layout(paths)
+
+    message = str(caught.value)
+    assert "config.llms.yml, agents/" in message
+    assert f"特别注意：{paths.skills_dir} 可能包含你自己添加的 Skill" in message
+    assert "请在删除前单独备份这些用户 Skill" in message
+    assert "新版内置 Skill 由安装包提供，无需备份或恢复" in message
+
+
+def _assert_no_shell_commands(message: str) -> None:
+    for command in ("rm -rf", "mv --", "Remove-Item", "Move-Item", "New-Item", "$backupDir"):
+        assert command not in message
 
 
 @pytest.mark.parametrize(

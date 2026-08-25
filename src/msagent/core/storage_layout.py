@@ -70,9 +70,12 @@ def _inspect_storage_layout(paths: AppPaths) -> int | None:
     legacy_entries = _find_legacy_entries(entries)
     new_entries = _find_new_entries(paths, entries, metadata_version)
     if legacy_entries:
+        skills_present = "skills" in entries
         if new_entries:
-            raise StorageLayoutError(_mixed_layout_message(paths.home, new_entries, legacy_entries))
-        raise StorageLayoutError(_legacy_layout_message(paths.home, legacy_entries))
+            raise StorageLayoutError(
+                _mixed_layout_message(paths.home, legacy_entries, skills_present=skills_present)
+            )
+        raise StorageLayoutError(_legacy_layout_message(paths.home))
 
     _validate_managed_directories(paths.home)
     return metadata_version
@@ -177,26 +180,43 @@ def _path_present(path: Path) -> bool:
     return path.exists() or path.is_symlink()
 
 
-def _legacy_layout_message(home: Path, legacy_entries: tuple[str, ...]) -> str:
-    found = ", ".join(legacy_entries)
+def _legacy_layout_message(home: Path) -> str:
     return (
-        f"Legacy msAgent storage layout detected at {home}.\n"
-        f"Legacy entries: {found}\n"
-        "The current version does not read this old configuration or state, and no files were changed. "
-        f"Back up or rename the directory (for example, to {home}.backup), then remove or move "
-        "the old directory and run msAgent again."
+        "msAgent 启动已停止：发现旧版本配置目录。\n\n"
+        "新版 msAgent 无法使用以下旧版本目录：\n\n"
+        f"  {home}\n\n"
+        "请手动删除整个目录，然后重新启动 msAgent。\n\n"
+        "本次启动未修改该目录中的任何文件。"
     )
 
 
 def _mixed_layout_message(
     home: Path,
-    new_entries: tuple[str, ...],
     legacy_entries: tuple[str, ...],
+    *,
+    skills_present: bool,
 ) -> str:
+    legacy_summary = ", ".join(legacy_entries)
+    skills_note = _skills_backup_note(home) if skills_present else ""
+
     return (
-        f"Mixed old and new msAgent storage layouts detected at {home}.\n"
-        f"New layout entries: {', '.join(new_entries)}\n"
-        f"Legacy entries: {', '.join(legacy_entries)}\n"
-        "No files were changed. Back up the directory and review its contents before manually cleaning "
-        "or rebuilding it; deleting the whole directory may lose new project state."
+        "msAgent 启动已停止：检测到新旧版本配置混用。\n\n"
+        f"目录：\n\n  {home}\n\n"
+        "该目录已经包含新版配置和项目状态，但仍存在旧版残留：\n\n"
+        f"  {legacy_summary}\n\n"
+        "要继续使用新版 msAgent，建议手动删除：\n\n"
+        f"  {home}\n\n"
+        "删除会清除其中的新版配置、项目状态、对话历史和检查点。"
+        "如有需要保留的数据，请在删除前自行备份。\n"
+        f"{skills_note}"
+        "删除完成后，请重新启动 msAgent；程序会自动创建新版目录。\n\n"
+        "本次启动未修改该目录中的任何文件。\n"
+    )
+
+
+def _skills_backup_note(home: Path) -> str:
+    return (
+        f"\n特别注意：{home / 'skills'} 可能包含你自己添加的 Skill。\n"
+        "如需保留，请在删除前单独备份这些用户 Skill；"
+        "新版内置 Skill 由安装包提供，无需备份或恢复。\n"
     )

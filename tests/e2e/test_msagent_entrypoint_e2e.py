@@ -120,7 +120,8 @@ def test_entrypoint_blocks_legacy_global_home_but_allows_help(tmp_path: Path) ->
     output = _normalize_terminal_output(blocked.stdout + blocked.stderr)
     assert blocked.returncode != 0
     assert str(home.resolve()) in output
-    assert "config.llms.yml" in output
+    assert "请手动删除整个目录，然后重新启动 msAgent" in output
+    assert "config.llms.yml" not in output
     assert not (home / "metadata.json").exists()
     assert not (home / "logs").exists()
 

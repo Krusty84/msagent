@@ -25,13 +25,13 @@ description: 计算算子（如 matmul/GEMM）的 MFU（Machine FLOP Utilization
 
 ## 常见芯片理论峰值算力Peak FLOPs参考
 
-- **华为 Ascend 910B1**
+- **Ascend 910B1**
   - FP16/BF16：**≈ 378.88 TFLOPs/s**
-- **华为 Ascend 910B2**
+- **Ascend 910B2**
   - FP16/BF16：**≈ 353.89 TFLOPs/s**
-- **华为 Ascend 910B3**
+- **Ascend 910B3**
   - FP16/BF16：**≈ 294.91 TFLOPs/s**
-- **华为 Ascend 910B4**
+- **Ascend 910B4**
   - FP16/BF16：**≈ 270 TFLOPs/s**
 
 在帮助用户计算 MFU 时，如果用户没有给出确切的峰值算力，可以：

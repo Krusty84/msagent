@@ -95,7 +95,7 @@ msprof op --config=./add_test.json --aic-metrics=Default --output=./output
 | 看源码热点 / 代码行热点 | `Source,Default` | `visualize_data.bin`，通常需 `-g` |
 | 看 L2 / 内存细节 | `MemoryDetail` | L2 命中率、GM 相关搬运量、MTE1/MTE2 活跃带宽 |
 | 看 TimelineDetail 上板指令相关视图 | `TimelineDetail,Default` | 仅 A2/A3 等特定场景支持，限制较多 |
-| 看 Pipe 流水图 | `PipeTimeline` | 仅 Atlas 350 加速卡 |
+| 看 Pipe 流水图 | `PipeTimeline` | 仅昇腾950PR&950DT系列产品 |
 | 只想要最轻量基础信息 | `BasicInfo` | 只生成 `OpBasicInfo.csv` |
 
 ## 6. 结果查看

@@ -151,9 +151,78 @@ spec:
       part_file_size: 4
 ```
 
+## VLM 专属字段
+
+- `spec.default_text`：默认值为 `"Describe this image in detail."`。
+- `spec.dataset`：VLM 校准数据集，默认使用 `calibImages`。
+- `spec.process[].include`：继承基准 Practice 中对应处理器的配置；自动调优过程中不得扩大其作用范围。
+- `spec.process[type=linear_quant].exclude`：由 `protected_exclude` 与 `tuning_exclude` 合并生成。`protected_exclude` 包含基准 Practice 的静态 `exclude`，以及为保护视觉编码器、多模态投影层等非调优模块而增加的固定排除项；`tuning_exclude` 由敏感层搜索增减。
+
+### 静态排除与调优排除
+
+1. 优先选择与当前 `model_type` 和量化方案匹配的已验证 Practice，并原样继承其中的静态 `exclude`。
+2. 静态排除项记录为 `protected_exclude`，自动调优过程中不得删除。
+3. 每轮最终写入 YAML 的 `exclude` 为 `protected_exclude ∪ tuning_exclude`，并保持稳定顺序、去除重复项。
+4. 若没有匹配的已验证 VLM Practice，应根据实际模型结构生成保守基线，确保视觉编码器和多模态投影层不在目标量化处理器的作用范围内；无法确认量化范围时立即返回，不得仅根据通用模块名称推断。
+
+## VLM 完整示例（W8A8 默认配置）
+
+```yaml
+apiversion: multimodal_vlm_modelslim_v1
+metadata:
+  config_id: qwen3_vl_4b_w8a8
+  score: 90
+  verified_model_types:
+    - Qwen3-VL-4B-Instruct
+  label:
+    w_bit: 8
+    a_bit: 8
+    is_sparse: false
+    kv_cache: false
+
+default_w8a8: &default_w8a8
+  act:
+    scope: "per_tensor"
+    dtype: "int8"
+    symmetric: false
+    method: "minmax"
+  weight:
+    scope: "per_channel"
+    dtype: "int8"
+    symmetric: true
+    method: "minmax"
+
+spec:
+  process:
+    - type: "iter_smooth"
+      alpha: 0.9
+      scale_min: 1e-5
+      symmetric: true
+      enable_subgraph_type:
+        - "norm-linear"
+        - "linear-linear"
+        - "ov"
+        - "up-down"
+      include:
+        - "*"
+    - type: "linear_quant"
+      qconfig: *default_w8a8
+      include:
+        - "*"
+      exclude:
+        - "*vit*"
+        - "*visual*"
+        - "*merger*"
+  save:
+    - type: "ascendv1_saver"
+      part_file_size: 4
+  dataset: "calibImages"
+  default_text: "Describe this image in detail."
+```
+
 ## 常见错误
 
 - `metadata.label` 写成字符串而非 dict
 - `type` 与字段不匹配（如 `flex_awq_ssz` 缺少 `qconfig`）
-- `dataset` 虚构不存在的文件名，未用 `lab_calib` 短名
+- `dataset` 指向不存在的路径，或使用了当前安装环境中不存在的短名称
 - `save` 字段的 `type` 不为 `"ascendv1_saver"`

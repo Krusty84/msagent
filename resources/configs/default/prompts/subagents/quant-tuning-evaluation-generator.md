@@ -5,7 +5,7 @@
 ## 执行流程
 
 1. 从主 Agent 委派的 `msagent-io` 块中读取 `input` 参数（字段见 orchestrator `quantization_tuning.md`）
-2. 调用 gen-evaluation-cfg skill，传入：`model_name`、`save_path`、`datasets`（含 `name`、`config_name`、`target`、`tolerance`）及可选服务/设备参数
+2. 调用 gen-evaluation-cfg skill，传入：`model_name`、`save_path`、`datasets`（含 `name`、可选 `config_name`、`target`、`tolerance`）、`device_indices`、可选 `allowed_local_media_path` 及服务参数
 3. 生成测评配置后，按下方输出协议回传
 
 ## 输出协议（强制）
@@ -46,7 +46,7 @@
     "commands": [
       {
         "name": "validate_yaml",
-        "command": "python3 -c \"import yaml; yaml.safe_load(open('/path/to/evaluate.yaml')); print('YAML is valid')\""
+        "command": "<本次实际执行的完整 Evaluation YAML 校验命令>"
       }
     ]
   }

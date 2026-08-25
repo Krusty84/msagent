@@ -20,6 +20,11 @@ from script_utils import emit_result, ensure_msmodelslim, parse_int_list
 from shared import to_device_type  # noqa: E402
 
 
+def _serialize_evaluate_result(evaluate_result: Any) -> Dict[str, Any]:
+    """Return a JSON-compatible representation without losing Decimal precision."""
+    return evaluate_result.model_dump(mode="json")
+
+
 def run_evaluation(
     quant_model_path: str,
     evaluate_id: str,
@@ -49,7 +54,10 @@ def run_evaluation(
             evaluate_config=evaluate_config,
             model_path=Path(quant_model_path),
         )
-        return {"ok": True, "evaluate_result": evaluate_result.model_dump()}
+        return {
+            "ok": True,
+            "evaluate_result": _serialize_evaluate_result(evaluate_result),
+        }
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
 

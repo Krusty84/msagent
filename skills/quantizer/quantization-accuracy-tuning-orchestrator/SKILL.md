@@ -3,7 +3,7 @@ name: quantization-accuracy-tuning-orchestrator
 description: End-to-end automated model quantization and accuracy tuning workflow. Use when user asks for automated model quantization and accuracy tuning, e.g. "自动量化", "量化调优", "一键量化", "精度调优", etc.
 license: Apache-2.0
 metadata:
-  version: 0.9.4
+  version: 0.9.5
   domain: quantization
   framework: msmodelslim
   protocol: mixed
@@ -43,9 +43,10 @@ metadata:
 
 - 支持：
     - Decoder-only LLM 的自动量化与调优
-    - VLM 文本主干的自动量化与调优（仅 LLM/文本路径）
+    - VLM 中语言模型主干的自动量化与调优
 - 不支持：
     - 既非 transformers 也非模型目录内 `modeling_*.py` 的实现
+    - VLM 中视觉编码器和多模态投影层的量化
     - 多模态生成模型（图像/视频/语音生成）的自动量化与调优
 
 ## 本Skill适用范围

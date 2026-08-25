@@ -34,7 +34,9 @@ PracticeConfig validation failed: ...
 **解决**：
 - 检查是否通过 `yaml_validation_validate`
 - 确认 `metadata.label` 是 dict 而非字符串
-- 确认 `apiversion: modelslim_v1`
+- 确认 `apiversion` 与目标 quant service 匹配：
+  - LLM：`modelslim_v1`
+  - VLM：`multimodal_vlm_modelslim_v1`
 
 ---
 

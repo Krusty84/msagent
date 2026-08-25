@@ -3,7 +3,7 @@ name: quant-tuning-quantize
 description: 执行模型量化。通过 msmodelslim quant 依据 Practice YAML 对模型进行量化。
 license: Apache-2.0
 metadata:
-  version: 0.3.0
+  version: 0.3.1
   domain: quantization
   framework: msmodelslim
   protocol: cli

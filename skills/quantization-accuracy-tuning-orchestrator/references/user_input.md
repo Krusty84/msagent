@@ -35,7 +35,7 @@
 | **权重量化位数**（w_bit） | "8bit"/"int8"→8，"4bit"/"int4"→4；**未提及时常用 8**（与 `auto_config_generation.md` 位数表一致） |
 | **激活量化位数**（a_bit） | 常与 w_bit 一致，除非用户指定；组合见 `auto_config_generation.md` |
 | **是否量化 KV 缓存** | 用户提到则开启；默认 false |
-| **校准数据集** | 未指定可用项目默认混合校准集；须符合 `lab_calib` 等治理约束 |
+| **校准数据集** | 用户指定时，须确认其符合当前模型适配器及 `lab_calib` 的格式要求；未指定时， LLM / `modelslim_v1` 使用 `mix_calib.jsonl` ， VLM / `multimodal_vlm_modelslim_v1` 使用 `calibImages` |
 
 **与必填「量化方案」对齐**：用户已说明 **W8A8**、**W4A8** 等时，上表 **w_bit / a_bit**、KV、动态量化相关推导须与之**一致**，不得用另一套默认悄悄覆盖。
 
@@ -66,7 +66,7 @@
 
 ## 调优策略类型
 
-**策略须由用户指定、或由命中的策略 Skill / 项目文档给出**；本参考文件不列出「唯一合法默认算法」。未确定策略前，agent 应在 `msmodelslim/skills` 下用各 **`SKILL.md` 的 frontmatter（`description`、`skill_class` 等）做匹配**，再**按需深读**候选条目并与用户对齐（不必通读所有 Skill）。
+ **策略须由用户指定、或由命中的策略 Skill / 项目文档给出**；本参考文件不列出「唯一合法默认算法」。未确定策略前，agent 应在 `msmodelslim/skills` 下用各 **`SKILL.md` 的 frontmatter（`description`、`skill_class` 等）做匹配**，再**按需深读**候选条目并与用户对齐（不必通读所有 Skill）。
 
 ## 处理流程
 
@@ -84,7 +84,8 @@
 帮我量化 ./models/Qwen2-7B-Chat，结果保存到 ./output/qwen2-7b-npu，要求精度损失不超过 2%
 ```
 
-**自动提取示例**（具体默认值以回显确认为准）：模型路径、保存路径、设备、精度需求、w_bit/a_bit 等。**策略类型**须由会话与 `msmodelslim/skills` 中**按需选中的 `SKILL.md`** 确定，**不**在提取阶段写死摸高或其它单一算法。
+**自动提取示例**（具体默认值以回显确认为准）：模型路径、保存路径、设备、精度需求、w_bit/a_bit 等。
+**策略类型**须由会话与 `msmodelslim/skills` 中**按需选中的 `SKILL.md`** 确定，**不**在提取阶段写死摸高或其它单一算法。
 
 ### 示例 2：更详细的需求
 

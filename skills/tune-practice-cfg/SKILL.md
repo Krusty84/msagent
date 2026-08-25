@@ -3,7 +3,7 @@ name: tune-practice-cfg
 description: Use when 量化调优闭环中需要生成或修改一轮调优所需的 Practice YAML，包括敏感层分析、策略决策、写出 YAML 文件和校验。
 license: Apache-2.0
 metadata:
-  version: 0.1.0
+  version: 0.1.1
   domain: quantization
   framework: msmodelslim
   protocol: cli
@@ -49,7 +49,9 @@ metadata:
 | `save_path` | `str` | 工作目录，Practice YAML 写入此目录下 |
 | `device` | `str` | 分析设备，如 `"npu"`、`"npu:0"`、`"gpu:0,1"` |
 | `strategy` | `str` | 调优策略：`"standing_high"` 或 `"standing_high_with_experience"` |
+| `calib_dataset` | `str \| None` | 可选的校准数据集覆盖值；默认值见 [敏感层分析](references/sensitive_layer_analysis.md) |
 | `max_iterations` | `int` | 最大迭代轮次，由用户指定 |
+| `round` | `int` | 当前调优轮次，用于生成本轮 Practice 文件名 |
 | `prev_result` | `dict \| None` | 上轮评测结果（EvaluateResult 结构），首轮为 `None` |
 | `anchor_practice` | `str \| None` | 当前已知最优且达标的 Practice YAML 路径（锚点） |
 
@@ -63,21 +65,26 @@ metadata:
 
 ```
         ┌─────────────────────┐
-        │   ① 敏感层分析       │  ← 调优任务开始前执行一次
-        │ (msmodelslim analyze)│
+        │ ① 读取/生成基准      │  ← 确定 schema 与静态量化边界
+        │    Practice         │
+        └──────────┬──────────┘
+                   ▼
+        ┌─────────────────────┐
+        │   ② 敏感层分析       │  ← 敏感层分析只执行一次
+        │(msmodelslim analyze)│
         └──────────┬──────────┘
                    │ 敏感度得分文件（各轮复用）
                    ▼
      (>>> 每轮循环 <<<)  ◄──────────────────┐
                    ▼                        │
         ┌─────────────────────────────────┐  │
-        │ ② 根据策略选择回退层              │  │
+        │ ③ 根据策略选择回退层              │  │
         │   + 生成/修改 Practice YAML      │  │
         └──────────┬──────────────────────┘  │
                    │                          │
                    ▼                          │
         ┌─────────────────────┐              │
-        │ ③ 校验 Practice YAML │              │
+        │ ④ 校验 Practice YAML │              │
         │ (validate_practice_  │              │
         │  yaml)               │              │
         └──────────┬──────────┘              │
@@ -90,51 +97,55 @@ metadata:
 
 - 如果你在进行敏感层分析的时候，还有其他卡闲置可用，如果敏感层分析时长较长，则你可以同步地使用其他卡拉起第一轮的量化（注意指定不同的卡，如使用ASCEND_RT_VISIBLE_DEVICES环境变量等方式）以减少串行等待时间。在量化结束后，如果测评需要使用的卡中包含正在进行敏感层分析的卡，则你**必须**等待敏感层分析任务结束后再进行测评任务。
 
-### ① 敏感层分析
+### ① 读取或生成基准 Practice
 
-通过 `execute` 调用 **msmodelslim CLI** 获取当前模型各线性层的量化敏感度得分（score 越高越敏感）。**每个调优任务调用一次**，后续各轮复用该得分结果。注意默认优先使用 **mse_layer_wise** 指标。
+优先从 Practice 仓库中查找与当前 `model_type` 匹配的已验证 Practice；存在多个候选时，返回候选项，由主 Agent 确认后继续。未找到时，按照 [量化配置格式](references/practice_yaml_format.md) 生成保守基准 Practice，保存为 `{save_path}/practice_base.yaml`。基准 Practice 必须在敏感层分析前确定并通过校验。
 
-若 `{save_path}/analysis_result.yaml` 已存在，跳过本步骤，直接复用已有得分。
+从基准 Practice 中继承：
 
-```bash
-msmodelslim analyze layer \
-    --model_type Qwen3-32B \
-    --model_path ${model_path} \
-    --metrics mse_layer_wise \
-    --calib_dataset ${calib_dataset} \
-    --topk 999 \
-    --device npu \
-  2>&1 | tee "${SAVE_PATH}/analysis_console.log"
-```
+- `apiversion`
+- 目标量化处理器的 `include`
+- 因模型能力或已验证经验而存在的静态 `exclude`
+- 当前 schema 要求的其他静态字段，如 VLM 的 `spec.default_text`。
 
-**成功判定**：命令 exit code 为 0。从控制台输出解析各层 `Score`，写入 `{save_path}/analysis_result.yaml`（格式见 [敏感层分析](references/sensitive_layer_analysis.md)）。
+将静态排除项记录为 `protected_exclude`，在全部调优轮次中保持不变。每轮最终写入的 `exclude` 为 `protected_exclude ∪ tuning_exclude`；调优只能增减 `tuning_exclude`，不得删除静态排除项。
 
-若命令失败或超时，可用经验规则占位，仍需产出相同格式的敏感度得分文件供步骤 ② 使用。仅作占位，**弱于**精确分析。
+### ② 敏感层分析
 
-> 完整参数说明、metrics 选项与分析结果结构见 [敏感层分析](references/sensitive_layer_analysis.md)。
+按照[敏感层分析](references/sensitive_layer_analysis.md) 调用 `msmodelslim analyze layer`，获取各 Decoder Block 的量化敏感度得分。每个调优任务只执行一次，结果写入 `{save_path}/analysis_result.yaml`，供后续各轮复用。
+
+复用已有 `analysis_result.yaml` 前，必须按敏感层分析文档验证其结构；校验通过时跳过分析，校验失败时重新执行并覆盖旧结果。
+
+敏感层分析必须遵守基准 Practice 确定的量化边界：
+
+- 使用与后续 Practice `spec.dataset` 一致的校准数据；
+- 根据目标量化处理器的 `include` 确定分析范围；
+- 不得将静态 `exclude` 中的模块作为可调回退项。
+
+分析命令、设备绑定、指标选择、日志保存、成功判定及结果转换均以该文档为准，不在此重复定义。
+
+仅当分析能力不可用或分析超时，且已确认模型、数据集和参数本身合法时，才可用经验规则占位。数据集、模型加载、schema 或参数错误必须立即失败返回，不得用经验规则掩盖。
 
 ---
 
-### ② 策略生成/修改 Practice 并写出 YAML 文件
+### ③ 策略生成/修改 Practice 并写出 YAML 文件
 
 **目的**：根据预计算的敏感度得分和当前轮次的策略需要，选择本轮回退层并确定离群值抑制策略，构造完整的 Practice YAML 内容，并**写入磁盘文件**。
 
 **输入**：
-- 敏感度得分文件 `{save_path}/analysis_result.yaml`（步骤 ① 产出，各轮复用）
+- 敏感度得分文件 `{save_path}/analysis_result.yaml`（步骤 ② 产出，各轮复用）
 - 上轮评测结果 `prev_result`（首轮为 `None`）
 - 当前已知最优且达标的配置（锚点）
 
 **具体动作**：
 
 1. **确定本轮改动**（一次只改一两处字段，从预计算的敏感度得分中选择回退层，遵守同分同退约束）
-2. **构造完整的 Practice YAML 内容**（对齐 `modelslim_v1` 格式，详见 [量化配置格式](references/practice_yaml_format.md)）
+2. **构造完整的 Practice YAML 内容**：继承基准 Practice 的 `apiversion` 和静态字段，仅修改当前策略允许的调优字段，详见 [量化配置格式](references/practice_yaml_format.md)
 3. **写出文件**：将 YAML 内容写入 `{save_path}/practice_round_{N}.yaml`（N 为当前轮次），得到 `practice_path`
 
 | 改动项 | 说明 | 对应 YAML 位置 |
 |--------|------|----------------|
-| 调整 `exclude` | 增减回退层 | `spec.process[].exclude` |
-| 替换离群值抑制 | `iter_smooth` ↔ `flex_smooth_quant` ↔ `flex_awq_ssz` | `spec.process[].type` |
-| 调整抑制强度 | 如 `flex_awq_ssz` 的 `step`、`enable_subgraph_type` | `spec.process[].qconfig.ext` |
+| 调整 `tuning_exclude` | 增减敏感层回退；最终与 `protected_exclude` 取并集 | `spec.process[].exclude` |
 
 **修改粒度**：
 - **一次只改一两处字段**，避免多因素同时变化导致无法归因
@@ -156,7 +167,7 @@ msmodelslim analyze layer \
 
 ---
 
-### ③ 校验 Practice YAML
+### ④ 校验 Practice YAML
 
 **脚本调用**：
 
@@ -201,7 +212,7 @@ python skills/tune-practice-cfg/scripts/validate_practice_yaml.py --practice-pat
 
 | 约束 | 说明 |
 |------|------|
-| ① 在首轮前调用一次 | 敏感度得分每个调优任务计算一次，各轮复用 |
+| ② 在首轮前调用一次 | 敏感度得分每个调优任务计算一次，各轮复用 |
 | 一次只改一两处 | exclude 或离群值抑制，避免多因素同时变化 |
 | 保留锚点 | 始终保留一份当前已知最优且达标的配置，掉精度可回滚 |
 | 校验必过 | `valid=false` 时不可继续，必须修正后重新校验 |
@@ -210,8 +221,6 @@ python skills/tune-practice-cfg/scripts/validate_practice_yaml.py --practice-pat
 ## 常见错误
 
 - 回退层选择时拆分同分同退组（应整体回退或整体保留）
-- 一次同时改 exclude + 抑制策略 + 校准集，无法归因
 - `metadata.label` 写成字符串而非 dict
-- `type` 与字段不匹配（如 `flex_awq_ssz` 缺少 `qconfig`），参见 [量化配置格式](references/practice_yaml_format.md)
 - `valid=false` 仍继续后续步骤
 - 命令行参数 `--device` 未使用 `npu:0` 这种格式，错误地使用了 `DeviceType.NPU`

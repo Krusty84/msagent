@@ -107,6 +107,49 @@ def test_entrypoint_version_and_config_show(tmp_path: Path) -> None:
     assert not (tmp_path / "global-home" / "config" / "agents").exists()
 
 
+def test_entrypoint_blocks_legacy_global_home_but_allows_help(tmp_path: Path) -> None:
+    # This also models running from the user's home, where workspace/.msagent
+    # and the default global directory are the same path.
+    home = tmp_path / ".msagent"
+    home.mkdir()
+    legacy_file = home / "config.llms.yml"
+    legacy_file.write_text("legacy", encoding="utf-8")
+    env = {"MSAGENT_HOME": str(home)}
+
+    blocked = _run_msagent("config", "--show", cwd=tmp_path, env=env)
+    output = _normalize_terminal_output(blocked.stdout + blocked.stderr)
+    assert blocked.returncode != 0
+    assert str(home.resolve()) in output
+    assert "config.llms.yml" in output
+    assert not (home / "metadata.json").exists()
+    assert not (home / "logs").exists()
+
+    help_result = _run_msagent("--help", cwd=tmp_path, env=env)
+    assert help_result.returncode == 0
+    assert legacy_file.read_text(encoding="utf-8") == "legacy"
+
+
+def test_workspace_legacy_residue_does_not_block_global_layout(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    residue = workspace / ".msagent" / "config.llms.yml"
+    residue.parent.mkdir(parents=True)
+    residue.write_text("legacy workspace config", encoding="utf-8")
+    home = tmp_path / "global-home"
+
+    result = _run_msagent(
+        "config",
+        "--show",
+        "-w",
+        str(workspace),
+        cwd=workspace,
+        env={"MSAGENT_HOME": str(home)},
+    )
+
+    assert result.returncode == 0
+    assert (home / "metadata.json").is_file()
+    assert residue.read_text(encoding="utf-8") == "legacy workspace config"
+
+
 def test_entrypoint_one_shot_tool_call_and_todo_render(tmp_path: Path) -> None:
     env = {
         "MSAGENT_FAKE_BACKEND": "1",

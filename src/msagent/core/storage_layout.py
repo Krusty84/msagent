@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import os
+import platform
+import shlex
 import uuid
 from pathlib import Path
 
@@ -70,9 +72,14 @@ def _inspect_storage_layout(paths: AppPaths) -> int | None:
     legacy_entries = _find_legacy_entries(entries)
     new_entries = _find_new_entries(paths, entries, metadata_version)
     if legacy_entries:
+        skills_present = "skills" in entries
         if new_entries:
-            raise StorageLayoutError(_mixed_layout_message(paths.home, new_entries, legacy_entries))
-        raise StorageLayoutError(_legacy_layout_message(paths.home, legacy_entries))
+            raise StorageLayoutError(
+                _mixed_layout_message(paths.home, legacy_entries, skills_present=skills_present)
+            )
+        raise StorageLayoutError(
+            _legacy_layout_message(paths.home, legacy_entries, skills_present=skills_present)
+        )
 
     _validate_managed_directories(paths.home)
     return metadata_version
@@ -177,26 +184,137 @@ def _path_present(path: Path) -> bool:
     return path.exists() or path.is_symlink()
 
 
-def _legacy_layout_message(home: Path, legacy_entries: tuple[str, ...]) -> str:
-    found = ", ".join(legacy_entries)
+def _legacy_layout_message(
+    home: Path,
+    legacy_entries: tuple[str, ...],
+    *,
+    skills_present: bool,
+) -> str:
+    found = "\n  ".join(legacy_entries)
+    rename_command, delete_command = _legacy_layout_commands(home)
+    backup_skills = home.with_name(f"{home.name}.backup") / "skills"
+    skills_note = ""
+    delete_step = 3
+    if skills_present:
+        skills_note = (
+            "3. 检查备份目录中的 Skill：\n\n"
+            f"  {backup_skills}\n\n"
+            "   该目录可能同时包含旧版内置 Skill 和你自己添加的 Skill，程序无法自动区分。\n"
+            "   新版内置 Skill 由安装包提供，无需恢复；请只复制你自己添加的 Skill，"
+            "不要恢复整个 skills 目录。\n\n"
+        )
+        delete_step = 4
     return (
-        f"Legacy msAgent storage layout detected at {home}.\n"
-        f"Legacy entries: {found}\n"
-        "The current version does not read this old configuration or state, and no files were changed. "
-        f"Back up or rename the directory (for example, to {home}.backup), then remove or move "
-        "the old directory and run msAgent again."
+        "msAgent 启动已停止：发现旧版本配置目录。\n\n"
+        "你当前使用的是新版 msAgent，但系统中仍存在旧版本目录：\n\n"
+        f"  {home}\n\n"
+        "新版和旧版使用不同的目录结构，旧目录中的配置不会自动迁移。\n"
+        "如果继续启动，可能会使用默认配置而不是你以前的配置，因此程序没有继续运行。\n\n"
+        "检测到的旧版内容：\n\n"
+        f"  {found}\n\n"
+        "本次未修改旧目录中的任何文件。请按以下步骤操作：\n\n"
+        "1. 重命名旧目录进行备份：\n\n"
+        f"{rename_command}\n\n"
+        "2. 重新运行 msAgent，可以先查看新版配置：\n\n"
+        "  msagent config --show\n\n"
+        "   或者直接启动：\n\n"
+        "  msagent\n\n"
+        f"{skills_note}"
+        f"{delete_step}. 确认新版配置和运行状态正常后，如果不再需要旧数据，"
+        "可以删除备份目录：\n\n"
+        f"{delete_command}"
     )
 
 
 def _mixed_layout_message(
     home: Path,
-    new_entries: tuple[str, ...],
     legacy_entries: tuple[str, ...],
+    *,
+    skills_present: bool,
 ) -> str:
+    legacy_names = tuple(entry.rstrip("/") for entry in legacy_entries)
+    legacy_summary = ", ".join(legacy_entries)
+    reset_command, prepare_backup_commands, move_legacy_command = _mixed_layout_commands(home, legacy_names)
+    skills_dir = home / "skills"
+    skills_note = ""
+    restart_step = 3
+    if skills_present:
+        skills_note = (
+            f"\n\n3. 检查 {skills_dir} 中的 Skill。\n\n"
+            "   skills 目录由新旧版本共用，因此没有列入上面的旧版残留。\n"
+            "   它可能同时包含旧版内置 Skill 和你自己添加的 Skill，程序无法自动区分。\n"
+            "   新版内置 Skill 由安装包提供，无需保留；请只保留你自己添加的 Skill。"
+        )
+        restart_step = 4
+
     return (
-        f"Mixed old and new msAgent storage layouts detected at {home}.\n"
-        f"New layout entries: {', '.join(new_entries)}\n"
-        f"Legacy entries: {', '.join(legacy_entries)}\n"
-        "No files were changed. Back up the directory and review its contents before manually cleaning "
-        "or rebuilding it; deleting the whole directory may lose new project state."
+        "msAgent 启动已停止：检测到新旧版本配置混用。\n\n"
+        f"目录：\n\n  {home}\n\n"
+        "该目录已经包含新版配置和项目状态，但仍存在旧版残留：\n\n"
+        f"  {legacy_summary}\n\n"
+        "你可以选择以下任一方案：\n\n"
+        "方案一：删除整个目录并重新初始化\n\n"
+        "风险：这会删除新版配置、项目状态、对话历史、检查点以及你自己添加的 Skill。\n\n"
+        "如果不需要保留任何数据，请按以下步骤操作：\n\n"
+        "1. 删除整个目录：\n\n"
+        f"{reset_command}\n\n"
+        "2. 重新运行 msAgent：\n\n"
+        "  msagent\n\n"
+        "方案二：保留新版数据，只清理旧版残留\n\n"
+        "请按以下步骤操作：\n\n"
+        "1. 创建备份目录：\n\n"
+        f"{prepare_backup_commands}\n\n"
+        "2. 将检测到的旧版内容移到备份目录：\n\n"
+        f"{move_legacy_command}"
+        f"{skills_note}\n\n"
+        f"{restart_step}. 处理完成后重新运行：\n\n"
+        "  msagent"
     )
+
+
+def _legacy_layout_commands(home: Path) -> tuple[str, str]:
+    backup = f"{home}.backup"
+    if _is_windows():
+        return (
+            f"  Move-Item -LiteralPath {_powershell_quote(str(home))} "
+            f"-Destination {_powershell_quote(backup)}",
+            f"  Remove-Item -LiteralPath {_powershell_quote(backup)} -Recurse -Force",
+        )
+    return (
+        f"  mv -- {shlex.quote(str(home))} {shlex.quote(backup)}",
+        f"  rm -rf -- {shlex.quote(backup)}",
+    )
+
+
+def _mixed_layout_commands(home: Path, legacy_names: tuple[str, ...]) -> tuple[str, str, str]:
+    if _is_windows():
+        home_text = _powershell_quote(str(home))
+        backup_prefix = _powershell_quote(f"{home}-legacy-backup-")
+        entries = ", ".join(_powershell_quote(name) for name in legacy_names)
+        return (
+            f"  Remove-Item -LiteralPath {home_text} -Recurse -Force",
+            f"  $backupDir = {backup_prefix} + (Get-Date -Format 'yyyyMMdd-HHmmss')\n"
+            "  New-Item -ItemType Directory -Path $backupDir | Out-Null",
+            f"  $legacyEntries = @({entries})\n"
+            "  $legacyEntries | ForEach-Object {\n"
+            f"    Move-Item -LiteralPath (Join-Path {home_text} $_) -Destination $backupDir\n"
+            "  }",
+        )
+
+    home_text = shlex.quote(str(home))
+    move_sources = " ".join(shlex.quote(name) for name in legacy_names)
+    backup_prefix = shlex.quote(f"{home}-legacy-backup-")
+    return (
+        f"  rm -rf -- {home_text}",
+        f"  backup_dir={backup_prefix}$(date +%Y%m%d-%H%M%S)\n"
+        '  mkdir -p "$backup_dir"',
+        f"  (cd {home_text} && mv -- {move_sources} \"$backup_dir\"/)",
+    )
+
+
+def _is_windows() -> bool:
+    return platform.system().lower() == "windows"
+
+
+def _powershell_quote(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"

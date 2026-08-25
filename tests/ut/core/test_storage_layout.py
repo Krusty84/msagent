@@ -83,6 +83,25 @@ def test_rejects_every_legacy_marker_without_writing(tmp_path: Path, legacy_entr
     assert not paths.metadata_file.exists()
 
 
+def test_legacy_error_explains_reason_and_recovery_steps(tmp_path: Path) -> None:
+    paths = _paths(tmp_path)
+    marker = paths.home / "config.llms.yml"
+    marker.parent.mkdir(parents=True)
+    marker.write_text("legacy", encoding="utf-8")
+
+    with pytest.raises(StorageLayoutError) as caught:
+        validate_and_initialize_storage_layout(paths)
+
+    message = str(caught.value)
+    assert message.startswith("msAgent 启动已停止：发现旧版本配置目录。")
+    assert "新版和旧版使用不同的目录结构，旧目录中的配置不会自动迁移。" in message
+    assert "如果继续启动，可能会使用默认配置而不是你以前的配置" in message
+    assert f"mv {paths.home} {paths.home}.backup" in message
+    assert "msagent config --show" in message
+    assert "  msagent\n" in message
+    assert f"rm -rf {paths.home}.backup" in message
+
+
 @pytest.mark.parametrize("shared_dir", ["skills", "prompts", "cache", "oauth", "logs"])
 def test_shared_directory_alone_is_not_legacy(tmp_path: Path, shared_dir: str) -> None:
     paths = _paths(tmp_path)

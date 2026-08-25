@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import uuid
 from pathlib import Path
 
@@ -178,13 +179,25 @@ def _path_present(path: Path) -> bool:
 
 
 def _legacy_layout_message(home: Path, legacy_entries: tuple[str, ...]) -> str:
-    found = ", ".join(legacy_entries)
+    found = "\n  ".join(legacy_entries)
+    home_text = shlex.quote(str(home))
+    backup_text = shlex.quote(f"{home}.backup")
     return (
-        f"Legacy msAgent storage layout detected at {home}.\n"
-        f"Legacy entries: {found}\n"
-        "The current version does not read this old configuration or state, and no files were changed. "
-        f"Back up or rename the directory (for example, to {home}.backup), then remove or move "
-        "the old directory and run msAgent again."
+        "msAgent 启动已停止：发现旧版本配置目录。\n\n"
+        "你当前使用的是新版 msAgent，但系统中仍存在旧版本目录：\n\n"
+        f"  {home}\n\n"
+        "新版和旧版使用不同的目录结构，旧目录中的配置不会自动迁移。\n"
+        "如果继续启动，可能会使用默认配置而不是你以前的配置，因此程序没有继续运行。\n\n"
+        "检测到的旧版内容：\n\n"
+        f"  {found}\n\n"
+        "本次未修改旧目录中的任何文件。请先重命名旧目录进行备份：\n\n"
+        f"  mv {home_text} {backup_text}\n\n"
+        "然后重新运行 msAgent：\n\n"
+        "  msagent config --show\n\n"
+        "或者直接启动：\n\n"
+        "  msagent\n\n"
+        "确认新版配置和运行状态正常后，如果不再需要旧数据，可以删除备份目录：\n\n"
+        f"  rm -rf {backup_text}"
     )
 
 

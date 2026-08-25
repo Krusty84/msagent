@@ -46,6 +46,10 @@ class AppPaths:
         return self.home / "config"
 
     @property
+    def metadata_file(self) -> Path:
+        return self.home / "metadata.json"
+
+    @property
     def prompts_dir(self) -> Path:
         return self.home / "prompts"
 

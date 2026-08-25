@@ -12,6 +12,7 @@ def test_app_paths_uses_msagent_home(tmp_path: Path) -> None:
     paths = AppPaths.resolve({"MSAGENT_HOME": str(home)})
 
     assert paths.home == home.resolve()
+    assert paths.metadata_file == home.resolve() / "metadata.json"
     assert paths.config_dir == home.resolve() / "config"
     assert paths.projects_dir == home.resolve() / "state" / "projects"
 

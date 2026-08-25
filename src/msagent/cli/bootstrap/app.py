@@ -17,6 +17,7 @@ from msagent.cli.bootstrap.legacy import (
 from msagent.cli.theme import console
 from msagent.core.logging import configure_logging, get_logger
 from msagent.core.paths import AppPaths
+from msagent.core.storage_layout import StorageLayoutError, validate_and_initialize_storage_layout
 
 
 def create_parser():
@@ -46,10 +47,17 @@ async def main() -> int:
         args = parser.parse_args(argv)
 
     working_dir = Path(getattr(args, "working_dir", Path.cwd()))
+    app_paths = AppPaths.resolve()
+    try:
+        validate_and_initialize_storage_layout(app_paths)
+    except StorageLayoutError as exc:
+        console.print_error(str(exc))
+        return 1
+
     configure_logging(
         show_logs=getattr(args, "verbose", False),
         working_dir=working_dir,
-        log_dir=AppPaths.resolve().logs_dir,
+        log_dir=app_paths.logs_dir,
     )
     logger = get_logger(__name__)
 

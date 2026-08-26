@@ -23,6 +23,7 @@ class Context(BaseModel):
     model_display: str | None = None
     thread_id: str
     working_dir: Path
+    state_dir: Path | None = None
     approval_mode: ApprovalMode = ApprovalMode.ACTIVE
     bash_mode: bool = False
     current_input_tokens: int | None = None
@@ -72,17 +73,21 @@ class Context(BaseModel):
             agent_config = await initializer.load_agent_config(agent, working_dir)
 
         thread_id = str(uuid.uuid4())
+        resolved_agent = agent_config.name
+        workspace_model = None
+        if model is None:
+            workspace_model = await initializer.get_current_model(resolved_agent, working_dir)
+        selected_model = model or workspace_model
 
-        if model:
+        if selected_model:
             with timer("Load LLM config"):
-                llm_config = await initializer.load_llm_config(model, working_dir)
+                llm_config = await initializer.load_llm_config(selected_model, working_dir)
         else:
             llm_config = agent_config.llm
 
         tool_output_max_tokens = agent_config.tools.output_max_tokens if agent_config.tools else None
 
-        resolved_agent = agent or agent_config.name
-        resolved_model = model or agent_config.llm.alias
+        resolved_model = selected_model or agent_config.llm.alias
         resolved_model_display = cls.format_model_display(resolved_model, llm_config)
 
         logger.info(
@@ -100,6 +105,7 @@ class Context(BaseModel):
             model_display=resolved_model_display,
             thread_id=thread_id,
             working_dir=working_dir,
+            state_dir=initializer.get_project_paths(working_dir).root,
             approval_mode=approval_mode or ApprovalMode.ACTIVE,
             context_window=llm_config.context_window,
             recursion_limit=agent_config.recursion_limit,

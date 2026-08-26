@@ -1,63 +1,105 @@
 #!/usr/bin/env bash
-# Install msAgent with uv.
+# =============================================================================
+# msAgent installer for Linux / macOS / WSL
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/kali20gakki/msAgent/main/scripts/install.sh | bash
+#   curl -LsSf https://raw.gitcode.com/Ascend/msagent/raw/master/scripts/install.sh | bash
+#
+# What it does:
+#   1. Preflight checks (network, existing pip install, downloader availability)
+#   2. Bootstraps uv (official installer first, pip + domestic mirror as fallback)
+#   3. Installs mindstudio-agent (latest from PyPI) into an isolated uv tool env:
+#        uv tool install -U --python 3.11 mindstudio-agent --with-executables-from msprof-mcp
+#   4. Adds the tool bin directory to PATH (shell profiles, idempotent)
+#   5. Verifies: msagent --version
+#
+# The installer never pins a version: it always installs the latest
+# mindstudio-agent from PyPI, so releases do not require touching this script.
+# The uv tool environment is fully isolated, so it will not conflict with any
+# existing Python environment (system Python, torch, mindstudio_monitor, ...).
 #
 # Environment variables:
-#   MSAGENT_PACKAGE_SPEC           Package spec passed to `uv tool install`
-#                                  (default: mindstudio-agent)
-#   MSAGENT_PYTHON                Python version for the tool environment
-#                                  (default: 3.11)
-#   MSAGENT_WITH_EXECUTABLES_FROM Additional package whose executables should
-#                                  be exposed alongside msagent
-#                                  (default: msprof-mcp)
-#   UV_BIN                        Path to uv binary (auto-detected if unset)
+#   MSAGENT_PYTHON            Python version for the isolated tool env (default: 3.11)
+#   MSAGENT_VERSION           Exact version to install, e.g. "26.1.0" (default: latest)
+#   MSAGENT_INDEX             PyPI index URL override (default: domestic mirror chain)
+#   MSAGENT_NO_MODIFY_PATH    set to 1 to skip all PATH modification
+#   MSAGENT_YES               set to 1 to accept prompts without asking (CI/cron)
+#   MSAGENT_NO_FALLBACK       set to 1 to disable the venv fallback
+#   MSAGENT_FALLBACK_VENV     venv path used by the fallback install (default: ~/.msagent-venv)
+#   MSAGENT_WITH_EXECUTABLES_FROM  package whose executables are exposed too (default: msprof-mcp)
+#   UV_DEFAULT_INDEX / UV_INDEX_URL / PIP_INDEX_URL  used as a last-resort fallback
+#   UV_PYTHON_INSTALL_MIRROR  mirror for managed CPython downloads (domestic default)
+#
+# Uninstall:
+#   uv tool uninstall mindstudio-agent
+#   Optionally remove the PATH entries this installer added to your profiles.
+#
+# Upgrade:
+#   Just re-run the installer; it always upgrades to the latest release.
+# =============================================================================
 
 set -euo pipefail
 
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
 if [ -t 1 ] || [ "${FORCE_COLOR:-}" = "1" ]; then
-  RED='\033[0;31m'
-  GREEN='\033[0;32m'
-  YELLOW='\033[0;33m'
-  CYAN='\033[0;36m'
-  BOLD='\033[1m'
-  NC='\033[0m'
+  RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'; CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 else
-  RED='' GREEN='' YELLOW='' CYAN='' BOLD='' NC=''
+  RED=''; GREEN=''; YELLOW=''; CYAN=''; BOLD=''; NC=''
 fi
 
-log_info() { printf "${CYAN}▸${NC} %s\n" "$*"; }
+log_info()    { printf "${CYAN}▸${NC} %s\n" "$*"; }
 log_success() { printf "${GREEN}✔${NC} %s\n" "$*"; }
-log_warn() { printf "${YELLOW}⚠${NC} %s\n" "$*" >&2; }
-log_error() { printf "${RED}✖${NC} %s\n" "$*" >&2; }
+log_warn()    { printf "${YELLOW}⚠${NC} %s\n" "$*" >&2; }
+log_error()   { printf "${RED}✖${NC} %s\n" "$*" >&2; }
 
-cleanup() {
-  local exit_code=$?
-  if [ "${exit_code}" -ne 0 ]; then
-    echo "" >&2
-    log_error "msAgent installation failed (exit code ${exit_code})."
-    log_error "You can retry with:"
-    log_error "  pip install -U mindstudio-agent"
+# Works both interactively and under `curl ... | bash` (reads from /dev/tty).
+prompt_yn() {
+  [ "${MSAGENT_YES:-0}" = "1" ] && return 0
+  local answer
+  printf "${YELLOW}?${NC} %s [y/N] " "$*" >&2
+  if [ -t 0 ]; then
+    read -r answer || return 1
+  elif [ -r /dev/tty ]; then
+    read -r answer < /dev/tty || return 1
+  else
+    log_warn "Non-interactive shell; assuming 'no'."
+    return 1
   fi
+  case "${answer}" in
+    y|Y|yes|YES|Yes) return 0 ;;
+    *) return 1 ;;
+  esac
 }
-trap cleanup EXIT
 
+# ---------------------------------------------------------------------------
+# OS / environment detection
+# ---------------------------------------------------------------------------
 detect_os() {
   case "$(uname -s)" in
     Darwin) OS="macos" ;;
-    Linux) OS="linux" ;;
+    Linux)  OS="linux" ;;
     MINGW*|MSYS*|CYGWIN*) OS="windows" ;;
     *) OS="unknown" ;;
   esac
 }
 detect_os
 
-if [ "${OS}" = "windows" ]; then
-  log_error "This installer targets Linux, macOS, and WSL shells."
-  log_error "On Windows, please use: pip install -U mindstudio-agent"
-  exit 1
-fi
+case "${OS}" in
+  linux|macos) ;;
+  windows)
+    log_error "This installer targets Linux, macOS, and WSL shells."
+    log_error "On native Windows (PowerShell), use:"
+    log_error "  irm https://raw.gitcode.com/Ascend/msagent/raw/master/scripts/install.ps1 | iex"
+    exit 1
+    ;;
+  *)
+    log_error "Unsupported operating system. Please install msagent manually:"
+    log_error "  python3 -m venv ~/.msagent-venv && ~/.msagent-venv/bin/pip install -U mindstudio-agent"
+    exit 1
+    ;;
+esac
 
 # macOS MDM/root installs may run without a usable HOME. Re-home to the real
 # console user so uv installs into the expected profile directory.
@@ -69,6 +111,7 @@ if [ "${OS}" = "macos" ] && { [ -z "${HOME:-}" ] || [ "$(id -u)" -eq 0 ]; }; the
   fi
 fi
 
+# root runs: install into the invoking user's profile, then fix ownership.
 if [ "$(id -u)" -eq 0 ]; then
   TARGET_USER="${SUDO_USER:-${CONSOLE_USER:-$(basename "${HOME:-root}")}}"
   if [ -z "${TARGET_USER}" ] || [ "${TARGET_USER}" = "root" ]; then
@@ -83,81 +126,386 @@ else
   fix_owner() { :; }
 fi
 
-PACKAGE_SPEC="${MSAGENT_PACKAGE_SPEC:-mindstudio-agent}"
-PYTHON_VERSION="${MSAGENT_PYTHON:-3.11}"
-WITH_EXECUTABLES_FROM="${MSAGENT_WITH_EXECUTABLES_FROM:-msprof-mcp}"
-TOOL_BIN_DIR="${UV_TOOL_BIN_DIR:-${HOME}/.local/bin}"
-TOOL_DATA_DIR="${UV_TOOL_DIR:-${HOME}/.local/share/uv}"
-
-install_uv() {
-  if command -v curl >/dev/null 2>&1; then
-    log_info "Installing uv..."
-    curl -fsSL https://astral.sh/uv/install.sh | sh
-    return
-  fi
-  if command -v wget >/dev/null 2>&1; then
-    log_info "Installing uv..."
-    wget -qO- https://astral.sh/uv/install.sh | sh
-    return
-  fi
-  log_error "curl or wget is required to install uv."
+# ---------------------------------------------------------------------------
+# Preflight
+# ---------------------------------------------------------------------------
+if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
+  log_error "curl or wget is required to download the installer assets."
   exit 1
+fi
+
+probe_url() {
+  local url="$1"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsS -o /dev/null --connect-timeout 6 --max-time 12 -I "${url}" 2>/dev/null && return 0
+    curl -fsS -o /dev/null --connect-timeout 6 --max-time 12 "${url}" 2>/dev/null && return 0
+  elif command -v wget >/dev/null 2>&1; then
+    wget -q --spider --timeout=6 --tries=1 "${url}" 2>/dev/null && return 0
+  fi
+  return 1
 }
 
-if ! command -v uv >/dev/null 2>&1; then
-  install_uv
-  fix_owner "${HOME}/.local/bin"
+# Warn about an existing pip-installed msagent that may shadow the uv tool.
+if command -v pip >/dev/null 2>&1 && pip show mindstudio-agent >/dev/null 2>&1; then
+  log_warn "mindstudio-agent is already installed via pip in this environment."
+  log_warn "The uv tool install below is isolated and will not modify it, but the"
+  log_warn "two executables may shadow each other on PATH. Consider:"
+  log_warn "  pip uninstall mindstudio-agent"
 fi
 
-if [ -z "${UV_BIN:-}" ]; then
-  UV_BIN="uv"
-  if ! command -v "${UV_BIN}" >/dev/null 2>&1; then
-    if [ -f "${HOME}/.local/bin/env" ]; then
-      # shellcheck source=/dev/null
-      . "${HOME}/.local/bin/env"
+# ---------------------------------------------------------------------------
+# Index selection: Huawei Cloud first, then other domestic mirrors, official
+# PyPI as fallback; generic index env vars are used only as a last resort.
+# ---------------------------------------------------------------------------
+select_index() {
+  local candidate
+  if [ -n "${MSAGENT_INDEX:-}" ]; then
+    INDEX="${MSAGENT_INDEX}"
+    log_info "Using index from MSAGENT_INDEX: ${INDEX}"
+    return 0
+  fi
+  for candidate in \
+    "https://mirrors.huaweicloud.com/repository/pypi/simple" \
+    "https://mirrors.aliyun.com/pypi/simple" \
+    "https://pypi.tuna.tsinghua.edu.cn/simple" \
+    "https://pypi.org/simple"; do
+    if probe_url "${candidate}/pip/"; then
+      INDEX="${candidate}"
+      log_info "Selected PyPI index: ${candidate}"
+      return 0
+    fi
+    log_warn "Index unreachable: ${candidate} (trying the next candidate)"
+  done
+  # All mirror candidates are unreachable; fall back to a user-configured
+  # generic index if one exists, otherwise use official PyPI.
+  if [ -n "${UV_DEFAULT_INDEX:-}" ]; then
+    INDEX="${UV_DEFAULT_INDEX}"
+    log_info "Fallback to UV_DEFAULT_INDEX: ${INDEX}"
+    return 0
+  fi
+  if [ -n "${UV_INDEX_URL:-}" ]; then
+    INDEX="${UV_INDEX_URL}"
+    log_info "Fallback to UV_INDEX_URL: ${INDEX}"
+    return 0
+  fi
+  if [ -n "${PIP_INDEX_URL:-}" ]; then
+    INDEX="${PIP_INDEX_URL}"
+    log_info "Fallback to PIP_INDEX_URL: ${INDEX}"
+    return 0
+  fi
+  INDEX="https://pypi.org/simple"
+  log_warn "No reachable index found; defaulting to ${INDEX}."
+}
+select_index
+
+# ---------------------------------------------------------------------------
+# uv bootstrap: official installer, then pip + domestic mirror as fallback.
+# ---------------------------------------------------------------------------
+UV_BIN="${UV_BIN:-}"
+bootstrap_uv() {
+  if [ -n "${UV_BIN:-}" ]; then
+    if [ -x "${UV_BIN}" ] || command -v "${UV_BIN}" >/dev/null 2>&1; then
+      log_info "Using uv from UV_BIN: ${UV_BIN}"
+      return 0
+    fi
+    log_warn "UV_BIN is set but not executable: ${UV_BIN}"
+    UV_BIN=""
+  fi
+  if command -v uv >/dev/null 2>&1; then
+    UV_BIN="uv"
+    return 0
+  fi
+  if [ -x "${HOME}/.local/bin/uv" ]; then
+    UV_BIN="${HOME}/.local/bin/uv"
+    return 0
+  fi
+
+  log_info "uv is not installed. Bootstrapping uv..."
+  if command -v curl >/dev/null 2>&1 && curl -fsSL https://astral.sh/uv/install.sh | sh; then
+    :
+  elif command -v wget >/dev/null 2>&1 && wget -qO- https://astral.sh/uv/install.sh | sh; then
+    :
+  else
+    log_warn "Official uv installer failed or timed out; trying pip + ${INDEX} ..."
+    local pybin=""
+    if command -v python3 >/dev/null 2>&1; then pybin="python3"
+    elif command -v python >/dev/null 2>&1; then pybin="python"
+    else
+      log_error "python3 is required to bootstrap uv via pip."
+      log_error "Install uv manually (https://docs.astral.sh/uv/getting-started/installation/) and re-run this installer."
+      return 1
+    fi
+    local errfile
+    errfile="$(mktemp)"
+    if ! "${pybin}" -m pip install --user -q -U uv -i "${INDEX}" 2>"${errfile}"; then
+      if grep -q "externally-managed" "${errfile}" 2>/dev/null; then
+        log_warn "PEP 668 externally-managed environment detected; retrying with --break-system-packages ..."
+        "${pybin}" -m pip install --user -q -U --break-system-packages uv -i "${INDEX}" || {
+          cat "${errfile}" >&2
+          rm -f "${errfile}"
+          log_error "uv could not be installed. Install it manually and re-run this installer."
+          return 1
+        }
+      else
+        cat "${errfile}" >&2
+        rm -f "${errfile}"
+        log_error "uv could not be installed. Install it manually and re-run this installer."
+        return 1
+      fi
+    fi
+    rm -f "${errfile}"
+  fi
+
+  if [ -x "${HOME}/.local/bin/uv" ]; then
+    UV_BIN="${HOME}/.local/bin/uv"
+    return 0
+  fi
+  if command -v uv >/dev/null 2>&1; then
+    UV_BIN="uv"
+    return 0
+  fi
+  if [ -f "${HOME}/.local/bin/env" ]; then
+    # shellcheck source=/dev/null
+    . "${HOME}/.local/bin/env"
+    if command -v uv >/dev/null 2>&1; then
+      UV_BIN="uv"
+      return 0
     fi
   fi
-  if ! command -v uv >/dev/null 2>&1; then
-    UV_BIN="${HOME}/.local/bin/uv"
+  log_error "uv is not available after bootstrap. Restart your shell and re-run, or add ~/.local/bin to PATH."
+  return 1
+}
+bootstrap_uv
+
+# ---------------------------------------------------------------------------
+# Managed CPython downloads: prefer a domestic mirror for python-build-standalone.
+# ---------------------------------------------------------------------------
+if [ -z "${UV_PYTHON_INSTALL_MIRROR:-}" ]; then
+  export UV_PYTHON_INSTALL_MIRROR="https://mirror.nju.edu.cn/github-release/astral-sh/python-build-standalone"
+  log_info "UV_PYTHON_INSTALL_MIRROR=${UV_PYTHON_INSTALL_MIRROR} (set it yourself to override)"
+fi
+
+# ---------------------------------------------------------------------------
+# Path setup helpers (defined before use)
+# ---------------------------------------------------------------------------
+ORIGINAL_PATH="${PATH:-}"
+TOOL_BIN_DIR="$("${UV_BIN}" tool dir --bin 2>/dev/null || true)"
+[ -n "${TOOL_BIN_DIR}" ] || TOOL_BIN_DIR="${HOME}/.local/bin"
+PROFILE_FILE="${HOME}/.bashrc"
+
+path_contains() {
+  case ":${ORIGINAL_PATH}:" in
+    *":$1:"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+add_to_profile() {
+  local profile="$1"
+  local line="export PATH=\"${TOOL_BIN_DIR}:\$PATH\""
+  if [ -f "${profile}" ] && grep -qF "${line}" "${profile}" 2>/dev/null; then
+    return 0
+  fi
+  touch "${profile}" 2>/dev/null || return 1
+  printf '\n# Added by the msagent installer\n%s\n' "${line}" >> "${profile}"
+  log_success "Added ${TOOL_BIN_DIR} to PATH in ${profile}"
+}
+
+setup_path() {
+  if [ "${MSAGENT_NO_MODIFY_PATH:-0}" = "1" ]; then
+    log_warn "MSAGENT_NO_MODIFY_PATH is set; skipping PATH modification."
+    log_warn "Add ${TOOL_BIN_DIR} to PATH yourself, e.g.:"
+    log_warn "  export PATH=\"${TOOL_BIN_DIR}:\$PATH\""
+    return 0
+  fi
+  if path_contains "${TOOL_BIN_DIR}"; then
+    log_info "${TOOL_BIN_DIR} is already on PATH."
+    return 0
+  fi
+  PROFILE_FILE=""
+  # fish
+  if command -v fish >/dev/null 2>&1 || [ -d "${HOME}/.config/fish" ]; then
+    local fish_dir="${HOME}/.config/fish/conf.d"
+    mkdir -p "${fish_dir}" 2>/dev/null || true
+    local fish_file="${fish_dir}/msagent-path.fish"
+    if [ ! -f "${fish_file}" ]; then
+      printf 'fish_add_path %s\n' "${TOOL_BIN_DIR}" > "${fish_file}" 2>/dev/null || true
+      log_success "Added ${TOOL_BIN_DIR} via ${fish_file}"
+    fi
+  fi
+  # bash/zsh: cover every profile a login or interactive shell may read.
+  # Only create ~/.bashrc (safe everywhere); existing ~/.bash_profile and
+  # ~/.profile are updated too so login shells pick the entry up.
+  local updated=0
+  local candidate
+  for candidate in "${HOME}/.bashrc" "${HOME}/.bash_profile" "${HOME}/.profile"; do
+    if [ -f "${candidate}" ] || [ "${candidate}" = "${HOME}/.bashrc" ]; then
+      if add_to_profile "${candidate}"; then
+        [ -z "${PROFILE_FILE}" ] && PROFILE_FILE="${candidate}"
+        updated=1
+      fi
+    fi
+  done
+  if [ -n "${SHELL:-}" ] && [[ "${SHELL}" == *zsh* ]]; then
+    local zshrc="${HOME}/.zshrc"
+    [ -n "${ZDOTDIR:-}" ] && zshrc="${ZDOTDIR}/.zshrc"
+    if add_to_profile "${zshrc}"; then
+      [ -z "${PROFILE_FILE}" ] && PROFILE_FILE="${zshrc}"
+      updated=1
+    fi
+  fi
+  if [ "${updated}" = "1" ]; then
+    log_success "Run 'source ${PROFILE_FILE}' (or open a new shell) to use msagent."
+  else
+    log_warn "Could not update a shell profile; add '${TOOL_BIN_DIR}' to PATH yourself."
+  fi
+  # uv's own shell-profile updater covers more edge cases; best effort only.
+  "${UV_BIN}" tool update-shell >/dev/null 2>&1 || true
+  fix_owner "${TOOL_BIN_DIR}" "${HOME}/.local/share/uv" "${HOME}/.cache/uv" 2>/dev/null || true
+}
+
+# Last-resort fallback when `uv tool install` fails: an isolated venv.
+install_venv_fallback() {
+  local venv_dir="${MSAGENT_FALLBACK_VENV:-${HOME}/.msagent-venv}"
+  local pybin=""
+  if command -v python3 >/dev/null 2>&1; then pybin="python3"
+  elif command -v python >/dev/null 2>&1; then pybin="python"
+  else
+    log_error "python3 is required for the venv fallback."
+    return 1
+  fi
+  log_info "Creating isolated venv at ${venv_dir} ..."
+  if ! "${pybin}" -m venv "${venv_dir}" 2>/dev/null; then
+    # python3-venv (ensurepip) may be missing; uv can create venvs without it.
+    if [ -n "${UV_BIN:-}" ] && "${UV_BIN}" venv "${venv_dir}" 2>/dev/null; then
+      log_success "Created the venv with uv (python3-venv is not installed)."
+    else
+      log_error "Could not create a virtualenv (python3-venv may be missing)."
+      log_error "On Debian/Ubuntu, install it first:  sudo apt install python3-venv"
+      log_error "or install msagent manually:"
+      log_error "  ${pybin} -m venv ${venv_dir} && ${venv_dir}/bin/pip install -U -i ${INDEX} ${INSTALL_SPEC}"
+      return 1
+    fi
+  fi
+  log_info "Installing ${INSTALL_SPEC} from ${INDEX} into the venv..."
+  if [ -x "${venv_dir}/bin/pip" ]; then
+    "${venv_dir}/bin/pip" install -q -U -i "${INDEX}" "${INSTALL_SPEC}" || return 1
+  elif [ -n "${UV_BIN:-}" ]; then
+    # A venv created by uv has no pip; install with uv pip instead.
+    "${UV_BIN}" pip install --python "${venv_dir}/bin/python" -q -U --index-url "${INDEX}" "${INSTALL_SPEC}" || return 1
+  else
+    return 1
+  fi
+  TOOL_BIN_DIR="${venv_dir}/bin"
+  setup_path
+  local vout
+  vout="$("${TOOL_BIN_DIR}/msagent" --version 2>&1)" || true
+  log_success "Verified: ${vout}"
+  log_warn "Installed via the venv fallback (${venv_dir})."
+  log_warn "Prefer 'uv tool install'; re-run this installer once uv works to switch."
+}
+
+# uv sometimes only links the primary tool's executables into the tool bin
+# directory. The msprof-mcp MCP server is spawned by name from PATH, so make
+# sure its executable (and msprof-analyze) are reachable. Best effort only.
+expose_tool_executables() {
+  local tool_env_bin
+  tool_env_bin="$("${UV_BIN}" tool dir 2>/dev/null || true)/mindstudio-agent/bin"
+  [ -d "${tool_env_bin}" ] || return 0
+  local exe
+  for exe in msprof-mcp msprof-analyze; do
+    if [ -x "${tool_env_bin}/${exe}" ] && [ ! -e "${TOOL_BIN_DIR}/${exe}" ]; then
+      ln -s "${tool_env_bin}/${exe}" "${TOOL_BIN_DIR}/${exe}" 2>/dev/null && \
+        log_success "Exposed ${exe} via ${TOOL_BIN_DIR}/${exe}"
+    fi
+  done
+}
+
+# ---------------------------------------------------------------------------
+# Install mindstudio-agent as an isolated uv tool (always latest, no version pin)
+# ---------------------------------------------------------------------------
+MSAGENT_PYTHON="${MSAGENT_PYTHON:-3.11}"
+INSTALL_SPEC="mindstudio-agent"
+if [ -n "${MSAGENT_VERSION:-}" ]; then
+  INSTALL_SPEC="mindstudio-agent==${MSAGENT_VERSION}"
+  log_info "Pinning MSAGENT_VERSION=${MSAGENT_VERSION}"
+fi
+
+if command -v msagent >/dev/null 2>&1; then
+  log_info "Updating existing msagent installation..."
+else
+  log_info "Installing msagent (latest) into an isolated uv tool environment..."
+fi
+
+UV_TOOL_ARGS=(tool install -U --python "${MSAGENT_PYTHON}" --default-index "${INDEX}")
+if [ -n "${MSAGENT_WITH_EXECUTABLES_FROM:-}" ]; then
+  UV_TOOL_ARGS+=(--with-executables-from "${MSAGENT_WITH_EXECUTABLES_FROM}")
+fi
+UV_TOOL_ARGS+=("${INSTALL_SPEC}")
+
+INSTALL_OK=0
+if "${UV_BIN}" "${UV_TOOL_ARGS[@]}"; then
+  INSTALL_OK=1
+else
+  # Retry once with a freshly upgraded uv: a pre-existing uv may be old or in
+  # a broken state (e.g. failing managed-Python resolution on Windows).
+  log_warn "First install attempt failed; upgrading uv and retrying once..."
+  RETRY_PY=""
+  if command -v python3 >/dev/null 2>&1; then RETRY_PY="python3"
+  elif command -v python >/dev/null 2>&1; then RETRY_PY="python"
+  fi
+  if [ -n "${RETRY_PY}" ]; then
+    "${RETRY_PY}" -m pip install --user -q -U uv -i "${INDEX}" 2>/dev/null || \
+      "${RETRY_PY}" -m pip install --user -q -U --break-system-packages uv -i "${INDEX}" 2>/dev/null || true
+  fi
+  [ -x "${HOME}/.local/bin/uv" ] && UV_BIN="${HOME}/.local/bin/uv"
+  if "${UV_BIN}" "${UV_TOOL_ARGS[@]}"; then
+    INSTALL_OK=1
   fi
 fi
 
-if [ ! -x "${UV_BIN}" ] && ! command -v "${UV_BIN}" >/dev/null 2>&1; then
-  log_error "uv is not available after installation."
-  log_error "Please restart your shell, or add ~/.local/bin to PATH, then retry."
-  exit 1
+if [ "${INSTALL_OK}" = "0" ]; then
+  # The tool may exist in a broken/stale state (e.g. its Python interpreter
+  # no longer matches). Remove it and retry the install from scratch once.
+  log_warn "Install still failing; removing any existing msagent tool and retrying once more..."
+  "${UV_BIN}" tool uninstall mindstudio-agent >/dev/null 2>&1 || true
+  if "${UV_BIN}" "${UV_TOOL_ARGS[@]}"; then
+    INSTALL_OK=1
+  fi
 fi
 
-INSTALL_ARGS=(
-  tool
-  install
-  -U
-  --python
-  "${PYTHON_VERSION}"
-)
-
-if [ -n "${WITH_EXECUTABLES_FROM}" ]; then
-  INSTALL_ARGS+=(--with-executables-from "${WITH_EXECUTABLES_FROM}")
-fi
-
-INSTALL_ARGS+=("${PACKAGE_SPEC}")
-
-if command -v msagent >/dev/null 2>&1; then
-  log_info "Updating existing msAgent installation..."
+if [ "${INSTALL_OK}" = "0" ]; then
+  log_error "uv tool install failed. See the error above."
+  if [ "${MSAGENT_NO_FALLBACK:-0}" = "1" ]; then
+    log_error "MSAGENT_NO_FALLBACK is set; skipping the venv fallback."
+    log_error "Retry after fixing the issue, or install manually:"
+    log_error "  python3 -m venv ~/.msagent-venv && ~/.msagent-venv/bin/pip install -U -i ${INDEX} ${INSTALL_SPEC}"
+    exit 1
+  fi
+  if prompt_yn "Try the isolated venv fallback instead?"; then
+    if ! install_venv_fallback; then
+      log_error "The venv fallback also failed. Please retry later or open an issue at"
+      log_error "  https://gitcode.com/Ascend/msagent/issues"
+      exit 1
+    fi
+  else
+    log_error "Install aborted. You can retry with:"
+    log_error "  curl -LsSf https://raw.gitcode.com/Ascend/msagent/raw/master/scripts/install.sh | bash"
+    exit 1
+  fi
 else
-  log_info "Installing msAgent from ${PACKAGE_SPEC}..."
+  # -------------------------------------------------------------------------
+  # PATH: make the tool bin directory available in new shells.
+  # -------------------------------------------------------------------------
+  setup_path
 fi
 
-"${UV_BIN}" "${INSTALL_ARGS[@]}"
+# Ensure msprof-mcp / msprof-analyze are reachable from PATH (best effort).
+expose_tool_executables
 
-fix_owner "${TOOL_BIN_DIR}" "${TOOL_DATA_DIR}"
-if [ -d "${HOME}/.cache/uv" ]; then
-  fix_owner "${HOME}/.cache/uv"
-fi
-if [ "${OS}" = "macos" ] && [ -d "${HOME}/Library/Caches/uv" ]; then
-  fix_owner "${HOME}/Library/Caches/uv"
-fi
-
+# ---------------------------------------------------------------------------
+# Verify
+# ---------------------------------------------------------------------------
 MSAGENT_BIN=""
 if [ -x "${TOOL_BIN_DIR}/msagent" ]; then
   MSAGENT_BIN="${TOOL_BIN_DIR}/msagent"
@@ -167,16 +515,31 @@ fi
 
 if [ -z "${MSAGENT_BIN}" ]; then
   log_warn "msagent was installed but is not on PATH in this shell."
-  log_warn "Try: source ~/.zshrc  (or ~/.bashrc)"
+  log_warn "Run 'source ${PROFILE_FILE}' or open a new shell, then check 'msagent --version'."
   exit 0
 fi
 
 VERSION_OUTPUT="$("${MSAGENT_BIN}" --version 2>&1)" || {
   log_error "msagent installed, but '--version' failed:"
   printf '%s\n' "${VERSION_OUTPUT}" >&2
+  log_error "Try: source ~/.local/bin/env   (or open a new shell), then re-run."
   exit 1
 }
 log_success "Verified: ${VERSION_OUTPUT}"
+
+# The verify above uses the absolute path, which always works. The user's
+# real shell may not have the tool bin dir on PATH yet (e.g. right after
+# `curl ... | bash`), so check resolvability and warn with the exact fix.
+PATH_MSAGENT="$(command -v msagent 2>/dev/null || true)"
+if [ -z "${PATH_MSAGENT}" ]; then
+  log_warn "msagent is installed, but this shell cannot find 'msagent' on PATH yet."
+  log_warn "Run the following in THIS terminal (or open a new shell):"
+  log_warn "  export PATH=\"${TOOL_BIN_DIR}:\$PATH\""
+  log_warn "The installer already added the PATH entry to ${PROFILE_FILE:-your shell profile} for future shells."
+elif [ "${PATH_MSAGENT}" != "${TOOL_BIN_DIR}/msagent" ] && [ "${PATH_MSAGENT}" != "${TOOL_BIN_DIR}/msagent.exe" ]; then
+  log_warn "Note: 'msagent' on PATH resolves to ${PATH_MSAGENT} (possibly an older pip install)."
+  log_warn "The uv tool install is at ${TOOL_BIN_DIR}/msagent. Consider: pip uninstall mindstudio-agent"
+fi
 
 MSPROF_BIN=""
 if [ -x "${TOOL_BIN_DIR}/msprof-mcp" ]; then
@@ -184,12 +547,14 @@ if [ -x "${TOOL_BIN_DIR}/msprof-mcp" ]; then
 elif command -v msprof-mcp >/dev/null 2>&1; then
   MSPROF_BIN="msprof-mcp"
 fi
-
-if [ -n "${WITH_EXECUTABLES_FROM}" ] && [ -z "${MSPROF_BIN}" ]; then
-  log_warn "msprof-mcp is not on PATH in this shell yet."
-  log_warn "If msagent later complains about msprof-mcp, restart your shell first."
+if [ -z "${MSPROF_BIN}" ]; then
+  log_warn "msprof-mcp is not on PATH in this shell yet; restart your shell if msagent reports it missing."
 else
   log_success "msprof-mcp executable is available."
 fi
 
-log_success "msAgent installation complete."
+log_success "msagent installation complete."
+log_info "Next steps:"
+log_info "  msagent --help"
+log_info "  msagent config --llm-provider openai --llm-model <model> ...   (see Quick Start)"
+log_info "Upgrade any time by re-running this installer (always installs the latest)."

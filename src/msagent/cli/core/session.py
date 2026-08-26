@@ -67,6 +67,7 @@ class Session:
         )
 
         self.audit_writer = AuditWriter(
+            state_dir=context.state_dir,
             working_dir=context.working_dir,
             thread_id=context.thread_id,
             agent_name=context.agent,

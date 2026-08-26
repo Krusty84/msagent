@@ -25,7 +25,6 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from msagent.audit.events import AuditEventType
-from msagent.core.constants import CONFIG_AUDIT_DIR
 
 
 def iter_json_values(text: str) -> Iterator[dict[str, Any]]:
@@ -46,9 +45,16 @@ def iter_json_values(text: str) -> Iterator[dict[str, Any]]:
             yield payload
 
 
-def resolve_audit_path(*, working_dir: Path, thread_id: str) -> Path | None:
+def resolve_audit_path(
+    *,
+    working_dir: Path,
+    thread_id: str,
+    state_dir: Path | None = None,
+) -> Path | None:
     """Resolve the audit file for a session thread id."""
-    audit_dir = working_dir.resolve() / CONFIG_AUDIT_DIR
+    audit_dir = (
+        state_dir.resolve() / "audit_log" if state_dir is not None else working_dir.resolve() / ".msagent" / "audit_log"
+    )
     if not audit_dir.is_dir():
         return None
 
@@ -65,9 +71,13 @@ def resolve_audit_path(*, working_dir: Path, thread_id: str) -> Path | None:
 class AuditReader:
     """Load audit events and delegation summaries from disk."""
 
-    def __init__(self, *, working_dir: Path, thread_id: str) -> None:
+    def __init__(self, *, working_dir: Path, thread_id: str, state_dir: Path | None = None) -> None:
         self.thread_id = thread_id
-        self.path = resolve_audit_path(working_dir=working_dir, thread_id=thread_id)
+        self.path = resolve_audit_path(
+            working_dir=working_dir,
+            thread_id=thread_id,
+            state_dir=state_dir,
+        )
 
     def exists(self) -> bool:
         return self.path is not None and self.path.is_file()

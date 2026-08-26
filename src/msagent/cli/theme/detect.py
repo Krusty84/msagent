@@ -46,8 +46,8 @@ def _detect_via_osc11() -> str | None:
         sys.stdout.write("\033]11;?\033\\")
         sys.stdout.flush()
 
-        # Wait for response with 100ms timeout
-        if select.select([sys.stdin], [], [], 0.1)[0]:
+        # Wait for response with 500ms timeout
+        if select.select([sys.stdin], [], [], 0.5)[0]:
             response = ""
             # Read response character by character
             while select.select([sys.stdin], [], [], 0.05)[0]:

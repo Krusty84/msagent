@@ -25,9 +25,9 @@ evaluation:
     binary: ais_bench
     mode: all
     timeout: 10800
-    request_rate: 1.0
+    request_rate: 0.0001
     retry: 3
-    batch_size: 4
+    batch_size: 16
     max_out_len: 32768
     trust_remote_code: false
     pred_postprocessor: extract_non_reasoning_content
@@ -60,6 +60,7 @@ inference_engine:
   entrypoint: vllm.entrypoints.openai.api_server
   env_vars:
     HCCL_BUFFSIZE: 1024
+    ASCEND_RT_VISIBLE_DEVICES: "0,1" # 用户选择的物理设备索引
 
   served_model_name: example-qwen3-32b-w8a8
   host: localhost
@@ -70,11 +71,11 @@ inference_engine:
   args:
     served-model-name: example-qwen3-32b-w8a8
     trust-remote-code: true
-    tensor-parallel-size: 2 # 与 device/device_ids 对齐
+    tensor-parallel-size: 2 # 与 ASCEND_RT_VISIBLE_DEVICES 中的设备数量对齐
     data-parallel-size: 1 # 固定为 1，与模型无关
     quantization: ascend  # 测评非量化的浮点权重时，此行改为 dtype: bfloat16
     enable-prefix-caching: false
-    max-model-len: 33792
+    max-model-len: 65536
     max-num-batched-tokens: 33792
     gpu-memory-utilization: 0.9
     enable-auto-tool-choice: true

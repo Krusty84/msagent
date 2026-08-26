@@ -51,10 +51,10 @@ msprof-analyze 解析时从 profiling 数据读 `ai_core_num`/`aic_frequency` �
 
 | 系列 | 芯片 / 形态 | FP16/BF16 理论峰值 |
 | --- | --- | --- |
-| A2 | 华为 Ascend 910B1 | ≈ 378.88 TFLOPs/s |
-| A2 | 华为 Ascend 910B2 | ≈ 353.89 TFLOPs/s |
-| A2 | 华为 Ascend 910B3 | ≈ 294.91 TFLOPs/s |
-| A2 | 华为 Ascend 910B4 | ≈ 270 TFLOPs/s |
+| A2 | Ascend 910B1 | ≈ 378.88 TFLOPs/s |
+| A2 | Ascend 910B2 | ≈ 353.89 TFLOPs/s |
+| A2 | Ascend 910B3 | ≈ 294.91 TFLOPs/s |
+| A2 | Ascend 910B4 | ≈ 270 TFLOPs/s |
 | A3 | 一体机 | ≈ 560 TFLOPs/s |
 | A3 | 超节点 | ≈ 752 TFLOPs/s |
 

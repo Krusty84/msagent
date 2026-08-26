@@ -94,3 +94,31 @@ MobaXterm 默认未设置 `COLORTERM`，导致 prompt_toolkit 无法识别真彩
 ```bash
 export COLORTERM=truecolor
 ```
+
+## 7. pip 安装 mindstudio-agent 时提示依赖冲突或安装失败怎么办？
+
+直接 `pip install mindstudio-agent` 会写入当前 Python 环境，容易与已有依赖（如 torch、mindstudio_monitor 等）冲突，或在 Ubuntu 22.04+ 上遇到 PEP 668（externally-managed-environment）限制。
+
+推荐改用一键安装（隔离环境，不影响现有环境）：
+
+```shell
+# Linux / macOS / WSL
+curl -LsSf https://raw.gitcode.com/Ascend/msagent/raw/master/scripts/install.sh | bash
+
+# Windows（PowerShell 5.1+）
+irm https://raw.gitcode.com/Ascend/msagent/raw/master/scripts/install.ps1 | iex
+```
+
+常见报错对照：
+
+| 报错现象 | 原因 | 处理方法 |
+| --- | --- | --- |
+| `externally-managed-environment` | 系统 Python 受 PEP 668 保护 | 使用一键安装，或先创建虚拟环境再 pip 安装 |
+| `Requires-Python >=3.11` 或版本过低 | 当前 Python 版本低于 3.11 | 一键安装会自动下载 Python 3.11，无需手动升级 |
+| 依赖冲突（如 pydantic、langchain 版本不匹配） | 与现有环境包版本冲突 | 使用一键安装（uv 独立工具环境） |
+| 安装超时或下载失败 | 网络访问 PyPI 不稳定 | 一键安装默认使用国内镜像；或设置 `MSAGENT_INDEX` 指定镜像 |
+
+## 8. 如何升级或卸载 msagent？
+
+- 升级：重新执行一键安装命令，安装器会自动升级到最新版本（`uv tool upgrade mindstudio-agent` 亦可）；
+- 卸载：`uv tool uninstall mindstudio-agent`，并删除当前工作目录下的 `.msagent/` 文件夹。

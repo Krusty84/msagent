@@ -56,10 +56,22 @@ class ConfigRegistry:
         self._mcp: MCPConfig | None = None
         self._approval: ToolApprovalConfig | None = None
 
+        # Serializes ensure_config_dir: agent/llm/mcp loaders run concurrently
+        # via asyncio.gather and each calls ensure_config_dir on first use.
+        # Without a lock, concurrent copytree / _normalize_legacy_defaults can
+        # corrupt template files (observed: Modeling.yml truncated to a subset).
+        self._ensure_lock: asyncio.Lock | None = None
+
     # === Setup ===
 
     async def ensure_config_dir(self) -> None:
         """Ensure config directory exists, copy from template if needed."""
+        if self._ensure_lock is None:
+            self._ensure_lock = asyncio.Lock()
+        async with self._ensure_lock:
+            await self._ensure_config_dir_locked()
+
+    async def _ensure_config_dir_locked(self) -> None:
         template_config_dir = Path(str(files("resources") / "configs" / "default"))
 
         if not self.config_dir.exists():

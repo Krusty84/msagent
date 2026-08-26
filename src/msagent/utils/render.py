@@ -17,6 +17,7 @@
 # -------------------------------------------------------------------------
 
 import difflib
+import string
 import json
 import re
 import shutil
@@ -33,6 +34,32 @@ TemplateData: TypeAlias = dict[str, "TemplateData"] | list["TemplateData"] | str
 TOOL_TIMING_RESPONSE_METADATA_KEY = "msagent_tool_timing"
 
 
+def _safe_format(text: str, context: dict[str, Any]) -> str:
+    """Format a template, keeping unknown placeholders intact.
+
+    ``str.format(**context)`` is all-or-nothing: a single placeholder missing
+    from the context (e.g. ``{messages}``, which the downstream
+    SummarizationMiddleware renders itself) leaves *every* placeholder
+    unrendered, so environment placeholders like ``{working_dir}`` leak into
+    downstream ``.format()`` calls and blow up with KeyError. Rendering only
+    known keys keeps context-driven placeholders filled while preserving
+    unknown ones for later stages.
+    """
+
+    class _SafeFormatter(string.Formatter):
+        def get_value(self, key: int | str, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
+            if isinstance(key, str) and key in context:
+                return context[key]
+            if isinstance(key, str):
+                return "{" + key + "}"
+            return super().get_value(key, args, kwargs)
+
+    try:
+        return _SafeFormatter().vformat(text, (), {})
+    except ValueError:
+        return text
+
+
 def render_templates(data: TemplateData, context: dict[str, Any] | None) -> TemplateData:
     """Render templates with the given context."""
     context = context or {}
@@ -41,10 +68,7 @@ def render_templates(data: TemplateData, context: dict[str, Any] | None) -> Temp
     elif isinstance(data, list):
         return [render_templates(item, context) for item in data]
     elif isinstance(data, str):
-        try:
-            return data.format(**context)
-        except (KeyError, ValueError):
-            return data
+        return _safe_format(data, context)
     else:
         return data
 

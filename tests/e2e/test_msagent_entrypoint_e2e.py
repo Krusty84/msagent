@@ -77,7 +77,9 @@ def _read_jsonl(path: Path) -> list[dict]:
 def test_entrypoint_version_and_config_show(tmp_path: Path) -> None:
     version = _run_msagent("--version", cwd=PROJECT_ROOT)
     assert version.returncode == 0
-    assert "msAgent" in version.stdout
+    # Banner reads "MindStudio"; the version line carries the lower-case
+    # "msagent" package name (ANSI styling may be present in the raw output).
+    assert "msagent" in version.stdout.lower()
 
     config = _run_msagent("config", "--show", "-w", str(tmp_path), cwd=PROJECT_ROOT)
     assert config.returncode == 0

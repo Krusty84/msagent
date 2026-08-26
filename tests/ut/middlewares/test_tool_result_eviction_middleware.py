@@ -22,7 +22,6 @@ from types import SimpleNamespace
 
 import pytest
 from langchain_core.messages import ToolMessage
-from langgraph.types import Command
 
 from msagent.middlewares.tool_result_eviction import ToolResultEvictionMiddleware
 
@@ -73,13 +72,12 @@ def test_evicts_large_tool_result_for_non_excluded_tool() -> None:
         lambda _request: message,
     )
 
-    assert isinstance(result, Command)
-    update = result.update or {}
+    # deepagents 0.7.9 rewrites the ToolMessage content in place (offload to
+    # backend + truncated preview) instead of returning a Command state update.
+    assert isinstance(result, ToolMessage)
     assert backend.writes
     assert backend.writes[0][0].startswith("/large_tool_results/")
-    evicted_message = update["messages"][0]
-    assert isinstance(evicted_message, ToolMessage)
-    assert "Tool result too large" in str(evicted_message.content)
+    assert "Tool result too large" in str(result.content)
 
 
 def test_skips_eviction_for_excluded_tool() -> None:
@@ -121,8 +119,10 @@ async def test_async_evicts_large_tool_result() -> None:
 
     result = await middleware.awrap_tool_call(_make_request("run_tool"), _handler)
 
-    assert isinstance(result, Command)
+    # deepagents 0.7.9 rewrites the ToolMessage content in place.
+    assert isinstance(result, ToolMessage)
     assert backend.writes
+    assert "Tool result too large" in str(result.content)
 
 
 def test_normalizes_non_string_tool_message_content() -> None:

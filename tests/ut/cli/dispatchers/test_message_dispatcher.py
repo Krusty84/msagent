@@ -42,9 +42,13 @@ from msagent.utils.render import TOOL_TIMING_RESPONSE_METADATA_KEY
 
 
 def _build_session(tmp_path: Path) -> SimpleNamespace:
+    async def _noop_runtime_ready() -> None:
+        return None
+
     session = SimpleNamespace(
         prefilled_reference_mapping={},
         current_stream_task=None,
+        ensure_runtime_ready=_noop_runtime_ready,
         context=SimpleNamespace(
             approval_mode=ApprovalMode.ACTIVE,
             working_dir=tmp_path,
@@ -58,7 +62,7 @@ def _build_session(tmp_path: Path) -> SimpleNamespace:
             current_output_tokens=None,
             context_window=128000,
         ),
-        graph=SimpleNamespace(),
+        runtime=SimpleNamespace(),
         prompt=SimpleNamespace(reset_interrupt_state=lambda: None),
         renderer=SimpleNamespace(
             render_assistant_message=lambda *args, **kwargs: None,
@@ -160,7 +164,7 @@ async def test_invoke_without_stream_resumes_interrupts(tmp_path: Path) -> None:
         return {"decisions": [{"type": "approve"}]}
 
     rendered: list[Any] = []
-    session.graph.ainvoke = fake_ainvoke
+    session.runtime.ainvoke = fake_ainvoke
     session.renderer.render_message = rendered.append
     dispatcher.interrupt_handler.handle = fake_handle
 
@@ -190,7 +194,7 @@ async def test_invoke_without_stream_limits_interrupt_resume_iterations(tmp_path
     async def fake_handle(_interrupts):
         return {"decisions": [{"type": "approve"}]}
 
-    session.graph.ainvoke = fake_ainvoke
+    session.runtime.ainvoke = fake_ainvoke
     dispatcher.interrupt_handler.handle = fake_handle
 
     with pytest.raises(RuntimeError, match="exceeded 50 interrupt/resume iterations"):
@@ -752,6 +756,38 @@ def test_render_new_update_message_deduplicates_by_stable_message_id(tmp_path: P
     )
 
     assert rendered == [("assistant", message)]
+    assert len(rendered_messages) == 1
+
+
+def test_render_deduplicates_across_finalize_and_update_paths(tmp_path: Path) -> None:
+    """The same logical message renders once even when one path carries an
+    AIMessage (merged stream chunks) and the other an AIMessageChunk (server
+    updates payload) -- their .type values differ, so the dedup key must
+    normalize them."""
+    session = _build_session(tmp_path)
+    rendered: list[tuple[str, Any]] = []
+    session.renderer = SimpleNamespace(
+        render_assistant_message=lambda message, **kwargs: rendered.append(("assistant", message)),
+        render_tool_call=lambda *args, **kwargs: rendered.append(("tool_call", args)),
+        render_tool_message=lambda message, **kwargs: rendered.append(("tool_message", message)),
+    )
+    dispatcher = MessageDispatcher(session)
+    rendered_messages: set[str] = set()
+
+    # updates path: server payload converted to AIMessageChunk
+    dispatcher._render_new_update_message(
+        AIMessageChunk(content="● 路径有效，正在确认数据交付件结构。", id="run-abc123"),
+        indent_level=0,
+        rendered_messages=rendered_messages,
+    )
+    # messages-stream finalize path: merged AIMessage with the same content
+    dispatcher._render_new_update_message(
+        AIMessage(content="● 路径有效，正在确认数据交付件结构。", id=None),
+        indent_level=0,
+        rendered_messages=rendered_messages,
+    )
+
+    assert len(rendered) == 1
     assert len(rendered_messages) == 1
 
 

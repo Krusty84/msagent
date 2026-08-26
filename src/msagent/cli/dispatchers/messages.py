@@ -177,10 +177,15 @@ class MessageDispatcher:
         self.message_builder = MessageContentBuilder(Path(session.context.working_dir))
         self._pending_compression = False
         self._pending_tool_headers: dict[str, DeferredToolHeader] = {}
+        self._thinking_started: dict[tuple, float] = {}
 
     async def dispatch(self, content: str) -> None:
         """Dispatch user message and get AI response."""
         try:
+            # In serverized mode the agent server boots in the background;
+            # wait for it (with a visible spinner) before the first message.
+            await self.session.ensure_runtime_ready()
+
             reference_mapping = self.session.prefilled_reference_mapping.copy()
             self.session.prefilled_reference_mapping.clear()
 
@@ -233,7 +238,7 @@ class MessageDispatcher:
 
     async def _resolve_prior_agent_prompt(self, graph_config: RunnableConfig) -> str | None:
         """Read the latest assistant message from checkpointed graph state."""
-        graph = self.session.graph
+        graph = self.session.runtime
         if graph is None:
             return None
         try:
@@ -304,7 +309,7 @@ class MessageDispatcher:
                         transient=True,
                         refresh_per_second=24,
                     ) as status:
-                        async for chunk in self.session.graph.astream(
+                        async for chunk in self.session.runtime.astream(
                             current_input,
                             config,
                             context=context,
@@ -317,6 +322,7 @@ class MessageDispatcher:
                                 for state in streaming_states.values():
                                     self._clear_preview(state)
                                 active_tools.clear()
+                                self._thinking_started.clear()
                                 thinking_previews.clear()
                                 status.stop()
                                 resume_value = await self.interrupt_handler.handle(interrupts)
@@ -364,6 +370,11 @@ class MessageDispatcher:
                     if status:
                         status.stop()
                     self.session.prompt.reset_interrupt_state()
+                    # Interrupt on the client must also stop the run on the
+                    # agent server, otherwise the graph keeps executing tools /
+                    # LLM calls in the background and the next message on the
+                    # same thread collides with the still-running run.
+                    await self._cancel_server_run(config)
                     await self._finalize_all_streaming(
                         streaming_states,
                         status,
@@ -396,6 +407,23 @@ class MessageDispatcher:
             context.retry_notice_handler = None
             self.session.current_stream_task = None
 
+    async def _cancel_server_run(self, config: RunnableConfig) -> None:
+        """Best-effort cancellation of the active run on the agent server.
+
+        Client-side interruption (SIGINT / task cancel) tears down the SSE
+        stream, but the ``langgraph dev`` server keeps executing the run unless
+        explicitly cancelled; without this the thread stays busy and the next
+        message collides with the orphaned run.
+        """
+        runtime = getattr(self.session, "runtime", None)
+        cancel = getattr(runtime, "acancel_active_runs", None)
+        if cancel is None:
+            return
+        try:
+            await cancel(config)
+        except Exception:
+            logger.debug("Failed to cancel active server run", exc_info=True)
+
     async def _invoke_without_stream(
         self,
         input_data: dict[str, Any] | Command,
@@ -409,7 +437,7 @@ class MessageDispatcher:
             max_iterations = 50
             result: Any = None
             for _ in range(max_iterations):
-                result = await self.session.graph.ainvoke(current_input, config, context=context)
+                result = await self.session.runtime.ainvoke(current_input, config, context=context)
                 interrupts = self._extract_interrupts(result)
                 if not interrupts:
                     break
@@ -424,6 +452,11 @@ class MessageDispatcher:
                 raise RuntimeError(
                     f"Non-streaming graph invocation exceeded {max_iterations} interrupt/resume iterations."
                 )
+        except asyncio.CancelledError:
+            # Interrupt (SIGINT): cancel the server run and return to the
+            # input loop instead of propagating out and killing the session.
+            await self._cancel_server_run(config)
+            return
         finally:
             context.retry_notice_handler = None
 
@@ -667,6 +700,35 @@ class MessageDispatcher:
         content_str = str(message.content) if message.content else ""
         stable_key = hashlib.sha256(f"{content_str}:{message.type}".encode()).hexdigest()[:8]
         return stable_key
+
+    @classmethod
+    def _message_render_key(cls, message: AnyMessage) -> str:
+        """Stable dedup key shared by the messages-stream and updates render paths.
+
+        The same logical message is surfaced twice by the runtime: once as
+        accumulated stream chunks (``_finalize_streaming``) and once inside an
+        ``updates`` payload (``_render_new_update_message``). In serverized mode
+        the stream chunks and the final message can carry different ``id``
+        values (e.g. chunks without an id fall back to a content hash), so
+        id-based keys diverge and the message renders twice. Keying purely on
+        content (plus ``tool_call_id`` for tool messages) makes the same
+        message converge to one key across both render paths while still
+        distinguishing distinct messages.
+        """
+        content = str(message.content) if message.content else ""
+        tool_signature = ""
+        tool_calls = getattr(message, "tool_calls", None) or []
+        if tool_calls:
+            tool_signature = json.dumps(tool_calls, sort_keys=True, default=str)
+        tool_call_id = getattr(message, "tool_call_id", None) or ""
+        # Normalize: the same logical AI message appears as AIMessageChunk
+        # (streamed) and AIMessage (merged/final) across the two render paths,
+        # but their .type values differ ("AIMessageChunk" vs "ai").
+        if isinstance(message, (AIMessage, AIMessageChunk)):
+            msg_type = "ai"
+        else:
+            msg_type = getattr(message, "type", "")
+        return f"{msg_type}_{tool_call_id}_{content}_{tool_signature}"
 
     def _get_streaming_state(self, namespace: tuple, streaming_states: dict[tuple, dict[str, Any]]) -> dict[str, Any]:
         """Get or create streaming state for namespace."""
@@ -1016,9 +1078,8 @@ class MessageDispatcher:
         """Check whether two live tool previews refer to the same tool call."""
         return MessageDispatcher._tool_activity_calls_match(left, right)
 
-    @classmethod
     def _dedupe_tool_activity_namespaces(
-        cls,
+        self,
         active_tools: dict[tuple, list[ToolActivityCall]],
         target_namespace: tuple,
     ) -> None:
@@ -1042,7 +1103,7 @@ class MessageDispatcher:
                     (
                         target_call
                         for target_call in merged_target_calls
-                        if cls._is_same_tool_activity_call(target_call, call)
+                        if self._is_same_tool_activity_call(target_call, call)
                     ),
                     None,
                 )
@@ -1050,7 +1111,7 @@ class MessageDispatcher:
                     remaining_calls.append(call)
                     continue
 
-                merged_target_calls = cls._merge_tool_activity_calls(
+                merged_target_calls = self._merge_tool_activity_calls(
                     merged_target_calls,
                     [call],
                 )
@@ -1064,39 +1125,43 @@ class MessageDispatcher:
 
         active_tools[target_namespace] = target_calls
 
-    @classmethod
     def _build_activity_renderable(
-        cls,
+        self,
         active_tools: dict[tuple, list[ToolActivityCall]],
         thinking_previews: dict[tuple, list[str]],
     ) -> RenderableType:
         """Build the transient live activity area shown while streaming."""
         renderables: list[RenderableType] = []
 
-        for namespace, tool_calls in cls._sorted_activity_items(active_tools):
-            origin_label = cls._resolve_origin_label(namespace)
+        for namespace, tool_calls in self._sorted_activity_items(active_tools):
+            origin_label = self._resolve_origin_label(namespace)
             for tool_call in tool_calls:
                 # Skip hidden tools (e.g., write_todos shown via panel)
-                if tool_call.name in cls._HIDDEN_ACTIVITY_TOOLS:
+                if tool_call.name in self._HIDDEN_ACTIVITY_TOOLS:
                     continue
                 renderables.append(
                     ToolActivityIndicator(
-                        cls._build_tool_activity_label(
+                        self._build_tool_activity_label(
                             tool_call,
                             indent_level=len(namespace),
                             origin_label=origin_label,
                         ),
-                        details=cls._build_tool_activity_args(tool_call, indent_level=len(namespace)),
+                        details=self._build_tool_activity_args(tool_call, indent_level=len(namespace)),
                         start_time=tool_call.start_time,
                     )
                 )
 
-        for namespace, preview_lines in cls._sorted_activity_items(thinking_previews):
+        for namespace, preview_lines in self._sorted_activity_items(thinking_previews):
             indent = "  " * len(namespace)
+            started = self._thinking_started.get(namespace)
+            elapsed = time.monotonic() - started if started is not None else 0.0
             renderables.append(
                 Spinner(
                     "dots",
-                    Text(f"{indent}Thinking...", style="indicator"),
+                    Text(
+                        f"{indent}Thinking... ({elapsed:.0f}s, Ctrl+C \u4e2d\u65ad)",
+                        style="indicator",
+                    ),
                     style="indicator",
                 )
             )
@@ -1108,16 +1173,15 @@ class MessageDispatcher:
             renderables.append(
                 Spinner(
                     "dots",
-                    Text("Thinking...", style="indicator"),
+                    Text("Thinking... (Ctrl+C 中断)", style="indicator"),
                     style="indicator",
                 )
             )
 
         return Group(*renderables)
 
-    @classmethod
     def _refresh_activity_live(
-        cls,
+        self,
         live: Live | None,
         active_tools: dict[tuple, list[ToolActivityCall]],
         thinking_previews: dict[tuple, list[str]],
@@ -1128,13 +1192,12 @@ class MessageDispatcher:
         if live is None:
             return
         live.update(
-            cls._build_activity_renderable(active_tools, thinking_previews),
+            self._build_activity_renderable(active_tools, thinking_previews),
             refresh=refresh,
         )
 
-    @classmethod
     def _set_tool_activity(
-        cls,
+        self,
         live: Live | None,
         active_tools: dict[tuple, list[ToolActivityCall]],
         thinking_previews: dict[tuple, list[str]],
@@ -1142,17 +1205,17 @@ class MessageDispatcher:
         tool_calls: list[ToolActivityCall],
     ) -> None:
         """Track an active tool call and refresh the live area."""
-        active_tools[namespace] = cls._merge_tool_activity_calls(
+        active_tools[namespace] = self._merge_tool_activity_calls(
             active_tools.get(namespace, []),
             tool_calls,
         )
-        cls._dedupe_tool_activity_namespaces(active_tools, namespace)
+        self._dedupe_tool_activity_namespaces(active_tools, namespace)
         thinking_previews.pop(namespace, None)
-        cls._refresh_activity_live(live, active_tools, thinking_previews)
+        self._thinking_started.pop(namespace, None)
+        self._refresh_activity_live(live, active_tools, thinking_previews)
 
-    @classmethod
     def _clear_tool_activity(
-        cls,
+        self,
         live: Live | None,
         active_tools: dict[tuple, list[ToolActivityCall]],
         thinking_previews: dict[tuple, list[str]],
@@ -1163,16 +1226,15 @@ class MessageDispatcher:
         """Remove an active tool line and refresh the live area."""
         if namespace in active_tools:
             active_tools.pop(namespace, None)
-            cls._refresh_activity_live(
+            self._refresh_activity_live(
                 live,
                 active_tools,
                 thinking_previews,
                 refresh=refresh,
             )
 
-    @classmethod
     def _set_thinking_preview(
-        cls,
+        self,
         live: Live | None,
         active_tools: dict[tuple, list[ToolActivityCall]],
         thinking_previews: dict[tuple, list[str]],
@@ -1182,11 +1244,11 @@ class MessageDispatcher:
         """Track the latest streaming preview for a namespace."""
         active_tools.pop(namespace, None)
         thinking_previews[namespace] = preview_lines[-3:]
-        cls._refresh_activity_live(live, active_tools, thinking_previews)
+        self._thinking_started.setdefault(namespace, time.monotonic())
+        self._refresh_activity_live(live, active_tools, thinking_previews)
 
-    @classmethod
     def _clear_thinking_preview(
-        cls,
+        self,
         live: Live | None,
         active_tools: dict[tuple, list[ToolActivityCall]],
         thinking_previews: dict[tuple, list[str]],
@@ -1197,7 +1259,8 @@ class MessageDispatcher:
         """Remove preview text for a namespace and refresh the live area."""
         if namespace in thinking_previews:
             thinking_previews.pop(namespace, None)
-            cls._refresh_activity_live(
+            self._thinking_started.pop(namespace, None)
+            self._refresh_activity_live(
                 live,
                 active_tools,
                 thinking_previews,
@@ -1361,11 +1424,11 @@ class MessageDispatcher:
         indent_level: int,
         rendered_messages: set[str],
     ) -> None:
-        """Render the final message from an update chunk once per stable message id."""
-        message_id = f"{self._get_stable_message_id(message)}_{message.type}"
-        if message_id in rendered_messages:
+        """Render the final message from an update chunk once per stable key."""
+        render_key = self._message_render_key(message)
+        if render_key in rendered_messages:
             return
-        rendered_messages.add(message_id)
+        rendered_messages.add(render_key)
 
         if isinstance(message, AIMessage):
             self._render_assistant_with_deferred_tools(
@@ -1551,8 +1614,7 @@ class MessageDispatcher:
                 await self._update_token_tracking({"messages": [final_message]})
                 indent_level = len(namespace)
                 self._render_assistant_with_deferred_tools(final_message, indent_level=indent_level)
-                message_id = f"{streaming_state['message_id']}_{final_message.type}"
-                rendered_messages.add(message_id)
+                rendered_messages.add(self._message_render_key(final_message))
 
             self._clear_thinking_preview(
                 live,

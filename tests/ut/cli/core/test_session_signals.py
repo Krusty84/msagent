@@ -98,7 +98,10 @@ async def test_send_finishes_recorder_once_on_success(monkeypatch: pytest.Monkey
     async def fake_dispatch(_message: str) -> None:
         return None
 
-    monkeypatch.setattr("msagent.cli.core.session.initializer.get_graph", lambda **_kwargs: _FakeGraphContext())
+    monkeypatch.setattr(
+        "msagent.cli.core.session.initializer.get_graph", lambda **_kwargs: _FakeGraphContext()
+    )
+    monkeypatch.setenv("MSAGENT_FAKE_BACKEND", "1")
     session.run_recorder = recorder
     session.message_dispatcher.dispatch = fake_dispatch
     session._register_sigint_handler = lambda: None
@@ -123,7 +126,10 @@ async def test_send_finishes_recorder_once_on_exception(monkeypatch: pytest.Monk
     async def fake_dispatch(_message: str) -> None:
         raise error
 
-    monkeypatch.setattr("msagent.cli.core.session.initializer.get_graph", lambda **_kwargs: _FakeGraphContext())
+    monkeypatch.setattr(
+        "msagent.cli.core.session.initializer.get_graph", lambda **_kwargs: _FakeGraphContext()
+    )
+    monkeypatch.setenv("MSAGENT_FAKE_BACKEND", "1")
     monkeypatch.setattr("msagent.cli.core.session.console.print_error", lambda *_args, **_kwargs: None)
     monkeypatch.setattr("msagent.cli.core.session.console.print", lambda *_args, **_kwargs: None)
     session.run_recorder = recorder

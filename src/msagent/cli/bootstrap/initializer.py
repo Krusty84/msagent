@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from fnmatch import fnmatch
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
@@ -16,6 +17,7 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from msagent.agents.context import AgentContext
 from msagent.agents.factory import AgentFactory
 from msagent.cli.bootstrap.timer import timer
+from msagent.client.remote import RemoteAgent
 from msagent.configs import (
     AgentConfig,
     BatchAgentConfig,
@@ -31,19 +33,24 @@ from msagent.configs import (
 from msagent.core.constants import (
     CONFIG_CHECKPOINTS_URL_FILE_NAME,
     CONFIG_MCP_CACHE_DIR,
+    CONFIG_MCP_FILE_NAME,
     CONFIG_MCP_OAUTH_DIR,
     CONFIG_SKILLS_DIR,
 )
 from msagent.llms.factory import LLMFactory
 from msagent.mcp.factory import MCPFactory
+from msagent.server.config import ServerConfig
+from msagent.server.process import ServerProcess
 from msagent.skills.factory import Skill, SkillFactory
 from msagent.testing.fake_graph import FakeGraph
-from msagent.tools.factory import ToolFactory
+from msagent.tools.factory import ToolFactory, ToolPreview
 
 if TYPE_CHECKING:
     from langchain_core.tools import BaseTool
     from langgraph.checkpoint.base import BaseCheckpointSaver
     from langgraph.graph.state import CompiledStateGraph
+
+logger = logging.getLogger(__name__)
 
 
 class Initializer:
@@ -336,6 +343,143 @@ class Initializer:
             yield graph
         finally:
             await cleanup()
+
+    async def start_server(
+        self,
+        agent: str | None,
+        model: str | None,
+        working_dir: Path,
+    ) -> tuple[RemoteAgent, ServerProcess]:
+        """Start the agent server subprocess and return a connected client.
+
+        Also populates the client-side catalog caches (tools/skills/MCP) from
+        the local configuration, since the compiled graph now lives in the
+        server process.
+        """
+        registry = self.get_registry(working_dir)
+        agent_config = await registry.get_agent(agent)
+        server_config = ServerConfig(
+            agent=agent,
+            model=model,
+            working_dir=str(working_dir),
+            recursion_limit=getattr(agent_config, "recursion_limit", None),
+            checkpointer_path=str(working_dir / CONFIG_CHECKPOINTS_URL_FILE_NAME),
+            mcp_config_path=str(working_dir / CONFIG_MCP_FILE_NAME),
+            audit_enabled=True,
+        )
+        server = ServerProcess(server_config=server_config)
+        await server.start()
+        try:
+            await server.wait_for_graph_ready("agent")
+        except BaseException:
+            # Includes asyncio.CancelledError: never leak a half-started server.
+            server.stop()
+            raise
+        remote_agent = RemoteAgent(url=server.url)
+        await self._refresh_client_catalogs(agent, model, working_dir, remote_agent=remote_agent)
+        return remote_agent, server
+
+    async def _refresh_client_catalogs(
+        self,
+        agent: str | None,
+        model: str | None,
+        working_dir: Path,
+        remote_agent: RemoteAgent | None = None,
+    ) -> None:
+        """Populate client-side tool/skill/MCP catalog caches.
+
+        In serverized mode the authoritative tool/MCP listing comes from the
+        server's ``/catalog`` route (what the graph actually loaded); skills
+        stay locally derived (same scan + pattern filter as the server) so the
+        cached objects keep their full metadata. Falls back to full local
+        config derivation when the server is unreachable.
+        """
+        server_data: dict[str, Any] | None = None
+        if remote_agent is not None:
+            try:
+                server_data = await remote_agent.fetch_catalog()
+            except Exception:
+                logger.warning(
+                    "Failed to fetch server catalog; falling back to config derivation",
+                    exc_info=True,
+                )
+
+        await self._derive_skills_catalog(agent, working_dir)
+
+        if server_data:
+            previews = [
+                ToolPreview(
+                    name=str(item.get("name", "")),
+                    description=str(item.get("description", "")),
+                )
+                for item in server_data.get("tools") or []
+                if isinstance(item, dict)
+            ]
+            self.cached_llm_tools = previews
+            self.cached_tools_in_catalog = previews
+            self.cached_mcp_server_names = list(server_data.get("mcp_servers") or [])
+            return
+
+        registry = self.get_registry(working_dir)
+        agent_config = await registry.get_agent(agent)
+        mcp_config = await registry.load_mcp()
+
+        tool_patterns = list(agent_config.tools.patterns or []) if agent_config.tools is not None else []
+        self.cached_tools_in_catalog = self._derive_tool_catalog(tool_patterns=tool_patterns)
+        self.cached_llm_tools = list(self.cached_tools_in_catalog)
+
+        enabled_servers = {name for name, server in mcp_config.servers.items() if server.enabled}
+        visible: list[str] = []
+        for name in sorted(enabled_servers):
+            if self._pattern_allows(f"mcp:{name}:*", tool_patterns) or self._pattern_allows(
+                "mcp:*:*",
+                tool_patterns,
+            ):
+                visible.append(name)
+        self.cached_mcp_server_names = visible
+
+    async def _derive_skills_catalog(self, agent: str | None, working_dir: Path) -> None:
+        """Scan and pattern-filter the local skills catalog."""
+        registry = self.get_registry(working_dir)
+        agent_config = await registry.get_agent(agent)
+
+        skills_config = getattr(agent_config, "skills", None)
+        skill_patterns = list(skills_config.patterns or []) if skills_config is not None else []
+        skills_dirs = self._resolve_skills_dirs(working_dir)
+        skill_map = await self.skill_factory.load_skills(skills_dirs)
+        all_skills = [skill for category in skill_map.values() for skill in category.values()]
+        self.cached_agent_skills = self._filter_skills_by_patterns(all_skills, patterns=skill_patterns)
+
+    @staticmethod
+    def _pattern_allows(candidate: str, patterns: list[str]) -> bool:
+        """Check a ``category:module:name`` candidate against +/- patterns."""
+        positives = [p for p in patterns if p and not p.startswith("!")]
+        if not positives:
+            return False
+        if not any(fnmatch(candidate, p) for p in positives):
+            return False
+        return not any(fnmatch(candidate, p[1:]) for p in patterns if p.startswith("!"))
+
+    def _derive_tool_catalog(self, *, tool_patterns: list[str]) -> list[Any]:
+        """Return the client-visible tool catalog derived from tool patterns."""
+        from msagent.tools.catalog import (
+            fetch_skills,
+            fetch_tools,
+            get_skill,
+            get_tool,
+            run_tool,
+        )
+        from msagent.tools.web_search import web_search
+
+        runtime_tools: list[Any] = [fetch_tools, get_tool, run_tool, fetch_skills, get_skill, web_search]
+        visible: list[Any] = []
+        for tool in runtime_tools:
+            tool_name = getattr(tool, "name", "unknown")
+            if self._pattern_allows(f"impl:deepagents:{tool_name}", tool_patterns):
+                visible.append(tool)
+        # Fall back to the built-in previews so /tools stays informative even
+        # when the pattern set only matches a subset we cannot derive locally.
+        return visible or list(self.tool_factory.get_catalog_tools())
 
 
 initializer = Initializer()

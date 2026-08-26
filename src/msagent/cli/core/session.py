@@ -51,7 +51,10 @@ class Session:
 
         # Session state
         self.graph: Any | None = None
+        self.remote_agent: Any | None = None
+        self.agent_server: Any | None = None
         self.graph_context: AbstractAsyncContextManager[Any] | None = None
+        self._server_start_task: asyncio.Task | None = None
         self.running = False
         self.needs_reload = False
         self.prefilled_text: str | None = None
@@ -97,39 +100,106 @@ class Session:
     async def _unsupported_get_input(self) -> tuple[str, bool]:
         raise RuntimeError("Interactive prompt is unavailable in this environment")
 
+    @property
+    def runtime(self) -> Any:
+        """The execution runtime: RemoteAgent (serverized) or in-process graph."""
+        return self.remote_agent if self.remote_agent is not None else self.graph
+
+    @staticmethod
+    def _uses_fake_backend() -> bool:
+        import os
+
+        return os.getenv("MSAGENT_FAKE_BACKEND", "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+        }
+
+    async def _stop_server(self) -> None:
+        """Stop the agent server subprocess if one is running."""
+        if self._server_start_task is not None:
+            if not self._server_start_task.done():
+                self._server_start_task.cancel()
+                try:
+                    await self._server_start_task
+                except BaseException:
+                    pass
+            self._server_start_task = None
+        if self.agent_server is not None:
+            self.agent_server.stop()
+            self.agent_server = None
+        self.remote_agent = None
+        self.graph = None
+
+    async def ensure_runtime_ready(self) -> None:
+        """Await the background agent-server startup (serverized mode).
+
+        A no-op for the in-process fake-backend path. While the server is
+        still starting (first message arrives before it is ready) a spinner
+        keeps the wait visible.
+        """
+        if self._uses_fake_backend():
+            return
+        if self._server_start_task is not None:
+            with console.console.status(
+                f"[{theme.spinner_color}]Starting agent server...[/{theme.spinner_color}]"
+            ):
+                self.remote_agent, self.agent_server = await self._server_start_task
+            self._server_start_task = None
+
     async def start(self, show_welcome: bool = True) -> None:
         """Start the interactive session."""
         if self.run_recorder is not None:
             self.run_recorder.start(context=self.context, stream_output=self.context.stream_output)
         try:
-            self.graph_context = initializer.get_graph(
-                agent=self.context.agent,
-                model=self.context.model,
-                working_dir=self.context.working_dir,
-            )
-
             self._register_sigint_handler()
 
-            with console.console.status(f"[{theme.spinner_color}]Loading...[/{theme.spinner_color}]") as status:
-                async with self.graph_context as graph:
-                    self.graph = graph
+            if self._uses_fake_backend():
+                self.graph_context = initializer.get_graph(
+                    agent=self.context.agent,
+                    model=self.context.model,
+                    working_dir=self.context.working_dir,
+                )
+                with console.console.status(f"[{theme.spinner_color}]Loading...[/{theme.spinner_color}]") as status:
+                    async with self.graph_context as graph:
+                        self.graph = graph
+                        status.stop()
+
+                        if show_welcome:
+                            await self._show_welcome()
+
+                        await self._main_loop()
+                        status.start()
+                        status.update(f"[{theme.spinner_color}]Cleaning...[/{theme.spinner_color}]")
+            else:
+                # Wait for the agent server to be fully ready before showing the
+                # welcome screen, keeping the original synchronous Loading
+                # behavior visible the whole time.
+                with console.console.status(f"[{theme.spinner_color}]Loading...[/{theme.spinner_color}]") as status:
+                    status.update(f"[{theme.spinner_color}]Starting agent server...[/{theme.spinner_color}]")
+                    self.remote_agent, self.agent_server = await initializer.start_server(
+                        agent=self.context.agent,
+                        model=self.context.model,
+                        working_dir=self.context.working_dir,
+                    )
                     status.stop()
 
-                    if show_welcome:
-                        console.print("")
-                        self.renderer.show_welcome(self.context)
+                if show_welcome:
+                    await self._show_welcome()
 
-                        # Check for updates in background
-                        update_task = asyncio.create_task(self._check_updates_background())
-                        await update_task
-
-                    await self._main_loop()
-                    status.start()
-                    status.update(f"[{theme.spinner_color}]Cleaning...[/{theme.spinner_color}]")
+                await self._main_loop()
         finally:
             if self.run_recorder is not None:
                 self.run_recorder.finish(context=self.context, exit_code=0)
+            await self._stop_server()
             self._restore_sigint()
+
+    async def _show_welcome(self) -> None:
+        console.print("")
+        self.renderer.show_welcome(self.context)
+
+        # Check for updates in background without blocking the welcome screen.
+        asyncio.create_task(self._check_updates_background())
 
     async def _main_loop(self) -> None:
         """Main interactive loop."""
@@ -167,21 +237,34 @@ class Session:
         if self.run_recorder is not None:
             self.run_recorder.start(context=self.context, stream_output=self.context.stream_output)
         try:
-            self.graph_context = initializer.get_graph(
-                agent=self.context.agent,
-                model=self.context.model,
-                working_dir=self.context.working_dir,
-            )
+            if self._uses_fake_backend():
+                self.graph_context = initializer.get_graph(
+                    agent=self.context.agent,
+                    model=self.context.model,
+                    working_dir=self.context.working_dir,
+                )
+            else:
+                self.remote_agent, self.agent_server = await initializer.start_server(
+                    agent=self.context.agent,
+                    model=self.context.model,
+                    working_dir=self.context.working_dir,
+                )
 
             self._register_sigint_handler()
 
-            async with self.graph_context as graph:
-                self.graph = graph
+            if self._uses_fake_backend() and self.graph_context is not None:
+                async with self.graph_context as graph:
+                    self.graph = graph
 
-                await self.message_dispatcher.dispatch(message)
-                if self.run_recorder is not None:
-                    self.run_recorder.finish(context=self.context, exit_code=0)
-                return 0
+                    await self.message_dispatcher.dispatch(message)
+                    if self.run_recorder is not None:
+                        self.run_recorder.finish(context=self.context, exit_code=0)
+                    return 0
+
+            await self.message_dispatcher.dispatch(message)
+            if self.run_recorder is not None:
+                self.run_recorder.finish(context=self.context, exit_code=0)
+            return 0
 
         except KeyboardInterrupt:
             if self.run_recorder is not None:
@@ -196,6 +279,7 @@ class Session:
             logger.exception("CLI message error")
             return 1
         finally:
+            await self._stop_server()
             self._restore_sigint()
 
     def _sync_audit_context(self) -> None:

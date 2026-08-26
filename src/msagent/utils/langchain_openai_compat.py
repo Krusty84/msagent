@@ -21,7 +21,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any, TypeVar, cast
+from typing import Any, Literal, TypeVar, cast
 
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, BaseMessageChunk
 
@@ -55,7 +55,7 @@ def patch_chat_openai_reasoning_content_support() -> None:
 
     def _convert_message_to_dict(
         message: BaseMessage,
-        api: str = "chat/completions",
+        api: Literal["chat/completions", "responses"] = "chat/completions",
     ) -> dict[str, Any]:
         message_dict = original_convert_message_to_dict(message, api=api)
         if api == "chat/completions" and isinstance(message, AIMessage):
@@ -64,24 +64,24 @@ def patch_chat_openai_reasoning_content_support() -> None:
                 message_dict["reasoning_content"] = reasoning_content
         return message_dict
 
-    def _convert_dict_to_message(payload: Mapping[str, Any]) -> BaseMessage:
-        message = original_convert_dict_to_message(payload)
+    def _convert_dict_to_message(_dict: Mapping[str, Any]) -> BaseMessage:
+        message = original_convert_dict_to_message(_dict)
         return _attach_reasoning_content_to_message(
             message,
-            _extract_reasoning_content(payload),
+            _extract_reasoning_content(_dict),
         )
 
     def _convert_delta_to_message_chunk(
-        payload: Mapping[str, Any],
+        _dict: Mapping[str, Any],
         default_class: type[BaseMessageChunk],
     ) -> BaseMessageChunk:
-        chunk = original_convert_delta_to_message_chunk(payload, default_class)
+        chunk = original_convert_delta_to_message_chunk(_dict, default_class)
         return _attach_reasoning_content_to_message(
             chunk,
-            _extract_reasoning_content(payload),
+            _extract_reasoning_content(_dict),
         )
 
-    openai_base._convert_message_to_dict = _convert_message_to_dict
-    openai_base._convert_dict_to_message = _convert_dict_to_message
-    openai_base._convert_delta_to_message_chunk = _convert_delta_to_message_chunk
-    openai_base._msagent_reasoning_content_patch_applied = True
+    openai_base._convert_message_to_dict = _convert_message_to_dict  # type: ignore[attr-defined]
+    openai_base._convert_dict_to_message = _convert_dict_to_message  # type: ignore[attr-defined]
+    openai_base._convert_delta_to_message_chunk = _convert_delta_to_message_chunk  # type: ignore[attr-defined]
+    setattr(openai_base, "_msagent_reasoning_content_patch_applied", True)

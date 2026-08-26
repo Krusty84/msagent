@@ -18,7 +18,6 @@
 
 from __future__ import annotations
 
-from functools import partial
 from types import SimpleNamespace
 
 import pytest
@@ -377,34 +376,52 @@ async def test_system_message_middleware_awrap_model_call_applies_rendering() ->
     assert str(captured["request"].system_message.content) == "local=NPU=910B; rank={Rank_ID}"
 
 
-def test_patch_third_party_prompt_defaults_overrides_filesystem_prompt() -> None:
-    import deepagents.graph as deepagents_graph
-    import deepagents.middleware.filesystem as deepagents_filesystem
+@pytest.mark.asyncio
+async def test_agent_factory_applies_compact_prompts_via_middleware_constructors(
+    monkeypatch,
+) -> None:
+    """deepagents 0.7.9 removed the module-level constants this project used to
+    monkey-patch; compact prompts are now passed directly to middleware
+    constructors inside AgentFactory.create().
+    """
+    captured: dict[str, object] = {}
+    _patch_deepagent_entrypoints(monkeypatch)
 
-    original_flag = factory_module._THIRD_PARTY_PROMPTS_PATCHED
-    original_filesystem_middleware = deepagents_graph.FilesystemMiddleware
+    def _capture_create_deep_agent(**kwargs):
+        captured.update(kwargs)
+        return _DummyGraph()
 
-    try:
-        factory_module._THIRD_PARTY_PROMPTS_PATCHED = False
+    monkeypatch.setattr(factory_module, "create_deep_agent", _capture_create_deep_agent)
 
-        factory_module.patch_third_party_prompt_defaults()
+    config = SimpleNamespace(
+        name="msagent",
+        prompt="test prompt",
+        llm=SimpleNamespace(),
+        tools=None,
+    )
 
-        patched = deepagents_graph.FilesystemMiddleware
-        assert isinstance(patched, partial)
-        assert patched.func is deepagents_filesystem.FilesystemMiddleware
+    await AgentFactory(llm_factory=_DummyLLMFactory()).create(
+        config=config,
+        mcp_client=_DummyMCPClient(),
+        llm_config=SimpleNamespace(),
+    )
 
-        system_prompt = patched.keywords["system_prompt"]
-        assert system_prompt == "\n\n".join(
-            (
-                factory_module._COMPACT_FILESYSTEM_SYSTEM_PROMPT,
-                factory_module._COMPACT_EXECUTION_SYSTEM_PROMPT,
-            )
+    middleware = captured["middleware"]
+    assert isinstance(middleware, list)
+
+    filesystem = next(m for m in middleware if m.__class__.__name__ == "FilesystemMiddleware")
+    filesystem_prompt = filesystem._custom_system_prompt
+    assert filesystem_prompt == "\n\n".join(
+        (
+            factory_module._COMPACT_FILESYSTEM_SYSTEM_PROMPT,
+            factory_module._COMPACT_EXECUTION_SYSTEM_PROMPT,
         )
-        assert "Large Tool Results" not in system_prompt
-        assert "Shell paths vs. virtual paths" not in system_prompt
-    finally:
-        deepagents_graph.FilesystemMiddleware = original_filesystem_middleware
-        factory_module._THIRD_PARTY_PROMPTS_PATCHED = original_flag
+    )
+    assert "Large Tool Results" not in filesystem_prompt
+    assert "Shell paths vs. virtual paths" not in filesystem_prompt
+
+    todo = next(m for m in middleware if m.__class__.__name__ == "TodoListMiddleware")
+    assert todo.system_prompt == factory_module._COMPACT_TODO_SYSTEM_PROMPT
 
 
 @pytest.mark.asyncio

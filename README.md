@@ -1,4 +1,4 @@
-﻿<h1 align="center" >MindStudio Agent</h1>
+<h1 align="center" >MindStudio Agent</h1>
 
 <div align="center">
 <p><b><span style="font-size:20px;">面向 Ascend NPU 场景的一站式调试调优</span></b></p>
@@ -16,6 +16,7 @@
 
 <span style="font-size:14px;">
 
+🔹 **[2026.08.26]**：新增一键安装方式（`curl | bash` / `irm | iex`），基于 uv 隔离安装，避免与现有环境依赖冲突，推荐使用（详见《[安装指南](docs/zh/getting_started/install_guide.md)》）。<br>
 🔹 **[2026.06.04]**：`Hermes` 更名为 `Profiler`，`Zephyr` 更名为 `Quantizer`，`Icarus` 更名为 `Operator`。<br>
 🔹 **[2026.05.21]**：`v26.0.0已发布，新增Icarus Agent，覆盖算子性能调优场景`。<br>
 🔹 **[2026.04.27]**：`v26.0.0.alpha1` 发布，新增 `Accuracy` / `Zephyr` Agent，覆盖精度调优与模型量化场景。<br>

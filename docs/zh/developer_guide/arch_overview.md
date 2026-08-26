@@ -126,7 +126,7 @@ MindStudio-Agent 采用模块化架构设计，基于 deepagents 运行时与 La
 #### 4. Skills 模块
 
 - **职责**：
-  - SkillFactory：从仓库内 `skills/` 与工作目录 `.msagent/skills/` 加载技能元数据
+  - SkillFactory：从工作目录 `skills/`、全局 `~/.msagent/skills/` 与内置目录加载技能元数据
   - 技能筛选：根据 Agent 配置中的 patterns 进行技能注入
   - 技能目录：为 CLI 与运行时提供技能发现能力
   - 分发能力：构建产物可将仓库 `skills/` 打包到默认资源目录，便于安装版与外部 IDE / Agent 复用

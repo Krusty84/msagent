@@ -9,7 +9,7 @@ msAgent 中的 Agent 采用声明式配置定义，无需编写 Python 代码。
 - **YAML 配置文件**：定义 Agent 的名称、模型、工具、Skill、子 Agent 等
 - **Prompt 文件**：定义 Agent 的系统提示词，决定其行为和能力
 
-编辑 `resources/configs/default/` 下的文件后，首次运行时会自动拷贝到用户的 `.msagent/` 目录。
+`resources/configs/default/` 中的定义会直接作为只读内置默认值加载，不会在首次运行时整目录复制。用户覆盖项放在 `~/.msagent/config/`，用户 Prompt 放在 `~/.msagent/prompts/`。
 
 ## 2. 目录结构
 
@@ -77,11 +77,11 @@ retry:
 | `version` | 是 | 配置版本，使用 `__APP_VERSION__` 占位符，运行时会自动替换 |
 | `name` | 是 | Agent 唯一标识，**必须与文件名一致**（如 `MyAgent.yml` 对应 `name: MyAgent`） |
 | `description` | 是 | Agent 功能简述，展示在 `/agents` 列表中 |
-| `prompt` | 是 | Prompt 文件路径列表（相对于 `.msagent/`），按顺序拼接 |
+| `prompt` | 是 | Prompt 文件路径列表；内置配置相对于默认资源目录，用户覆盖配置相对于 `~/.msagent/` |
 | `llm` | 是 | 使用的 LLM 别名，`default` 对应默认模型，也可指定 `sonnet`、`opus` 等 |
 | `checkpointer` | 是 | 会话持久化后端，通常为 `sqlite` |
 | `default` | 是 | 是否为默认 Agent，**整个系统中必须恰好有一个 `default: true`** |
-| `subagents` | 否 | 引用的子 Agent 名称列表，需在 `.msagent/subagents/` 中定义 |
+| `subagents` | 否 | 引用的子 Agent 名称列表，可来自内置配置或 `~/.msagent/config/subagents/` |
 | `tools.patterns` | 是 | 工具过滤规则，格式 `类别:模块:名称`，支持 `*` 通配符，`!` 前缀表示排除 |
 | `skills.patterns` | 是 | Skill 过滤规则，格式 `类别:名称`，完整列表见 [Skills](../../../skills/README.md) |
 

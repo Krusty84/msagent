@@ -28,6 +28,7 @@ from msagent.cli.bootstrap.legacy import (
     render_version_info,
 )
 from msagent.core.constants import APP_NAME
+from msagent.core.storage_layout import StorageLayoutError
 
 
 def test_create_session_parser_defaults_to_interactive_mode() -> None:
@@ -144,6 +145,44 @@ async def test_main_short_circuits_root_version(monkeypatch: pytest.MonkeyPatch)
 
     assert await bootstrap_app.main() == 0
     assert called == {"help": 0, "version": 1}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("argv", [["--help"], ["-h"], ["config", "--help"], ["config", "-h"], ["--version"], ["-V"]])
+async def test_help_and_version_bypass_storage_guard(
+    monkeypatch: pytest.MonkeyPatch,
+    argv: list[str],
+) -> None:
+    monkeypatch.setattr(bootstrap_app.sys, "argv", ["msagent", *argv])
+    monkeypatch.setattr(bootstrap_app, "render_root_help", lambda: None)
+    monkeypatch.setattr(bootstrap_app, "render_config_help", lambda: None)
+    monkeypatch.setattr(bootstrap_app, "render_version_info", lambda: None)
+    monkeypatch.setattr(
+        bootstrap_app,
+        "validate_and_initialize_storage_layout",
+        lambda _paths: pytest.fail("storage guard should be bypassed"),
+    )
+
+    assert await bootstrap_app.main() == 0
+
+
+@pytest.mark.asyncio
+async def test_storage_guard_runs_before_logging_and_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
+    events: list[str] = []
+    errors: list[str] = []
+
+    def reject_layout(_paths) -> None:
+        events.append("guard")
+        raise StorageLayoutError("legacy layout")
+
+    monkeypatch.setattr(bootstrap_app.sys, "argv", ["msagent", "config", "--show"])
+    monkeypatch.setattr(bootstrap_app, "validate_and_initialize_storage_layout", reject_layout)
+    monkeypatch.setattr(bootstrap_app, "configure_logging", lambda **_kwargs: events.append("logging"))
+    monkeypatch.setattr(bootstrap_app.console, "print_error", errors.append)
+
+    assert await bootstrap_app.main() == 1
+    assert events == ["guard"]
+    assert errors == ["legacy layout"]
 
 
 def test_render_version_info_formats_version_payload(monkeypatch: pytest.MonkeyPatch) -> None:

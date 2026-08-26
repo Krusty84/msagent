@@ -598,7 +598,7 @@ RoCE通信接口带宽数据。
 - Ascend PyTorch Profiler的aic\_metrics
 - MindSpore Profiler的aic\_metrics
 
-仅Atlas 200I/500 A2 推理产品和Atlas A2 训练系列产品/Atlas A2 推理系列产品支持采集该数据。
+仅昇腾310B系列产品和昇腾A2系列产品支持采集该数据。
 
 **表 33**  格式
 

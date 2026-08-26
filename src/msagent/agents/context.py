@@ -25,7 +25,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
-from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict, Field
 
 from msagent.configs import ApprovalMode
@@ -56,7 +55,10 @@ class AgentContext(BaseModel):
     local_environment_context: str = Field(default="")
     mcp_servers: str = Field(default="")
     user_memory: str = Field(default="")
-    tool_catalog: list[BaseTool] = Field(default_factory=list, exclude=True)
+    # Client-side rendering data only (excluded from serialization): may hold
+    # BaseTool instances (in-process) or lightweight descriptors (serverized
+    # mode where the catalog comes from the server's /catalog route).
+    tool_catalog: list[Any] = Field(default_factory=list, exclude=True)
     skill_catalog: list[Skill] = Field(default_factory=list, exclude=True)
     tool_output_max_tokens: int | None = None
     retry_notice_handler: Callable[[RetryNotice], None | Awaitable[None]] | None = Field(default=None, exclude=True)

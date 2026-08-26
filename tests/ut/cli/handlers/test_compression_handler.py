@@ -61,7 +61,7 @@ async def test_compression_handler_updates_current_thread_with_offload_event(
             current_input_tokens=500,
             current_output_tokens=100,
         ),
-        graph=_FakeGraph(),
+        runtime=_FakeGraph(),
         update_context=lambda **kwargs: session.context.__dict__.update(kwargs),
     )
 
@@ -130,8 +130,8 @@ async def test_compression_handler_updates_current_thread_with_offload_event(
     assert session.context.thread_id == "thread-1"
     assert session.context.current_input_tokens == 80
     assert session.context.current_output_tokens == 0
-    assert len(session.graph.updated) == 1
-    assert session.graph.updated[0][1] == {
+    assert len(session.runtime.updated) == 1
+    assert session.runtime.updated[0][1] == {
         "_summarization_event": {
             "cutoff_index": 1,
             "summary_message": HumanMessage(content="summary"),
@@ -155,7 +155,7 @@ async def test_compression_handler_reports_agent_not_found(tmp_path: Path, monke
             approval_mode=ApprovalMode.ACTIVE,
             tool_output_max_tokens=None,
         ),
-        graph=_FakeGraph(),
+        runtime=_FakeGraph(),
     )
 
     async def fake_load_agents_config(_working_dir):
@@ -183,7 +183,7 @@ async def test_compression_handler_reports_no_graph_when_none(tmp_path: Path, mo
             approval_mode=ApprovalMode.ACTIVE,
             tool_output_max_tokens=None,
         ),
-        graph=None,
+        runtime=None,
     )
 
     agent_config = SimpleNamespace(
@@ -222,7 +222,7 @@ async def test_compression_handler_reports_no_messages(tmp_path: Path, monkeypat
             approval_mode=ApprovalMode.ACTIVE,
             tool_output_max_tokens=None,
         ),
-        graph=_EmptyGraph(),
+        runtime=_EmptyGraph(),
     )
 
     agent_config = SimpleNamespace(
@@ -263,7 +263,7 @@ async def test_compression_handler_reports_backend_unavailable(tmp_path: Path, m
             approval_mode=ApprovalMode.ACTIVE,
             tool_output_max_tokens=None,
         ),
-        graph=_NoBackendGraph(),
+        runtime=_NoBackendGraph(),
     )
 
     agent_config = SimpleNamespace(
@@ -306,7 +306,7 @@ async def test_compression_handler_warns_when_already_within_window(
             approval_mode=ApprovalMode.ACTIVE,
             tool_output_max_tokens=None,
         ),
-        graph=_FakeGraphWithBackend(),
+        runtime=_FakeGraphWithBackend(),
     )
 
     agent_config = SimpleNamespace(

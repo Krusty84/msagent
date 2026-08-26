@@ -17,4 +17,4 @@ Structure
 5) Pending items or next steps
 
 Transcript
-{conversation}
+{messages}

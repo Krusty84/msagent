@@ -24,7 +24,7 @@ import logging
 import string
 import os
 import tempfile
-from functools import partial
+from collections.abc import Mapping, Sequence
 from fnmatch import fnmatch
 from importlib import import_module
 from pathlib import Path
@@ -33,9 +33,9 @@ from typing import TYPE_CHECKING, Any, Callable
 from deepagents import create_deep_agent
 from deepagents.backends import CompositeBackend, LocalShellBackend
 from deepagents.backends.filesystem import FilesystemBackend
-from deepagents.middleware import MemoryMiddleware, SkillsMiddleware
+from deepagents.middleware import FilesystemMiddleware, MemoryMiddleware, SkillsMiddleware
 import httpx
-from langchain.agents.middleware import ToolRetryMiddleware
+from langchain.agents.middleware import TodoListMiddleware, ToolRetryMiddleware
 from langchain.agents.middleware.types import AgentMiddleware
 
 from msagent.agents.local_context import ensure_local_context_prompt
@@ -73,19 +73,12 @@ _TAVILY_VALIDATE_TIMEOUT_SECONDS = 5.0
 _TAVILY_KEY_VALIDATION_CACHE: dict[str, bool] = {}
 _SEARCH_TOOL_NAME_KEYWORDS = ("search", "web_search")
 _SEARCH_TOOL_DESCRIPTION_KEYWORDS = ("search", "web", "internet", "query")
-_THIRD_PARTY_PROMPTS_PATCHED = False
 _FILTERED_SKILLS_SYSTEM_PROMPT_PREFIX = """
 
 ## Skills
 
 Use only the skills listed below. Call `get_skill(name, category)` before using a skill, then follow the SKILL.md workflow.
 """
-_COMPACT_BASE_AGENT_PROMPT = """You are a tool-using agent. Be concise, accurate, and action-oriented.
-
-- Read relevant context before editing or concluding.
-- Prefer acting directly over narrating intent.
-- Verify important results against the user's request.
-- Ask only when ambiguity or risk is material."""
 _COMPACT_TODO_SYSTEM_PROMPT = """## `write_todos`
 
 Use `write_todos` only for complex multi-step work or when the user explicitly asks for todo tracking.
@@ -103,11 +96,6 @@ _COMPACT_EXECUTION_SYSTEM_PROMPT = """## Execute Tool `execute`
 Use `execute` for shell commands, scripts, tests, and builds.
 - Prefer dedicated filesystem tools over `cat`, `grep`, or `find`.
 - Use absolute paths and quote paths that contain spaces."""
-_COMPACT_TASK_SYSTEM_PROMPT = """## `task`
-
-Use `task` to delegate independent multi-step work or parallelizable investigations to subagents.
-- Avoid `task` for trivial work.
-- Reconcile subagent results in the main thread."""
 _COMPACT_MEMORY_SYSTEM_PROMPT = """<agent_memory>
 {agent_memory}
 </agent_memory>
@@ -152,10 +140,10 @@ class _SystemMessageMiddleware(AgentMiddleware[Any, Any, Any]):
             super().__init__()
             self._context = context
 
-        def get_value(self, key: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
+        def get_value(self, key: int | str, args: Sequence[Any], kwargs: Mapping[str, Any]) -> Any:
+            if isinstance(key, str) and key in self._context:
+                return self._context[key]
             if isinstance(key, str):
-                if key in self._context:
-                    return self._context[key]
                 return "{" + key + "}"
             return super().get_value(key, args, kwargs)
 
@@ -241,7 +229,7 @@ class _FilteredSkillsMiddleware(SkillsMiddleware):
             ),
         )
 
-    def _format_skills_list(self, skills_metadata: list[dict[str, Any]]) -> str:
+    def _format_skills_list(self, skills_metadata: list[Any]) -> str:
         sorted_skills = self._sorted_filtered_skills(skills_metadata)
         if not sorted_skills:
             return "- No skills enabled for the current agent."
@@ -279,47 +267,17 @@ class _FilteredSkillsMiddleware(SkillsMiddleware):
 
 
 def patch_third_party_prompt_defaults() -> None:
-    """Patch verbose third-party prompts with compact project defaults."""
-    global _THIRD_PARTY_PROMPTS_PATCHED
-    if _THIRD_PARTY_PROMPTS_PATCHED:
-        return
+    """No-op retained for import compatibility.
 
-    import deepagents.graph as deepagents_graph
-    import deepagents.middleware.filesystem as deepagents_filesystem
-    import deepagents.middleware.memory as deepagents_memory
-    import deepagents.middleware.subagents as deepagents_subagents
-    from langchain.agents.middleware.todo import TodoListMiddleware, WRITE_TODOS_TOOL_DESCRIPTION
-
-    filesystem_system_prompt = "\n\n".join(
-        (
-            _COMPACT_FILESYSTEM_SYSTEM_PROMPT,
-            _COMPACT_EXECUTION_SYSTEM_PROMPT,
-        )
-    )
-
-    for module, attr, prompt in (
-        (deepagents_graph, "BASE_AGENT_PROMPT", _COMPACT_BASE_AGENT_PROMPT),
-        (deepagents_filesystem, "FILESYSTEM_SYSTEM_PROMPT", _COMPACT_FILESYSTEM_SYSTEM_PROMPT),
-        (deepagents_filesystem, "EXECUTION_SYSTEM_PROMPT", _COMPACT_EXECUTION_SYSTEM_PROMPT),
-        (deepagents_memory, "MEMORY_SYSTEM_PROMPT", _COMPACT_MEMORY_SYSTEM_PROMPT),
-    ):
-        setattr(module, attr, prompt)
-
-    deepagents_graph.FilesystemMiddleware = partial(
-        deepagents_filesystem.FilesystemMiddleware,
-        system_prompt=filesystem_system_prompt,
-    )
-    deepagents_graph.TodoListMiddleware = partial(
-        TodoListMiddleware,
-        system_prompt=_COMPACT_TODO_SYSTEM_PROMPT,
-        tool_description=WRITE_TODOS_TOOL_DESCRIPTION,
-    )
-    deepagents_graph.SubAgentMiddleware = partial(
-        deepagents_subagents.SubAgentMiddleware,
-        system_prompt=_COMPACT_TASK_SYSTEM_PROMPT,
-    )
-
-    _THIRD_PARTY_PROMPTS_PATCHED = True
+    deepagents 0.7.9 removed the module-level constants and class references
+    this function used to monkey-patch (`deepagents.graph.BASE_AGENT_PROMPT`,
+    module-level `FilesystemMiddleware`/`TodoListMiddleware`/`SubAgentMiddleware`
+    aliases, and the filesystem/execution/task prompt constants). Compact
+    prompt overrides are now applied directly through middleware constructor
+    arguments in `AgentFactory.create()` (custom middleware replaces the
+    deepagents default stack by `.name`).
+    """
+    return None
 
 
 class AgentFactory:
@@ -349,7 +307,6 @@ class AgentFactory:
     ) -> CompiledStateGraph:
         del sandbox_bindings
 
-        patch_third_party_prompt_defaults()
         patch_deepagents_windows_absolute_paths()
         working_dir = (working_dir or Path.cwd()).resolve()
         resolved_llm = llm_config or config.llm
@@ -470,11 +427,34 @@ class AgentFactory:
             tool_timeout=tool_timeout,
         )
         metadata_backend = FilesystemBackend(virtual_mode=False)
+        # deepagents 0.7.9 removed the module-level constants this project used
+        # to monkey-patch; compact prompts are passed directly instead. Custom
+        # middleware with a matching `.name` replaces the deepagents default
+        # stack entry in-place via `_apply_custom_middleware`.
+        middleware.append(
+            FilesystemMiddleware(
+                backend=agent_backend,
+                system_prompt="\n\n".join(
+                    (
+                        _COMPACT_FILESYSTEM_SYSTEM_PROMPT,
+                        _COMPACT_EXECUTION_SYSTEM_PROMPT,
+                    )
+                ),
+            )
+        )
+        # deepagents 0.7.9 no longer injects TodoListMiddleware by default;
+        # keep the `write_todos` tool with the project's compact guidance.
+        middleware.append(
+            TodoListMiddleware(
+                system_prompt=_COMPACT_TODO_SYSTEM_PROMPT,
+            )
+        )
         if memory_sources:
             middleware.append(
                 MemoryMiddleware(
                     backend=metadata_backend,
                     sources=memory_sources,
+                    system_prompt=_COMPACT_MEMORY_SYSTEM_PROMPT,
                 )
             )
         if enable_skills_middleware:
@@ -708,15 +688,12 @@ class AgentFactory:
             extra.append(ToolRetryMiddleware(**tool_retry_kwargs))
 
         sub_tools = sub.tools
-        if (
-            sub_tools is not None
-            and getattr(sub_tools, "output_max_tokens", None) is not None
-            and int(sub_tools.output_max_tokens) > 0
-        ):
+        sub_output_max_tokens = getattr(sub_tools, "output_max_tokens", None)
+        if sub_tools is not None and sub_output_max_tokens is not None and int(sub_output_max_tokens) > 0:
             extra.append(
                 ToolResultEvictionMiddleware(
                     backend=agent_backend,
-                    tool_token_limit_before_evict=int(sub_tools.output_max_tokens),
+                    tool_token_limit_before_evict=int(sub_output_max_tokens),
                 )
             )
         if self._should_enable_skills_middleware(config=sub, skills_sources=skills_sources):

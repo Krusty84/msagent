@@ -220,21 +220,41 @@ class _FilteredSkillsMiddleware(SkillsMiddleware):
 
     def __init__(self, *, backend: Any, sources: list[str], allowed_skills: list[Any] | None) -> None:
         super().__init__(backend=backend, sources=sources)
-        self._allowed_skill_names = {
+        self._default_allowed_skill_names = {
             str(getattr(skill, "name", "")).strip()
             for skill in (allowed_skills or [])
             if str(getattr(skill, "name", "")).strip()
         }
         self.system_prompt_prefix = _FILTERED_SKILLS_SYSTEM_PROMPT_PREFIX
 
-    def _filter_skills_metadata(self, skills_metadata: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        if not self._allowed_skill_names:
-            return []
-        return [skill for skill in skills_metadata if str(skill.get("name", "")).strip() in self._allowed_skill_names]
+    def _allowed_skill_names(self, runtime: Any | None = None) -> set[str]:
+        context = getattr(runtime, "context", None)
+        runtime_skills = getattr(context, "skill_catalog", None)
+        if not isinstance(runtime_skills, list) or not runtime_skills:
+            return set(self._default_allowed_skill_names)
+        return {
+            str(getattr(skill, "name", "")).strip()
+            for skill in runtime_skills  # pylint: disable=not-an-iterable
+            if str(getattr(skill, "name", "")).strip()
+        }
 
-    def _sorted_filtered_skills(self, skills_metadata: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def _filter_skills_metadata(
+        self,
+        skills_metadata: list[dict[str, Any]],
+        runtime: Any | None = None,
+    ) -> list[dict[str, Any]]:
+        allowed_skill_names = self._allowed_skill_names(runtime)
+        if not allowed_skill_names:
+            return []
+        return [skill for skill in skills_metadata if str(skill.get("name", "")).strip() in allowed_skill_names]
+
+    def _sorted_filtered_skills(
+        self,
+        skills_metadata: list[dict[str, Any]],
+        runtime: Any | None = None,
+    ) -> list[dict[str, Any]]:
         return sorted(
-            self._filter_skills_metadata(skills_metadata),
+            self._filter_skills_metadata(skills_metadata, runtime),
             key=lambda skill: (
                 str(skill.get("category", "default")).casefold(),
                 str(skill.get("name", "")).casefold(),
@@ -256,7 +276,9 @@ class _FilteredSkillsMiddleware(SkillsMiddleware):
 
     def modify_request(self, request):
         skills_metadata = list(request.state.get("skills_metadata", []))
-        skills_list = self._format_skills_list(skills_metadata)
+        skills_list = self._format_skills_list(
+            self._sorted_filtered_skills(skills_metadata, getattr(request, "runtime", None))
+        )
         skills_section = f"{self.system_prompt_prefix}\n{skills_list}\n"
         system_message = getattr(request, "system_message", None)
         if system_message is None:
@@ -266,16 +288,22 @@ class _FilteredSkillsMiddleware(SkillsMiddleware):
         return request.override(system_message=append_to_system_message(system_message, skills_section))
 
     def before_agent(self, state, runtime, config):
-        update = super().before_agent(state, runtime, config)
+        # Refresh on every turn so skills added to the configured directories
+        # become available without restarting the current agent session.
+        load_state = dict(state)
+        load_state.pop("skills_metadata", None)
+        update = super().before_agent(load_state, runtime, config)
         if update is None:
             return None
-        return {"skills_metadata": self._sorted_filtered_skills(list(update.get("skills_metadata", [])))}
+        return {"skills_metadata": self._sorted_filtered_skills(list(update.get("skills_metadata", [])), runtime)}
 
     async def abefore_agent(self, state, runtime, config):
-        update = await super().abefore_agent(state, runtime, config)
+        load_state = dict(state)
+        load_state.pop("skills_metadata", None)
+        update = await super().abefore_agent(load_state, runtime, config)
         if update is None:
             return None
-        return {"skills_metadata": self._sorted_filtered_skills(list(update.get("skills_metadata", [])))}
+        return {"skills_metadata": self._sorted_filtered_skills(list(update.get("skills_metadata", [])), runtime)}
 
 
 def patch_third_party_prompt_defaults() -> None:
@@ -1055,7 +1083,26 @@ class AgentFactory:
         if paths is None:
             return []
         candidates = [paths] if isinstance(paths, Path) else list(paths)
-        return [str(path) for path in candidates if path.exists()]
+        sources: list[str] = []
+        for path in candidates:
+            if not path.is_dir():
+                continue
+
+            # DeepAgents scans only ``source/<skill>/SKILL.md``. Built-in
+            # skills are grouped as ``skills/<category>/<skill>/SKILL.md``,
+            # so expose each category as an individual source.
+            child_dirs = sorted(
+                (child for child in path.iterdir() if child.is_dir()),
+                key=lambda item: item.name,
+            )
+            if any((child / "SKILL.md").is_file() for child in child_dirs):
+                sources.append(str(path))
+            sources.extend(
+                str(child)
+                for child in child_dirs
+                if any((skill_dir / "SKILL.md").is_file() for skill_dir in child.iterdir() if skill_dir.is_dir())
+            )
+        return sources
 
     @staticmethod
     def _should_enable_skills_middleware(

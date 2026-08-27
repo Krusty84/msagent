@@ -103,6 +103,10 @@ def _patch_dispatch_to_raise_connection_error(
             temperature=0.0,
         )
 
+    async def fake_refresh_cached_skills(*, agent: str | None, working_dir: Path) -> list[Any]:
+        del agent, working_dir
+        return []
+
     async def fake_invoke_without_stream(self, *_args, **_kwargs) -> None:
         request = httpx.Request(
             "POST",
@@ -122,6 +126,11 @@ def _patch_dispatch_to_raise_connection_error(
         message_module.initializer,
         "load_llm_config",
         fake_load_llm_config,
+    )
+    monkeypatch.setattr(
+        message_module.initializer,
+        "refresh_cached_skills",
+        fake_refresh_cached_skills,
     )
     monkeypatch.setattr(
         dispatcher,
@@ -177,7 +186,9 @@ async def test_invoke_without_stream_resumes_interrupts(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_invoke_without_stream_limits_interrupt_resume_iterations(tmp_path: Path) -> None:
+async def test_invoke_without_stream_limits_interrupt_resume_iterations(
+    tmp_path: Path,
+) -> None:
     session = _build_session(tmp_path)
     dispatcher = MessageDispatcher(session)
     calls: list[Any] = []
@@ -237,6 +248,47 @@ async def test_dispatch_logs_detailed_connection_errors(
 
 
 @pytest.mark.asyncio
+async def test_dispatch_refreshes_skill_cache_before_building_context(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _build_session(tmp_path)
+    dispatcher = MessageDispatcher(session)
+    call_order: list[str] = []
+
+    monkeypatch.setattr(
+        dispatcher.message_builder,
+        "build",
+        lambda content: (content, {}),
+    )
+
+    async def fake_refresh_cached_skills(*, agent: str | None, working_dir: Path):
+        assert agent == "msagent"
+        assert working_dir == tmp_path
+        call_order.append("refresh")
+        return []
+
+    async def fake_build_agent_context():
+        call_order.append("build_context")
+        return message_module.AgentContext()
+
+    async def fake_invoke_without_stream(*_args, **_kwargs):
+        call_order.append("invoke")
+
+    async def fake_resolve_prior_agent_prompt(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(message_module.initializer, "refresh_cached_skills", fake_refresh_cached_skills)
+    monkeypatch.setattr(dispatcher, "_build_agent_context", fake_build_agent_context)
+    monkeypatch.setattr(dispatcher, "_resolve_prior_agent_prompt", fake_resolve_prior_agent_prompt)
+    monkeypatch.setattr(dispatcher, "_invoke_without_stream", fake_invoke_without_stream)
+
+    await dispatcher.dispatch("hello")
+
+    assert call_order == ["refresh", "build_context", "invoke"]
+
+
+@pytest.mark.asyncio
 async def test_dispatch_writes_detailed_processing_errors_to_verbose_log(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -285,7 +337,9 @@ async def test_dispatch_writes_detailed_processing_errors_to_verbose_log(
         root_logger.setLevel(original_level)
 
 
-def test_extract_tool_call_names_handles_chunks_and_raw_payloads(tmp_path: Path) -> None:
+def test_extract_tool_call_names_handles_chunks_and_raw_payloads(
+    tmp_path: Path,
+) -> None:
     session = _build_session(tmp_path)
     dispatcher = MessageDispatcher(session)
 
@@ -494,7 +548,9 @@ def test_extract_tool_call_previews_keeps_distinct_same_name_calls_with_conflict
     ]
 
 
-def test_merge_tool_activity_calls_keeps_args_visible_across_chunks(tmp_path: Path) -> None:
+def test_merge_tool_activity_calls_keeps_args_visible_across_chunks(
+    tmp_path: Path,
+) -> None:
     session = _build_session(tmp_path)
     dispatcher = MessageDispatcher(session)
 
@@ -606,7 +662,9 @@ def test_set_tool_activity_dedupes_same_call_across_namespaces(tmp_path: Path) -
     }
 
 
-def test_refresh_activity_live_defers_terminal_flush_to_live_auto_refresh(tmp_path: Path) -> None:
+def test_refresh_activity_live_defers_terminal_flush_to_live_auto_refresh(
+    tmp_path: Path,
+) -> None:
     session = _build_session(tmp_path)
     dispatcher = MessageDispatcher(session)
 
@@ -634,7 +692,9 @@ def test_refresh_activity_live_defers_terminal_flush_to_live_auto_refresh(tmp_pa
     assert captured[0][1] is False
 
 
-def test_clear_tool_activity_can_force_flush_before_static_render(tmp_path: Path) -> None:
+def test_clear_tool_activity_can_force_flush_before_static_render(
+    tmp_path: Path,
+) -> None:
     session = _build_session(tmp_path)
     dispatcher = MessageDispatcher(session)
 
@@ -728,7 +788,9 @@ def test_extract_last_update_message_returns_none_for_empty_or_invalid_payloads(
     assert dispatcher._extract_last_update_message({"messages": ["not-a-message"]}) is None
 
 
-def test_render_new_update_message_deduplicates_by_stable_message_id(tmp_path: Path) -> None:
+def test_render_new_update_message_deduplicates_by_stable_message_id(
+    tmp_path: Path,
+) -> None:
     session = _build_session(tmp_path)
     rendered: list[tuple[str, Any]] = []
     session.renderer = SimpleNamespace(
@@ -792,7 +854,9 @@ def test_render_assistant_with_deferred_tools_hides_header_until_result(
     assert isinstance(pending.started_at, float)
 
 
-def test_render_pending_tool_header_uses_deferred_header_before_result(tmp_path: Path) -> None:
+def test_render_pending_tool_header_uses_deferred_header_before_result(
+    tmp_path: Path,
+) -> None:
     session = _build_session(tmp_path)
     rendered: list[tuple[str, Any]] = []
     session.renderer = SimpleNamespace(

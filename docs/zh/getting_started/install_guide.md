@@ -4,11 +4,13 @@
 
 本文面向第一次使用 MindStudio-Agent 的用户，帮助您完成 msAgent 安装。
 
-当前支持两种安装方式：[在线安装](#31-在线安装)、[源码安装](#32-源码安装)。
+推荐使用**一键安装**（[3.1 一键安装（推荐）](#31-一键安装推荐)）：自动安装 `mindstudio-agent` 最新版本，不与现有环境冲突。
+
+同时支持 [pip 安装（备选）](#32-pip-安装备选)与[源码安装](#33-源码安装)两种方式。
 
 ## 2. 环境要求
 
-- `Python >= 3.11`
+- **无需预先安装 Python**：一键安装会自动下载所需的 Python 版本（`>= 3.11`）。
 
 - `glibc >= 2.34`
 
@@ -18,12 +20,20 @@
 
 ## 3. 安装方式
 
-### 3.1 在线安装
+### 3.1 一键安装（推荐）
 
-要求设备具备互联网访问能力，可通过如下命令完成工具的下载与安装。
+安装器默认使用国内镜像（安装快）；若镜像尚未同步最新版本，会自动改用官方 PyPI 获取最新版。
+
+**Linux / macOS / WSL：**
 
 ```shell
-pip install mindstudio-agent
+curl -LsSf https://raw.gitcode.com/Ascend/msagent/raw/master/scripts/install.sh | bash
+```
+
+**Windows（PowerShell 5.1 及以上）：**
+
+```powershell
+irm https://raw.gitcode.com/Ascend/msagent/raw/master/scripts/install.ps1 | iex
 ```
 
 执行如下命令提示msAgent版本即安装成功。
@@ -32,9 +42,38 @@ pip install mindstudio-agent
 msagent --version
 ```
 
-### 3.2 源码安装
+#### 常用环境变量（可选）
 
-#### 3.2.1 环境准备
+| 变量 | 说明 |
+| --- | --- |
+| `MSAGENT_VERSION` | 安装指定版本，如 `MSAGENT_VERSION=26.1.0`（默认安装最新版） |
+| `MSAGENT_INDEX` | 指定 PyPI 镜像地址，如 `MSAGENT_INDEX=https://pypi.org/simple` |
+| `MSAGENT_PYTHON` | 工具环境使用的 Python 版本（默认 `3.11`） |
+| `MSAGENT_NO_MODIFY_PATH` | 设为 `1` 时跳过 PATH 修改（由用户自行配置 PATH） |
+| `MSAGENT_YES` | 设为 `1` 时免交互自动执行（CI/无人值守场景） |
+
+> 提示：如需强制指定某个源，可设置 `MSAGENT_INDEX=<index>`。
+
+### 3.2 pip 安装（备选）
+
+仅建议在**隔离的虚拟环境**中使用。直接向现有环境执行 `pip install` 可能与已有依赖冲突（如 torch、`mindstudio_monitor`），且在 Ubuntu 22.04 及以上系统会受 PEP 668（externally-managed-environment）限制。
+
+```shell
+python3 -m venv ~/.msagent-venv
+~/.msagent-venv/bin/pip install mindstudio-agent
+```
+
+或使用 uv 工具安装（推荐替代 pip）：
+
+```shell
+uv tool install -U --python 3.11 mindstudio-agent
+```
+
+> 注意：需 `Python >= 3.11`；pip 安装前请确认当前环境为隔离虚拟环境，避免污染现有环境。
+
+### 3.3 源码安装
+
+#### 3.3.1 环境准备
 
 源码编译统一使用 MindStudio 标准构建环境。
 
@@ -45,7 +84,7 @@ msagent --version
 
 镜像构建完成后，必须使用统一镜像制作指南第 7 章给出的 `ctr_in.py` 命令，在交互式终端中启动并进入容器。不得使用普通 `docker run` 创建容器，也不得使用 `docker exec <容器名> bash -c '<命令>'` 替代交互式环境；否则可能跳过 Python、GCC 和 CANN 环境初始化。
 
-#### 3.2.2 编译并安装
+#### 3.3.2 编译并安装
 
 1. 进入 `ctr_in.py` 打开的交互式容器 Shell 后，执行如下命令克隆本仓库：
 
@@ -75,7 +114,7 @@ msagent --version
 
    默认构建会安装 `uv`。如本地已安装 `uv`，可使用 `python3 build.py local` 跳过安装。
 
-#### 3.2.3 执行单元测试（可选）
+#### 3.3.3 执行单元测试（可选）
 
 此步骤非安装必需。如需验证代码基本功能，可在仓库根目录执行：
 
@@ -94,7 +133,7 @@ msagent --version
 msagent --help
 ```
 
-命令能够输出版本信息和帮助信息，表示安装成功。若提示命令不存在，请确认当前终端使用的是安装 `mindstudio-agent` 的 Python 环境。
+命令能够输出版本信息和帮助信息，表示安装成功。若提示命令不存在，请确认已重新打开终端（或执行 `source ~/.bashrc` / 重启 shell），使安装器添加的 PATH 生效。
 
 ## 5. 升级与卸载
 
@@ -104,13 +143,25 @@ msagent --help
 
 常见操作示例：
 
-- 升级
+- 升级（推荐：重新执行一键安装命令，自动升级到最新版）
 
   ```shell
-  pip install -U mindstudio-agent
+  curl -LsSf https://raw.gitcode.com/Ascend/msagent/raw/master/scripts/install.sh | bash
   ```
 
-- 卸载
+- 升级（uv 工具方式）
+
+  ```shell
+  uv tool upgrade mindstudio-agent
+  ```
+
+- 卸载（uv 工具方式）
+
+  ```shell
+  uv tool uninstall mindstudio-agent
+  ```
+
+- 卸载（pip 方式）
 
   ```shell
   pip uninstall mindstudio-agent

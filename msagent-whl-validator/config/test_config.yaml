@@ -1,0 +1,21 @@
+llm:
+  model: deepseek-v4-flash
+  api_key_env: DEEPSEEK_API_KEY
+  protocols:
+    openai:
+      base_url: https://api.deepseek.com
+      base_url_env: OPENAI_BASE_URL
+      provider_api_key_env: OPENAI_API_KEY
+    anthropic:
+      base_url: https://api.deepseek.com/anthropic
+      base_url_env: ANTHROPIC_BASE_URL
+      provider_api_key_env: ANTHROPIC_API_KEY
+
+msagent:
+  executable: msagent
+  timeout_seconds: 180
+
+artifacts:
+  root_dir: artifacts
+  retention: failed
+  retain_workspace_on_failure: true

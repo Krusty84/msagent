@@ -182,6 +182,7 @@ async def test_command_dispatcher_routes_skill_shortcut(
 ) -> None:
     session = SimpleNamespace(
         context=SimpleNamespace(
+            agent="Profiler",
             working_dir=Path.cwd(),
             bash_mode=False,
             thread_id="thread-1",
@@ -200,20 +201,66 @@ async def test_command_dispatcher_routes_skill_shortcut(
         category="analysis",
     )
     shortcut_mock = AsyncMock(return_value=True)
+    refresh_mock = AsyncMock(return_value=[skill])
 
     monkeypatch.setattr(commands_module.initializer, "cached_agent_skills", [skill])
+    monkeypatch.setattr(commands_module.initializer, "refresh_cached_skills", refresh_mock)
     monkeypatch.setattr(dispatcher.skills_handler, "handle_shortcut", shortcut_mock)
     monkeypatch.setattr(commands_module.console, "print_error", lambda *_args: None)
     monkeypatch.setattr(commands_module.console, "print", lambda *_args, **_kwargs: None)
 
     await dispatcher.dispatch("/workspace-skill summarize the workspace")
 
+    refresh_mock.assert_awaited_once_with(
+        agent=session.context.agent,
+        working_dir=session.context.working_dir,
+    )
     shortcut_mock.assert_awaited_once_with(
         [skill],
         "workspace-skill",
         ["summarize", "the", "workspace"],
         raw_input="/workspace-skill summarize the workspace",
     )
+
+
+@pytest.mark.asyncio
+async def test_command_dispatcher_refreshes_skills_before_skills_command(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = SimpleNamespace(
+        context=SimpleNamespace(
+            agent="Profiler",
+            working_dir=Path.cwd(),
+            bash_mode=False,
+            thread_id="thread-1",
+            current_input_tokens=None,
+            current_output_tokens=None,
+        ),
+        prompt=SimpleNamespace(hotkeys={}),
+        renderer=SimpleNamespace(render_help=lambda *_args, **_kwargs: None),
+        update_context=lambda **_kwargs: None,
+        running=True,
+    )
+    dispatcher = CommandDispatcher(session)
+    skill = _build_skill(
+        name="workspace-skill",
+        description="Grouped skill",
+        category="analysis",
+    )
+    refresh_mock = AsyncMock(return_value=[skill])
+    handle_mock = AsyncMock()
+
+    monkeypatch.setattr(commands_module.initializer, "cached_agent_skills", [skill])
+    monkeypatch.setattr(commands_module.initializer, "refresh_cached_skills", refresh_mock)
+    monkeypatch.setattr(dispatcher.skills_handler, "handle", handle_mock)
+
+    await dispatcher.cmd_skills(["analysis/workspace-skill"])
+
+    refresh_mock.assert_awaited_once_with(
+        agent=session.context.agent,
+        working_dir=session.context.working_dir,
+    )
+    handle_mock.assert_awaited_once_with([skill], ["analysis/workspace-skill"])
 
 
 def test_skills_handler_build_description_preview_shortens_long_text() -> None:

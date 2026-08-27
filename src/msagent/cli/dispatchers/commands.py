@@ -81,6 +81,7 @@ class CommandDispatcher:
             if command in self.commands:
                 await self.commands[command](args)
             else:
+                await self._refresh_skills_cache()
                 handled = await self.skills_handler.handle_shortcut(
                     initializer.cached_agent_skills,
                     command.removeprefix("/"),
@@ -123,6 +124,7 @@ class CommandDispatcher:
 
     async def cmd_skills(self, args: list[str]) -> None:
         """Browse skills or run a specific skill via `/skills <skill> [task...]`."""
+        await self._refresh_skills_cache()
         await self.skills_handler.handle(initializer.cached_agent_skills, args)
 
     async def cmd_add_skill(self, args: list[str]) -> None:
@@ -164,3 +166,7 @@ class CommandDispatcher:
     async def cmd_exit(self, args: list[str]) -> None:
         """Exit the application."""
         self.session.running = False
+
+    async def _refresh_skills_cache(self) -> None:
+        ctx = self.session.context
+        await initializer.refresh_cached_skills(agent=ctx.agent, working_dir=ctx.working_dir)

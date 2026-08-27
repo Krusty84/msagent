@@ -118,6 +118,21 @@ class Initializer:
         """Resolve skill search directories in precedence order."""
         return self._resolve_skills_dirs(working_dir)
 
+    async def refresh_cached_skills(self, *, agent: str | None, working_dir: Path) -> list[Skill]:
+        """Refresh cached skill metadata for the current working directory and agent."""
+        agent_config = await self.load_agent_config(agent, working_dir)
+        skills_dirs = self._resolve_skills_dirs(working_dir)
+        skill_map = await self.skill_factory.load_skills(skills_dirs)
+        cached_skills = [skill for category in skill_map.values() for skill in category.values()]
+        skills_config = getattr(agent_config, "skills", None)
+        skill_patterns = list(skills_config.patterns or []) if skills_config is not None else []
+        filtered_skills = self._filter_skills_by_patterns(
+            cached_skills,
+            patterns=skill_patterns,
+        )
+        self.cached_agent_skills = filtered_skills
+        return filtered_skills
+
     @asynccontextmanager
     async def get_checkpointer(self, agent: str, working_dir: Path) -> AsyncIterator[BaseCheckpointSaver]:
         """Open the configured checkpointer for a given agent."""
@@ -203,14 +218,9 @@ class Initializer:
 
         with timer("Load skills metadata"):
             skills_dirs = self._resolve_skills_dirs(working_dir)
-            skill_map = await self.skill_factory.load_skills(skills_dirs)
-            cached_skills = [skill for category in skill_map.values() for skill in category.values()]
+            filtered_skills = await self.refresh_cached_skills(agent=agent_config.name, working_dir=working_dir)
             skills_config = getattr(agent_config, "skills", None)
             skill_patterns = list(skills_config.patterns or []) if skills_config is not None else []
-            filtered_skills = self._filter_skills_by_patterns(
-                cached_skills,
-                patterns=skill_patterns,
-            )
             runtime_skills_dirs = (
                 skills_dirs if any(pattern and not pattern.startswith("!") for pattern in skill_patterns) else None
             )
@@ -234,7 +244,6 @@ class Initializer:
         self.cached_tools_in_catalog = list(
             getattr(graph, "_tools_in_catalog", self.cached_llm_tools) or self.tool_factory.get_catalog_tools()
         )
-        self.cached_agent_skills = filtered_skills
         self.cached_mcp_server_names = self._resolve_cached_mcp_server_names(
             tools=self.cached_llm_tools,
             mcp_config=mcp_config,

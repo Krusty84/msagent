@@ -17,6 +17,7 @@
 # -------------------------------------------------------------------------
 
 from pathlib import Path
+from types import SimpleNamespace
 
 from msagent.agents.factory import _FilteredSkillsMiddleware
 from msagent.skills.factory import DEFAULT_SKILL_CATEGORY, Skill
@@ -93,3 +94,34 @@ def test_filtered_skills_middleware_returns_empty_when_no_allowed_skills() -> No
     filtered = middleware._filter_skills_metadata([{"name": "demo-skill", "description": "demo"}])
 
     assert filtered == []
+
+
+def test_filtered_skills_middleware_prefers_runtime_skill_catalog() -> None:
+    old_skill = Skill(
+        name="old-skill",
+        description="old description",
+        category="analysis",
+        path=Path("/tmp/old-skill/SKILL.md"),
+    )
+    new_skill = Skill(
+        name="new-skill",
+        description="new description",
+        category="analysis",
+        path=Path("/tmp/new-skill/SKILL.md"),
+    )
+    middleware = _FilteredSkillsMiddleware(
+        backend=None,
+        sources=[],
+        allowed_skills=[old_skill],
+    )
+    runtime = SimpleNamespace(context=SimpleNamespace(skill_catalog=[new_skill]))
+
+    filtered = middleware._filter_skills_metadata(
+        [
+            {"name": "old-skill", "description": "old description"},
+            {"name": "new-skill", "description": "new description"},
+        ],
+        runtime,
+    )
+
+    assert filtered == [{"name": "new-skill", "description": "new description"}]

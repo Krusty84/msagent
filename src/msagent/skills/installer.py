@@ -11,8 +11,6 @@ import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from msagent.cli.bootstrap.initializer import initializer
-from msagent.core.constants import CONFIG_SKILLS_DIR
 from msagent.skills.factory import DEFAULT_SKILL_CATEGORY, SkillFactory
 
 SKILL_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
@@ -45,8 +43,9 @@ class SkillInstallResult:
 class SkillInstaller:
     """Validate and install custom skills into the local config directory."""
 
-    def __init__(self, working_dir: Path) -> None:
+    def __init__(self, working_dir: Path, skills_dir: Path | None = None) -> None:
         self.working_dir = working_dir
+        self.skills_dir = skills_dir or working_dir / ".msagent" / "skills"
         self.skill_factory = SkillFactory()
 
     async def install(self, raw_path: str) -> SkillInstallResult:
@@ -76,7 +75,7 @@ class SkillInstaller:
         category = DEFAULT_SKILL_CATEGORY
         pattern = f"{category}:{name}"
         target_dir_name = self._build_target_dir_name(name)
-        target_root = self.working_dir / CONFIG_SKILLS_DIR / target_dir_name
+        target_root = self.skills_dir / target_dir_name
         target_skill_file = target_root / "SKILL.md"
 
         if target_root.exists():
@@ -133,8 +132,12 @@ class SkillInstaller:
         return nested_skill_files[0].parent, nested_skill_files[0]
 
     async def _ensure_not_shadowed(self, pattern: str) -> None:
-        skills_dirs = initializer.resolve_skills_dirs(self.working_dir)
-        config_dir = self.working_dir / CONFIG_SKILLS_DIR
+        skills_dirs = [
+            self.working_dir / "skills",
+            self.skills_dir,
+            self.skill_factory.get_default_skills_dir(),
+        ]
+        config_dir = self.skills_dir
 
         shadowing_dirs: list[Path] = []
         for skills_dir in skills_dirs:

@@ -176,15 +176,21 @@ async def test_agents_handler_updates_context_when_different_agent_selected(
             return minos
         return hermes
 
-    async def fake_update_default_agent(_agent_name, _working_dir):
-        pass
+    persisted_agents: list[str] = []
+
+    async def fake_get_current_model(_agent_name, _working_dir):
+        return None
+
+    async def fake_set_current_agent(agent_name, _working_dir):
+        persisted_agents.append(agent_name)
 
     async def fake_get_agent_selection(_agents, _current):
         return "Minos"
 
     monkeypatch.setattr(agents_module.initializer, "load_agents_config", fake_load_agents_config)
     monkeypatch.setattr(agents_module.initializer, "load_agent_config", fake_load_agent_config)
-    monkeypatch.setattr(agents_module.initializer, "update_default_agent", fake_update_default_agent)
+    monkeypatch.setattr(agents_module.initializer, "get_current_model", fake_get_current_model)
+    monkeypatch.setattr(agents_module.initializer, "set_current_agent", fake_set_current_agent)
     monkeypatch.setattr(agents_module.uuid, "uuid4", lambda: "new-thread-id")
     monkeypatch.setattr(agents_module.console, "print_warning", warnings.append)
     monkeypatch.setattr(agents_module.console, "print", lambda *_args, **_kwargs: None)
@@ -200,6 +206,7 @@ async def test_agents_handler_updates_context_when_different_agent_selected(
     assert context_updates.get("thread_id") == "new-thread-id"
     assert context_updates.get("current_input_tokens") is None
     assert context_updates.get("current_output_tokens") is None
+    assert persisted_agents == ["Minos"]
     assert warnings == ["Switched to Agent: Minos. A new conversation has started."]
 
 

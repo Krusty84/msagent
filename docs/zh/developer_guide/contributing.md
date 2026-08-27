@@ -81,7 +81,7 @@ uv run msagent --version
 ### 建议阅读顺序
 
 1. [架构概览](arch_overview.md)：了解 CLI、Agent Factory、Tools、Skills、MCP 与中间件的分层关系
-2. [配置与扩展](../user_guide/configuration-and-extension.md)：理解 `.msagent/` 本地配置、MCP 与 Skills 加载顺序
+2. [配置与扩展](../user_guide/configuration-and-extension.md)：理解全局配置、项目状态、MCP 与 Skills 加载顺序
 3. [Agent / Tool / Skill 过滤规则](../user_guide/agent-tool-skill-filter-rules.md)：修改 Agent 能力边界前必读
 4. 与你改动相关的 Agent 指南或用户指南
 
@@ -182,7 +182,7 @@ Skill 匹配与过滤规则见 [Agent / Tool / Skill 过滤规则](../user_guide
 
 ### Agent / 配置贡献
 
-Agent 定义位于 `resources/configs/default/agents/`，运行时复制到工作目录 `.msagent/agents/`。修改 Tool 或 Skill 可见范围时：
+内置 Agent 定义位于 `resources/configs/default/agents/`，运行时直接读取；用户覆盖位于 `~/.msagent/config/agents/`。修改 Tool 或 Skill 可见范围时：
 
 - `tools.patterns` 使用 `<category>:<module>:<name_pattern>` 三段式
 - `skills.patterns` 使用 `<category>:<name_pattern>` 两段式

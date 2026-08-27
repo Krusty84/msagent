@@ -73,10 +73,13 @@ class SkillInstaller:
                 "The skill will still be installed."
             )
 
-        category = DEFAULT_SKILL_CATEGORY
+        category = self._infer_category(source_root)
         pattern = f"{category}:{name}"
         target_dir_name = self._build_target_dir_name(name)
-        target_root = self.working_dir / CONFIG_SKILLS_DIR / target_dir_name
+        if category == DEFAULT_SKILL_CATEGORY:
+            target_root = self.working_dir / CONFIG_SKILLS_DIR / target_dir_name
+        else:
+            target_root = self.working_dir / CONFIG_SKILLS_DIR / category / target_dir_name
         target_skill_file = target_root / "SKILL.md"
 
         if target_root.exists():
@@ -159,3 +162,11 @@ class SkillInstaller:
         if not SKILL_NAME_PATTERN.fullmatch(name):
             raise SkillInstallError("Skill name may only contain letters, numbers, '-' and '_'")
         return name
+
+    @staticmethod
+    def _infer_category(source_root: Path) -> str:
+        parent = source_root.parent
+        grandparent = parent.parent
+        if grandparent.name == "skills" and parent.name:
+            return parent.name
+        return DEFAULT_SKILL_CATEGORY

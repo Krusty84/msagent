@@ -115,6 +115,21 @@ async def test_skill_installer_uses_skill_name_for_target_directory(tmp_path: Pa
 
 
 @pytest.mark.asyncio
+async def test_skill_installer_preserves_category_for_skills_tree_sources(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "incoming" / "skills" / "profiler" / "categorized-skill"
+    _write_skill(skill_dir, name="categorized-skill")
+
+    installer = SkillInstaller(tmp_path)
+    result = await installer.install(str(skill_dir))
+
+    assert result.category == "profiler"
+    assert result.pattern == "profiler:categorized-skill"
+    assert result.display_name == "profiler/categorized-skill"
+    assert result.target_root == tmp_path / ".msagent" / "skills" / "profiler" / "categorized-skill"
+    assert (result.target_root / "SKILL.md").exists()
+
+
+@pytest.mark.asyncio
 async def test_skill_installer_surfaces_invalid_frontmatter_errors(tmp_path: Path) -> None:
     skill_dir = tmp_path / "broken-skill"
     skill_dir.mkdir(parents=True)

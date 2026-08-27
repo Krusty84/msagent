@@ -183,6 +183,8 @@ class MessageDispatcher:
         try:
             reference_mapping = self.session.prefilled_reference_mapping.copy()
             self.session.prefilled_reference_mapping.clear()
+            ctx = self.session.context
+            await initializer.refresh_cached_skills(agent=ctx.agent, working_dir=ctx.working_dir)
 
             message_content, image_refs = self.message_builder.build(content)
 
@@ -193,7 +195,6 @@ class MessageDispatcher:
                 short_content=content,
                 additional_kwargs={"reference_mapping": reference_mapping},
             )
-            ctx = self.session.context
             agent_context = await self._build_agent_context()
 
             graph_config = RunnableConfig(

@@ -237,6 +237,47 @@ async def test_dispatch_logs_detailed_connection_errors(
 
 
 @pytest.mark.asyncio
+async def test_dispatch_refreshes_skill_cache_before_building_context(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _build_session(tmp_path)
+    dispatcher = MessageDispatcher(session)
+    call_order: list[str] = []
+
+    monkeypatch.setattr(
+        dispatcher.message_builder,
+        "build",
+        lambda content: (content, {}),
+    )
+
+    async def fake_refresh_cached_skills(*, agent: str | None, working_dir: Path):
+        assert agent == "msagent"
+        assert working_dir == tmp_path
+        call_order.append("refresh")
+        return []
+
+    async def fake_build_agent_context():
+        call_order.append("build_context")
+        return message_module.AgentContext()
+
+    async def fake_invoke_without_stream(*_args, **_kwargs):
+        call_order.append("invoke")
+
+    async def fake_resolve_prior_agent_prompt(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(message_module.initializer, "refresh_cached_skills", fake_refresh_cached_skills)
+    monkeypatch.setattr(dispatcher, "_build_agent_context", fake_build_agent_context)
+    monkeypatch.setattr(dispatcher, "_resolve_prior_agent_prompt", fake_resolve_prior_agent_prompt)
+    monkeypatch.setattr(dispatcher, "_invoke_without_stream", fake_invoke_without_stream)
+
+    await dispatcher.dispatch("hello")
+
+    assert call_order == ["refresh", "build_context", "invoke"]
+
+
+@pytest.mark.asyncio
 async def test_dispatch_writes_detailed_processing_errors_to_verbose_log(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

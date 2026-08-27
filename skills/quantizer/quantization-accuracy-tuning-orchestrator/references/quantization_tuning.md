@@ -45,6 +45,13 @@
              │ (生成测评配置) │
              └───────┬───────┘
                      ▼
+            ┌──────────────────────────┐
+            │ Agent:                   │
+            │ quantization-expert-     │
+            │ experience-tuning-rules  │
+            │ (结构化回退意见，二分前)  │
+            └───────────┬──────────────┘
+                        ▼
              (>>> 循环开始 <<<) ◄────────────┐
                      ▼                      │
             ┌────────────────────┐          │
@@ -62,7 +69,8 @@
             │ Agent:          │             │
             │ practice-       │             │
             │ generator       │             │
-            │ (生成量化配置)   │             │
+            │ (生成量化配置，   │             │
+            │ 应用结构化回退)   │             │
             └────────┬────────┘             │
                      ▼                      │
             ┌─────────────────┐             │
@@ -116,13 +124,16 @@
  	 
 以下规则对上方流程图中的各个环节施加额外约束，执行调优时必须一并遵守。
 
-### FP baseline 获取（循环前强制前置）
+### FP baseline 获取（循环前前置）
 
-若用户未提供 FP baseline：
-1. 生成浮点模型的评测配置（不含 quantization 相关参数）
-2. 对浮点模型执行评测，记录 baseline 精度
-3. 将 baseline 值写入 evaluate_config.yaml 的 target 字段（target = FP baseline - tolerance, 其中 tolerance 为用户容差）
-4. 然后才进入循环
+**分两种情况**：
+
+1. **用户提供了绝对精度目标**（如「gsm8k 精度 ≥ 83%」）：直接将该数值作为 target，**不需要**执行浮点基线测评。
+2. **用户未提供绝对目标**（如「精度损失 ≤ 2%」「尽量保持精度」等相对/模糊描述）：**必须**先对浮点模型执行评测获取 baseline，禁止猜测或使用默认值：
+   1. 生成浮点模型的评测配置（不含 quantization 相关参数）
+   2. 对浮点模型执行评测，记录 baseline 精度
+   3. 将 baseline 值写入 evaluate_config.yaml 的 target 字段（target = FP baseline - tolerance, 其中 tolerance 为用户容差）
+   4. 然后才进入循环
 
 注意：target 不要随意计算。参照以下示例进行计算：
 （1）如果用户描述"不低于浮点精度超过 1%"，则 target = FP baseline - 1%。
@@ -150,9 +161,114 @@
 - 截断 exclude 列表时，不能在 gate_proj/up_proj 配对中间截断
 - 若中位数截断点落在配对中间，向上取整到配对末尾
 
-### 精简数据集的使用
+### 结构化回退经验（二分前接入）
 
-若用户提供了精简数据集和全量数据集，则进行精度调优使用精简数据集进行。当调优（摸高二分搜索）结束后，将数据集切换为全量数据集，并且分别测一次浮点权重和量化权重在全量数据集上的精度表现，作为最终是否达标的结论。
+采用 `standing_high_with_experience` 策略时，**进入二分搜索前**，主 Agent 应先委派 `quantization-expert-experience-tuning-rules` 取得「结构化回退意见」，作为 practice-generator 生成/修改 Practice YAML 时 `exclude` / 高精度档位 / 提级项的**初始化候选**，再跑二分。
+
+- **接入时机**：FP baseline 获取与压缩数据集来源确认之后、`(>>> 循环开始 <<<)` 之前执行一次；拿到回退意见后随每轮 `prev_result` 一起传给 practice-generator，由后者在生成 Practice 时落地（因此该意见**不参与、也不替代** standing_high 的二分搜索逻辑本身）。
+- **委派 `input` 参考**：模型结构类型、`quant_type`（`w8a8`/`w4a8`/`w4a4`）、是否 MoE / EP、routed/shared experts 与 gate/router 命名、当前 `include`/`exclude`、浮点基线与敏感层分析、可引用 `lab_practice` YAML 路径。
+- **回退意见用途**：优先回退候选（如 `mlp.down_proj`、`o_proj`、MoE `gate`/`router`、`shared_experts`、MLA 低秩投影等）与置信度/证据等级，供 practice-generator 作为初值；最终是否回退、回退哪些层，仍以敏感层分析 + 本轮精度结果 + 二分收敛为准。
+- **只回答问题、不执行**：`quantization-expert-experience-tuning-rules` 仅输出「哪些层需要回退」，不改 YAML、不量化、不做 EP 检查 / 服务化 / 评测；这些动作仍由 practice-generator / quantizer / evaluator / EP 适配承接。
+- **策略为 `standing_high`（不含 experience）时**：不强制委派该 skill，可按需作为参考，不改变二分流程。
+
+### 压缩数据集的使用（默认）
+
+**默认的量化调优过程均使用压缩数据集**进行快速迭代，只有在用户确认不使用压缩数据集时，才退回全集测试。
+
+进入调优循环前，主 Agent **必须**向用户确认压缩数据集的来源，三选一：
+
+1. **用户自备已压缩数据集**：用户直接提供精简数据集路径，调优迭代直接使用。
+2. **委派 `aisbench-dataset-compression-herding` skill 生成**：用户未自备但同意生成时，委派该 skill，用 RBF Kernel Herding 算法从全集生成 coreset 子集。
+   - 当前仅支持 `aime2025` 与 `gpqa` 两个数据集；
+   - 压缩耗时约 30 分钟（CPU 实现），执行前须向用户说明成本并获确认；
+   - 生成「全集 + 子集」两份测试脚本，子集携带 `indices.json` 可追溯复现；
+   - 压缩集结果仅用于调优迭代的快速反馈，最终精度仍以全量数据集验收为准。
+3. **用户两者都不愿意**：既不提供已压缩数据集、也不生成时，退回**全集测试**——直接使用全量数据集进行调优迭代，并向用户说明反馈周期会变长。
+
+#### 两个出口标准（子集 + 全集）
+
+使用压缩数据集时，主流程存在**两个独立的出口标准**，都必须先于调优循环确定：
+
+| 出口标准 | 数据集 | 作用 | 达标判定 |
+|---------|--------|------|----------|
+| **子集出口标准** | coreset 子集 | 子集调优循环的「达标」线 | 子集精度 ≥ 子集 FP 基线（或用户给出的子集绝对目标） |
+| **全集出口标准** | 全集 | 最终验收的「达标」线 | 全集精度 ≥ 全集 FP 基线（或用户给出的全集绝对目标） |
+
+两个出口标准的获取方式（进入调优循环前**必须**完成）：
+
+1. **先询问用户**：是否分别提供「子集出口标准」与「全集出口标准」（可给绝对精度值，或只给一方、另一方由基线测得）。
+2. **用户不提供某一方标准时**：在当前环境**跑浮点模型**测得对应数据集上的 FP 基线精度，作为该方出口标准。**此时必须向用户提示**：浮点基线评测会**额外占用卡数资源**（与量化/评测卡数可能不同），请用户确认可用卡后再执行；浮点基线只测一次并缓存，供子集与全集复用。
+
+**注意**：子集与全集是两个不同的评测配置（`config_name` 不同），各自的 FP 基线**不能互相替代**——全集不达标时不能拿「子集基线」当作全集出口，反之亦然。
+
+#### 主流程：子集先行 → 全集兜底
+
+采用「**子集调优 → 全集验证 → 不通过改全集调优**」的闭环，**不再采用**「子集达标但全集不达标时按固定步长逐步收紧子集出口标准」的容忍性做法（该做法无法保证与全集一致）：
+
+```text
+1. 用子集调优（子集出口标准 = 子集 FP 基线 / 用户给定子集目标）
+      ↓ 直到子集验证通过（子集精度达标）
+2. 全集验证：用全集测当前最优量化权重
+      ├─ 达标 → 调优完成，输出结果
+      └─ 不达标 → 进入第 3 步（不逐步收紧，不猜测）
+3. 直接用全集调优（全集出口标准 = 全集 FP 基线 / 用户给定全集目标）
+      ↓ 在全集上跑二分搜索 / 摸高，直到全集达标
+```
+
+关键约束：
+
+- **子集只负责快速迭代**：子集验收通过只代表「可以进入全集验证」，不代表最终达标。
+- **全集不达标 → 直接切全集调优**：切全集后以「全集出口标准」为准重跑摸高二分搜索，让最终权重与全集必然对齐；**不再**通过反复收紧子集标准来「逼近」全集。
+- **切全集前先回显确认**：第 3 步切换前须向用户回显：当前全集验证结果、全集出口标准、以及「改在全集上进行调优」的动作，获得用户认可后执行。
+- **浮点基线缓存**：子集 FP 基线与全集 FP 基线各测一次并写入精度缓存；缓存命中时不重复测。
+
+> 前置约束：进入调优循环前，须先确定两个出口标准——用户给出绝对目标则以其为准；否则跑浮点基线测得（见上文「FP baseline 获取」，注意此处需要**子集与全集两份**基线，或用户分别给出的两份绝对目标）。
+
+### 服务化推理脚本（可选加速）
+
+进入调优循环前，主 Agent **必须询问用户**是否提供了服务化推理脚本，用于加速评测阶段。
+
+#### 适用场景
+
+评测阶段每轮需启动 vLLM 推理服务加载量化模型，模型加载耗时 1~3 分钟。若提供常驻服务脚本，可在后续轮次跳过服务启停，直接 reload 模型执行评测。
+
+#### 用户提供方式
+
+| 方式 | 说明 | 用户操作 |
+|------|------|---------|
+| **预启动** | 调优开始前用户已启动服务 | 告知 agent 服务地址（如 `localhost:8000`）和 reload 接口 |
+| **代启动** | 调优过程中由 agent 启动常驻服务 | 提供脚本路径，agent 首轮启动，后续轮次 reload |
+
+#### 脚本接口约定
+
+若用户提供脚本，建议遵循以下接口（agent 按此调用）：
+
+| 操作 | 命令 | 说明 |
+|------|------|------|
+| 启动服务 | `python service.py start --model-path <path> --port <port>` | 首轮启动，加载模型 |
+| 热加载 | `python service.py reload --model-path <path>` | 后续轮次，替换模型权重 |
+| 执行评测 | `python service.py evaluate --config <path>` | 调用 AISBench 评测 |
+| 关闭服务 | `python service.py stop` | 调优结束后关闭 |
+
+脚本输出须为 stdout JSON，含 `success` 字段，错误时含 `error` 字段（与编排层脚本约定一致）。
+
+#### 接入编排（替换默认 evaluator）
+
+用户确认提供服务化脚本后，主 Agent 按以下方式接入，**不再委派 `quant-tuning-evaluator` 子 agent** 执行评测：
+
+| 环节 | 原默认流程 | 服务化脚本接入后 |
+|------|-----------|----------------|
+| 首次评测（round 1） | evaluator 启动服务 → 评测 → 关服务 | 执行 `start --model-path <量化权重路径>`（代启动）或复用预启动服务（用户已给地址），再 `evaluate --config <path>` |
+| 后续轮次 | 每轮重新启停服务 | 只执行 `reload --model-path <新量化权重路径>` + `evaluate --config <path>`，不重启服务 |
+| 调优结束 | — | 执行 `stop` 关闭服务（代启动时）；预启动的服务由用户自行管理，agent 不关 |
+
+接入判定：
+- **有服务化脚本**：评测改用 `start/reload/evaluate/stop` 命令驱动，跳过 `quant-tuning-evaluator` 委派；
+- **无服务化脚本**：保持默认流程，委派 `quant-tuning-evaluator`。
+
+#### 无服务化脚本时的默认行为
+
+用户未提供或不确定时，走默认流程：每轮由 `quant-tuning-evaluator` 子 agent 启动 vLLM 服务、执行评测、关闭服务。
 
 ## 拉起 subagent 的格式（MSAGENT_IO v1）
 
@@ -176,6 +292,7 @@
 | `round` | int | ✓ | 当前调优轮次 |
 | `prev_result` | object\|null | | 上轮评测结果，首轮 `null` |
 | `anchor_practice` | string\|null | | 已知最优且达标的 Practice 路径 |
+| `experience_hints` | object\|null | | 结构化回退意见（由 `quantization-expert-experience-tuning-rules` 回传），供生成 Practice 时作为 `exclude`/高精度档位初值；`standing_high` 策略时为 `null` |
 
 回传 `output` 必填：`practice_path`，`validation: { ok, valid, errors }`，`commands`（须含 `sensitive_layer_analysis` 与 `validate_practice_yaml`；跳过敏感层分析时前者 `skipped: true`）
 
@@ -191,12 +308,13 @@
     "model_path": "",
     "save_path": "",
     "device": "",
-    "strategy": "standing_high",
+    "strategy": "standing_high_with_experience",
     "calib_dataset": "",
     "max_iterations": 10,
     "round": 1,
     "prev_result": null,
-    "anchor_practice": null
+    "anchor_practice": null,
+    "experience_hints": null
   }
 }
 ```
@@ -289,6 +407,8 @@
 ````
 
 ### Agent: quant-tuning-evaluator
+
+> **前置判定**：若用户已提供服务化推理脚本（见上文「服务化推理脚本」），评测**不委派本 subagent**，改由主 Agent 直接 `execute` 服务化脚本的 `reload` + `evaluate` 命令。仅当无服务化脚本时才按本小节委派。
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|

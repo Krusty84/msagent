@@ -23,6 +23,7 @@ from __future__ import annotations
 import logging
 import string
 import os
+import json
 import tempfile
 from functools import partial
 from fnmatch import fnmatch
@@ -68,12 +69,14 @@ logger = logging.getLogger(__name__)
 
 _TAVILY_SERVER_KEYWORDS = ("tavily",)
 _TAVILY_API_KEY_ENV = "TAVILY_API_KEY"
+_DUMP_SYSTEM_PROMPT_PATH_ENV = "MSAGENT_DUMP_SYSTEM_PROMPT_PATH"
 _TAVILY_VALIDATE_URL = "https://api.tavily.com/usage"
 _TAVILY_VALIDATE_TIMEOUT_SECONDS = 5.0
 _TAVILY_KEY_VALIDATION_CACHE: dict[str, bool] = {}
 _SEARCH_TOOL_NAME_KEYWORDS = ("search", "web_search")
 _SEARCH_TOOL_DESCRIPTION_KEYWORDS = ("search", "web", "internet", "query")
 _THIRD_PARTY_PROMPTS_PATCHED = False
+_SYSTEM_PROMPT_RENDERED_STATE_KEY = "_msagent_system_prompt_rendered"
 _FILTERED_SKILLS_SYSTEM_PROMPT_PREFIX = """
 
 ## Skills
@@ -189,22 +192,90 @@ class _SystemMessageMiddleware(AgentMiddleware[Any, Any, Any]):
         return rendered_item
 
     @staticmethod
+    def _request_state(request) -> dict[str, Any] | None:
+        state = getattr(request, "state", None)
+        return state if isinstance(state, dict) else None
+
+    @classmethod
+    def _already_processed(cls, request) -> bool:
+        state = cls._request_state(request)
+        return bool(state and state.get(_SYSTEM_PROMPT_RENDERED_STATE_KEY))
+
+    @classmethod
+    def _mark_processed(cls, request) -> None:
+        state = cls._request_state(request)
+        if state is not None:
+            state[_SYSTEM_PROMPT_RENDERED_STATE_KEY] = True
+
+    @staticmethod
+    def _resolve_dump_path(request) -> Path | None:
+        raw_path = os.getenv(_DUMP_SYSTEM_PROMPT_PATH_ENV, "").strip()
+        if not raw_path:
+            return None
+
+        dump_path = Path(raw_path).expanduser()
+        if dump_path.is_absolute():
+            return dump_path
+
+        runtime = getattr(request, "runtime", None)
+        context = getattr(runtime, "context", None) if runtime is not None else None
+        working_dir = getattr(context, "working_dir", None) if context is not None else None
+        if isinstance(working_dir, Path):
+            return (working_dir / dump_path).resolve()
+        if working_dir:
+            return (Path(working_dir).expanduser() / dump_path).resolve()
+        return dump_path.resolve()
+
+    @staticmethod
+    def _serialize_system_prompt_content(content: Any) -> str:
+        if isinstance(content, str):
+            return content
+        try:
+            return json.dumps(content, ensure_ascii=False, indent=2)
+        except TypeError:
+            return str(content)
+
+    @classmethod
+    def _dump_rendered_system_prompt(cls, request, content: Any) -> None:
+        dump_path = cls._resolve_dump_path(request)
+        if dump_path is None:
+            return
+
+        try:
+            dump_path.parent.mkdir(parents=True, exist_ok=True)
+            dump_path.write_text(cls._serialize_system_prompt_content(content), encoding="utf-8")
+        except OSError:
+            logger.warning("Failed to dump rendered system prompt to %s", dump_path, exc_info=True)
+
+    @staticmethod
     def _render_request_system_message(request):
+        if _SystemMessageMiddleware._already_processed(request):
+            return request
+
         system_message = getattr(request, "system_message", None)
         runtime = getattr(request, "runtime", None)
         context = getattr(runtime, "context", None) if runtime is not None else None
         template_vars = getattr(context, "template_vars", None) if context is not None else None
-        if system_message is None or not template_vars:
+        if system_message is None:
+            _SystemMessageMiddleware._mark_processed(request)
             return request
 
-        rendered_content = _SystemMessageMiddleware._safe_render_templates(
-            system_message.content,
-            template_vars,
+        rendered_content = (
+            _SystemMessageMiddleware._safe_render_templates(system_message.content, template_vars)
+            if template_vars
+            else system_message.content
         )
+        _SystemMessageMiddleware._dump_rendered_system_prompt(request, rendered_content)
         if rendered_content == system_message.content:
+            _SystemMessageMiddleware._mark_processed(request)
             return request
 
-        return request.override(system_message=system_message.model_copy(update={"content": rendered_content}))
+        request = request.override(system_message=system_message.model_copy(update={"content": rendered_content}))
+        _SystemMessageMiddleware._mark_processed(request)
+        return request
+
+    def modify_request(self, request):
+        return self._render_request_system_message(request)
 
     def wrap_model_call(self, request, handler):
         request = self._render_request_system_message(request)
@@ -220,21 +291,41 @@ class _FilteredSkillsMiddleware(SkillsMiddleware):
 
     def __init__(self, *, backend: Any, sources: list[str], allowed_skills: list[Any] | None) -> None:
         super().__init__(backend=backend, sources=sources)
-        self._allowed_skill_names = {
+        self._default_allowed_skill_names = {
             str(getattr(skill, "name", "")).strip()
             for skill in (allowed_skills or [])
             if str(getattr(skill, "name", "")).strip()
         }
         self.system_prompt_prefix = _FILTERED_SKILLS_SYSTEM_PROMPT_PREFIX
 
-    def _filter_skills_metadata(self, skills_metadata: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        if not self._allowed_skill_names:
-            return []
-        return [skill for skill in skills_metadata if str(skill.get("name", "")).strip() in self._allowed_skill_names]
+    def _allowed_skill_names(self, runtime: Any | None = None) -> set[str]:
+        context = getattr(runtime, "context", None)
+        runtime_skills = getattr(context, "skill_catalog", None)
+        if not runtime_skills:
+            return set(self._default_allowed_skill_names)
+        return {
+            str(getattr(skill, "name", "")).strip()
+            for skill in runtime_skills
+            if str(getattr(skill, "name", "")).strip()
+        }
 
-    def _sorted_filtered_skills(self, skills_metadata: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def _filter_skills_metadata(
+        self,
+        skills_metadata: list[dict[str, Any]],
+        runtime: Any | None = None,
+    ) -> list[dict[str, Any]]:
+        allowed_skill_names = self._allowed_skill_names(runtime)
+        if not allowed_skill_names:
+            return []
+        return [skill for skill in skills_metadata if str(skill.get("name", "")).strip() in allowed_skill_names]
+
+    def _sorted_filtered_skills(
+        self,
+        skills_metadata: list[dict[str, Any]],
+        runtime: Any | None = None,
+    ) -> list[dict[str, Any]]:
         return sorted(
-            self._filter_skills_metadata(skills_metadata),
+            self._filter_skills_metadata(skills_metadata, runtime),
             key=lambda skill: (
                 str(skill.get("category", "default")).casefold(),
                 str(skill.get("name", "")).casefold(),
@@ -256,7 +347,9 @@ class _FilteredSkillsMiddleware(SkillsMiddleware):
 
     def modify_request(self, request):
         skills_metadata = list(request.state.get("skills_metadata", []))
-        skills_list = self._format_skills_list(skills_metadata)
+        skills_list = self._format_skills_list(
+            self._sorted_filtered_skills(skills_metadata, getattr(request, "runtime", None))
+        )
         skills_section = f"{self.system_prompt_prefix}\n{skills_list}\n"
         system_message = getattr(request, "system_message", None)
         if system_message is None:
@@ -266,16 +359,25 @@ class _FilteredSkillsMiddleware(SkillsMiddleware):
         return request.override(system_message=append_to_system_message(system_message, skills_section))
 
     def before_agent(self, state, runtime, config):
-        update = super().before_agent(state, runtime, config)
+        # DeepAgents treats an empty ``skills_metadata`` list as already loaded.
+        # The graph initializes this field to an empty list, so remove that
+        # placeholder and let the parent middleware discover the actual skills.
+        load_state = dict(state)
+        if not load_state.get("skills_metadata"):
+            load_state.pop("skills_metadata", None)
+        update = super().before_agent(load_state, runtime, config)
         if update is None:
             return None
-        return {"skills_metadata": self._sorted_filtered_skills(list(update.get("skills_metadata", [])))}
+        return {"skills_metadata": self._sorted_filtered_skills(list(update.get("skills_metadata", [])), runtime)}
 
     async def abefore_agent(self, state, runtime, config):
-        update = await super().abefore_agent(state, runtime, config)
+        load_state = dict(state)
+        if not load_state.get("skills_metadata"):
+            load_state.pop("skills_metadata", None)
+        update = await super().abefore_agent(load_state, runtime, config)
         if update is None:
             return None
-        return {"skills_metadata": self._sorted_filtered_skills(list(update.get("skills_metadata", [])))}
+        return {"skills_metadata": self._sorted_filtered_skills(list(update.get("skills_metadata", [])), runtime)}
 
 
 def patch_third_party_prompt_defaults() -> None:
@@ -1055,7 +1157,30 @@ class AgentFactory:
         if paths is None:
             return []
         candidates = [paths] if isinstance(paths, Path) else list(paths)
-        return [str(path) for path in candidates if path.exists()]
+        sources: list[str] = []
+        for path in candidates:
+            if not path.is_dir():
+                continue
+
+            # DeepAgents scans only ``source/<skill>/SKILL.md``. Built-in
+            # skills are grouped as ``skills/<category>/<skill>/SKILL.md``,
+            # so expose each category as an individual source.
+            child_dirs = sorted(
+                (child for child in path.iterdir() if child.is_dir()),
+                key=lambda item: item.name,
+            )
+            if any((child / "SKILL.md").is_file() for child in child_dirs):
+                sources.append(str(path))
+            sources.extend(
+                str(child)
+                for child in child_dirs
+                if any(
+                    (skill_dir / "SKILL.md").is_file()
+                    for skill_dir in child.iterdir()
+                    if skill_dir.is_dir()
+                )
+            )
+        return sources
 
     @staticmethod
     def _should_enable_skills_middleware(

@@ -103,6 +103,12 @@ def _patch_dispatch_to_raise_connection_error(
             temperature=0.0,
         )
 
+    async def fake_refresh_cached_skills(
+        *, agent: str | None, working_dir: Path
+    ) -> list[Any]:
+        del agent, working_dir
+        return []
+
     async def fake_invoke_without_stream(self, *_args, **_kwargs) -> None:
         request = httpx.Request(
             "POST",
@@ -122,6 +128,11 @@ def _patch_dispatch_to_raise_connection_error(
         message_module.initializer,
         "load_llm_config",
         fake_load_llm_config,
+    )
+    monkeypatch.setattr(
+        message_module.initializer,
+        "refresh_cached_skills",
+        fake_refresh_cached_skills,
     )
     monkeypatch.setattr(
         dispatcher,
@@ -177,7 +188,9 @@ async def test_invoke_without_stream_resumes_interrupts(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_invoke_without_stream_limits_interrupt_resume_iterations(tmp_path: Path) -> None:
+async def test_invoke_without_stream_limits_interrupt_resume_iterations(
+    tmp_path: Path,
+) -> None:
     session = _build_session(tmp_path)
     dispatcher = MessageDispatcher(session)
     calls: list[Any] = []
@@ -223,7 +236,10 @@ async def test_dispatch_logs_detailed_connection_errors(
         "Error processing message: Connection error. Cause: ConnectError: all connection attempts failed"
     ]
     assert "Message processing error [thread_id=thread-1" in caplog.text
-    assert "console_error=Connection error. Cause: ConnectError: all connection attempts failed" in caplog.text
+    assert (
+        "console_error=Connection error. Cause: ConnectError: all connection attempts failed"
+        in caplog.text
+    )
     assert "exception_type=APIConnectionError" in caplog.text
     assert "exception_message=Connection error." in caplog.text
     assert "exception_repr=APIConnectionError('Connection error.')" in caplog.text
@@ -234,6 +250,53 @@ async def test_dispatch_logs_detailed_connection_errors(
     assert (
         "exception_chain=APIConnectionError: Connection error. <- ConnectError: all connection attempts failed"
     ) in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_dispatch_refreshes_skill_cache_before_building_context(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _build_session(tmp_path)
+    dispatcher = MessageDispatcher(session)
+    call_order: list[str] = []
+
+    monkeypatch.setattr(
+        dispatcher.message_builder,
+        "build",
+        lambda content: (content, {}),
+    )
+
+    async def fake_refresh_cached_skills(*, agent: str | None, working_dir: Path):
+        assert agent == "msagent"
+        assert working_dir == tmp_path
+        call_order.append("refresh")
+        return []
+
+    async def fake_build_agent_context():
+        call_order.append("build_context")
+        return message_module.AgentContext()
+
+    async def fake_invoke_without_stream(*_args, **_kwargs):
+        call_order.append("invoke")
+
+    async def fake_resolve_prior_agent_prompt(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(
+        message_module.initializer, "refresh_cached_skills", fake_refresh_cached_skills
+    )
+    monkeypatch.setattr(dispatcher, "_build_agent_context", fake_build_agent_context)
+    monkeypatch.setattr(
+        dispatcher, "_resolve_prior_agent_prompt", fake_resolve_prior_agent_prompt
+    )
+    monkeypatch.setattr(
+        dispatcher, "_invoke_without_stream", fake_invoke_without_stream
+    )
+
+    await dispatcher.dispatch("hello")
+
+    assert call_order == ["refresh", "build_context", "invoke"]
 
 
 @pytest.mark.asyncio
@@ -252,7 +315,9 @@ async def test_dispatch_writes_detailed_processing_errors_to_verbose_log(
         dispatcher = MessageDispatcher(session)
         _patch_dispatch_to_raise_connection_error(dispatcher, monkeypatch)
         monkeypatch.setattr(message_module.console, "print_error", lambda *args: None)
-        monkeypatch.setattr(message_module.console, "print", lambda *args, **kwargs: None)
+        monkeypatch.setattr(
+            message_module.console, "print", lambda *args, **kwargs: None
+        )
 
         await dispatcher.dispatch("hello")
 
@@ -266,7 +331,10 @@ async def test_dispatch_writes_detailed_processing_errors_to_verbose_log(
 
         log_text = log_path.read_text(encoding="utf-8")
         assert "Message processing error [thread_id=thread-1" in log_text
-        assert "console_error=Connection error. Cause: ConnectError: all connection attempts failed" in log_text
+        assert (
+            "console_error=Connection error. Cause: ConnectError: all connection attempts failed"
+            in log_text
+        )
         assert "exception_type=APIConnectionError" in log_text
         assert "exception_message=Connection error." in log_text
         assert (
@@ -285,7 +353,9 @@ async def test_dispatch_writes_detailed_processing_errors_to_verbose_log(
         root_logger.setLevel(original_level)
 
 
-def test_extract_tool_call_names_handles_chunks_and_raw_payloads(tmp_path: Path) -> None:
+def test_extract_tool_call_names_handles_chunks_and_raw_payloads(
+    tmp_path: Path,
+) -> None:
     session = _build_session(tmp_path)
     dispatcher = MessageDispatcher(session)
 
@@ -349,7 +419,9 @@ def test_format_retry_notice_text_for_llm_and_tool(tmp_path: Path) -> None:
     )
 
     assert dispatcher._format_retry_notice_text(llm_notice) == "LLM 重试 2/5，5s 后重试"
-    assert dispatcher._format_retry_notice_text(tool_notice) == ("Tool run_command 重试 1/1，0.5s 后重试")
+    assert dispatcher._format_retry_notice_text(tool_notice) == (
+        "Tool run_command 重试 1/1，0.5s 后重试"
+    )
 
 
 def test_render_retry_notice_uses_warning_output_without_live(
@@ -413,7 +485,9 @@ def test_extract_tool_call_previews_merges_same_tool_with_conflicting_source_ids
                     "id": "raw-call-1",
                     "function": {
                         "name": "msprof-mcp__msprof_analyze_advisor",
-                        "arguments": ('{"profiler_data_dir":"/tmp/profile","mode":"all"}'),
+                        "arguments": (
+                            '{"profiler_data_dir":"/tmp/profile","mode":"all"}'
+                        ),
                     },
                 }
             ]
@@ -448,7 +522,9 @@ def test_extract_tool_call_previews_merges_progressively_longer_string_args(
             {
                 "name": "msprof-mcp__msprof_analyze_advisor",
                 "args": {
-                    "profiler_data_dir": ("/Users/weizhang/Downloads/kv_cache_type_page_seqlen_1024"),
+                    "profiler_data_dir": (
+                        "/Users/weizhang/Downloads/kv_cache_type_page_seqlen_1024"
+                    ),
                     "mode": "all",
                 },
                 "id": "call-2",
@@ -494,7 +570,9 @@ def test_extract_tool_call_previews_keeps_distinct_same_name_calls_with_conflict
     ]
 
 
-def test_merge_tool_activity_calls_keeps_args_visible_across_chunks(tmp_path: Path) -> None:
+def test_merge_tool_activity_calls_keeps_args_visible_across_chunks(
+    tmp_path: Path,
+) -> None:
     session = _build_session(tmp_path)
     dispatcher = MessageDispatcher(session)
 
@@ -606,7 +684,9 @@ def test_set_tool_activity_dedupes_same_call_across_namespaces(tmp_path: Path) -
     }
 
 
-def test_refresh_activity_live_defers_terminal_flush_to_live_auto_refresh(tmp_path: Path) -> None:
+def test_refresh_activity_live_defers_terminal_flush_to_live_auto_refresh(
+    tmp_path: Path,
+) -> None:
     session = _build_session(tmp_path)
     dispatcher = MessageDispatcher(session)
 
@@ -634,7 +714,9 @@ def test_refresh_activity_live_defers_terminal_flush_to_live_auto_refresh(tmp_pa
     assert captured[0][1] is False
 
 
-def test_clear_tool_activity_can_force_flush_before_static_render(tmp_path: Path) -> None:
+def test_clear_tool_activity_can_force_flush_before_static_render(
+    tmp_path: Path,
+) -> None:
     session = _build_session(tmp_path)
     dispatcher = MessageDispatcher(session)
 
@@ -698,8 +780,12 @@ def test_extract_tool_call_names_handles_final_ai_messages(tmp_path: Path) -> No
         "run_command",
         "read_file",
     ]
-    assert dispatcher._summarize_tool_names(["run_command", "read_file"]) == ("run_command +1")
-    label = dispatcher._build_tool_activity_label(message_module.ToolActivityCall(name="run_command", args={}))
+    assert dispatcher._summarize_tool_names(["run_command", "read_file"]) == (
+        "run_command +1"
+    )
+    label = dispatcher._build_tool_activity_label(
+        message_module.ToolActivityCall(name="run_command", args={})
+    )
     assert label.plain == "Use tool run_command"
     assert [span.style for span in label.spans] == ["accent", "primary"]
 
@@ -725,16 +811,24 @@ def test_extract_last_update_message_returns_none_for_empty_or_invalid_payloads(
 
     assert dispatcher._extract_last_update_message({}) is None
     assert dispatcher._extract_last_update_message({"messages": []}) is None
-    assert dispatcher._extract_last_update_message({"messages": ["not-a-message"]}) is None
+    assert (
+        dispatcher._extract_last_update_message({"messages": ["not-a-message"]}) is None
+    )
 
 
-def test_render_new_update_message_deduplicates_by_stable_message_id(tmp_path: Path) -> None:
+def test_render_new_update_message_deduplicates_by_stable_message_id(
+    tmp_path: Path,
+) -> None:
     session = _build_session(tmp_path)
     rendered: list[tuple[str, Any]] = []
     session.renderer = SimpleNamespace(
-        render_assistant_message=lambda message, **kwargs: rendered.append(("assistant", message)),
+        render_assistant_message=lambda message, **kwargs: rendered.append(
+            ("assistant", message)
+        ),
         render_tool_call=lambda *args, **kwargs: rendered.append(("tool_call", args)),
-        render_tool_message=lambda message, **kwargs: rendered.append(("tool_message", message)),
+        render_tool_message=lambda message, **kwargs: rendered.append(
+            ("tool_message", message)
+        ),
     )
     dispatcher = MessageDispatcher(session)
     rendered_messages: set[str] = set()
@@ -761,13 +855,20 @@ def test_render_assistant_with_deferred_tools_hides_header_until_result(
     session = _build_session(tmp_path)
     rendered: list[tuple[str, Any]] = []
     session.renderer = SimpleNamespace(
-        render_assistant_message=lambda message, indent_level=0, show_tool_calls=True: rendered.append(
+        render_assistant_message=lambda message,
+        indent_level=0,
+        show_tool_calls=True: rendered.append(
             ("assistant", indent_level, show_tool_calls, message)
         ),
-        render_tool_call=lambda tool_call, indent_level=0, duration=None, origin_label=None: rendered.append(
+        render_tool_call=lambda tool_call,
+        indent_level=0,
+        duration=None,
+        origin_label=None: rendered.append(
             ("tool_call", indent_level, tool_call, duration, origin_label)
         ),
-        render_tool_message=lambda message, indent_level=0: rendered.append(("tool_message", indent_level, message)),
+        render_tool_message=lambda message, indent_level=0: rendered.append(
+            ("tool_message", indent_level, message)
+        ),
     )
     dispatcher = MessageDispatcher(session)
 
@@ -792,15 +893,22 @@ def test_render_assistant_with_deferred_tools_hides_header_until_result(
     assert isinstance(pending.started_at, float)
 
 
-def test_render_pending_tool_header_uses_deferred_header_before_result(tmp_path: Path) -> None:
+def test_render_pending_tool_header_uses_deferred_header_before_result(
+    tmp_path: Path,
+) -> None:
     session = _build_session(tmp_path)
     rendered: list[tuple[str, Any]] = []
     session.renderer = SimpleNamespace(
         render_assistant_message=lambda *args, **kwargs: None,
-        render_tool_call=lambda tool_call, indent_level=0, duration=None, origin_label=None: rendered.append(
+        render_tool_call=lambda tool_call,
+        indent_level=0,
+        duration=None,
+        origin_label=None: rendered.append(
             ("tool_call", indent_level, tool_call, duration, origin_label)
         ),
-        render_tool_message=lambda message, indent_level=0: rendered.append(("tool_message", indent_level, message)),
+        render_tool_message=lambda message, indent_level=0: rendered.append(
+            ("tool_message", indent_level, message)
+        ),
     )
     dispatcher = MessageDispatcher(session)
     dispatcher._pending_tool_headers["call-1"] = message_module.DeferredToolHeader(
@@ -845,7 +953,10 @@ def test_render_pending_tool_header_prefers_exact_tool_runtime_metadata(
     rendered: list[tuple[str, Any]] = []
     session.renderer = SimpleNamespace(
         render_assistant_message=lambda *args, **kwargs: None,
-        render_tool_call=lambda tool_call, indent_level=0, duration=None, origin_label=None: rendered.append(
+        render_tool_call=lambda tool_call,
+        indent_level=0,
+        duration=None,
+        origin_label=None: rendered.append(
             ("tool_call", indent_level, tool_call, duration, origin_label)
         ),
         render_tool_message=lambda *args, **kwargs: None,
@@ -867,7 +978,9 @@ def test_render_pending_tool_header_prefers_exact_tool_runtime_metadata(
         content="Command timed out after 30s",
         tool_call_id="call-1",
         name="run_command",
-        response_metadata={TOOL_TIMING_RESPONSE_METADATA_KEY: {"duration_seconds": 30.0}},
+        response_metadata={
+            TOOL_TIMING_RESPONSE_METADATA_KEY: {"duration_seconds": 30.0}
+        },
     )
 
     dispatcher._render_pending_tool_header(tool_message, indent_level=0)
@@ -1035,7 +1148,11 @@ async def test_process_update_chunk_accepts_overwrite_wrapped_messages(
     )
 
     await dispatcher._process_update_chunk(
-        {"agent": {"messages": Overwrite([AIMessage(content="tool-less assistant update")])}},
+        {
+            "agent": {
+                "messages": Overwrite([AIMessage(content="tool-less assistant update")])
+            }
+        },
         (),
         set(),
         None,
@@ -1054,7 +1171,9 @@ async def test_process_update_chunk_ignores_invalid_last_message_payload(
 ) -> None:
     session = _build_session(tmp_path)
     session.renderer = SimpleNamespace(
-        render_assistant_message=lambda *args, **kwargs: pytest.fail("should not render"),
+        render_assistant_message=lambda *args, **kwargs: pytest.fail(
+            "should not render"
+        ),
         render_tool_call=lambda *args, **kwargs: pytest.fail("should not render"),
         render_tool_message=lambda *args, **kwargs: pytest.fail("should not render"),
     )
@@ -1063,7 +1182,9 @@ async def test_process_update_chunk_ignores_invalid_last_message_payload(
     async def fake_update_token_tracking(_node_data: dict[str, Any]) -> None:
         return None
 
-    monkeypatch.setattr(dispatcher, "_update_token_tracking", fake_update_token_tracking)
+    monkeypatch.setattr(
+        dispatcher, "_update_token_tracking", fake_update_token_tracking
+    )
 
     await dispatcher._process_update_chunk(
         {"agent": {"messages": ["not-a-message"]}},
@@ -1152,7 +1273,9 @@ def test_build_activity_renderable_keeps_tool_line_separate(tmp_path: Path) -> N
         {(): ["preview line"]},
     )
 
-    capture = Console(record=True, width=120, force_terminal=True, theme=theme.rich_theme)
+    capture = Console(
+        record=True, width=120, force_terminal=True, theme=theme.rich_theme
+    )
     capture.print(renderable)
     output = capture.export_text()
 
@@ -1179,7 +1302,10 @@ def test_merge_chunks_preserves_reasoning_content() -> None:
     )
 
     assert merged.content == "done"
-    assert merged.additional_kwargs["reasoning_content"] == "inspect log -> replay tool call"
+    assert (
+        merged.additional_kwargs["reasoning_content"]
+        == "inspect log -> replay tool call"
+    )
 
 
 def test_tool_activity_call_defaults_to_monotonic_clock() -> None:
@@ -1228,7 +1354,9 @@ def test_build_activity_renderable_passes_tool_start_time(
     assert captured_start_times == [42.0]
 
 
-def test_tool_activity_indicator_clamps_elapsed_when_time_source_moves_backwards() -> None:
+def test_tool_activity_indicator_clamps_elapsed_when_time_source_moves_backwards() -> (
+    None
+):
     indicator = message_module.ToolActivityIndicator(
         message_module.MessageDispatcher._build_tool_activity_label(
             message_module.ToolActivityCall(name="run_command", args={})

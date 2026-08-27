@@ -4,8 +4,14 @@
 
 ## 1. 环境准备
 
-```commandline
-pip install mindstudio-agent
+一键安装（推荐）：
+
+```shell
+# Linux / macOS / WSL
+curl -LsSf https://raw.gitcode.com/Ascend/msagent/raw/master/scripts/install.sh | bash
+
+# Windows（PowerShell 5.1+）
+irm https://raw.gitcode.com/Ascend/msagent/raw/master/scripts/install.ps1 | iex
 ```
 
 更多安装方式，具体请参见《[msAgent安装指南](./install_guide.md)》。

@@ -164,15 +164,17 @@ async def test_model_handler_updates_context_on_successful_switch(
     async def fake_load_llms_config(_working_dir):
         return config_data
 
-    async def fake_update_agent_llm(_agent, _model, _working_dir):
-        pass
+    persisted_models: list[tuple[str, str]] = []
+
+    async def fake_set_current_model(agent, model, _working_dir):
+        persisted_models.append((agent, model))
 
     async def fake_get_model_selection(_models, _current, _default):
         return "fast"
 
     monkeypatch.setattr(models_module.initializer, "load_agent_config", fake_load_agent_config)
     monkeypatch.setattr(models_module.initializer, "load_llms_config", fake_load_llms_config)
-    monkeypatch.setattr(models_module.initializer, "update_agent_llm", fake_update_agent_llm)
+    monkeypatch.setattr(models_module.initializer, "set_current_model", fake_set_current_model)
 
     handler = ModelHandler(session)
     monkeypatch.setattr(handler, "_get_model_selection", fake_get_model_selection)
@@ -180,6 +182,7 @@ async def test_model_handler_updates_context_on_successful_switch(
     await handler.handle()
 
     assert context_updates.get("model") == "fast"
+    assert persisted_models == [("Profiler", "fast")]
 
 
 @pytest.mark.asyncio

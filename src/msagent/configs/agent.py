@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from packaging import version as pkg_version
+from packaging.version import parse as parse_version  # pylint: disable=no-name-in-module
 from pydantic import BaseModel, Field, model_validator
 
 from msagent.configs.base import VersionedConfig
@@ -53,7 +53,7 @@ class CompressionConfig(BaseModel):
 
 
 class AuditLogConfig(BaseModel):
-    """Record session and subagent events to ``.msagent/audit_log/``."""
+    """Record session and subagent events to the project audit directory."""
 
     enabled: bool = Field(
         default=False,
@@ -285,10 +285,10 @@ class BaseAgentConfig(VersionedConfig):
     @classmethod
     def migrate(cls, data: dict, from_version: str) -> dict:
         """Migrate config data from older version."""
-        from_ver = pkg_version.parse(from_version)
+        from_ver = parse_version(from_version)
 
         # Migrate 1.x -> 2.0.0: tools: list[str] -> tools: ToolsConfig
-        if from_ver < pkg_version.parse("2.0.0"):
+        if from_ver < parse_version("2.0.0"):
             tool_output_max_tokens = data.pop("tool_output_max_tokens", None)
 
             if "tools" in data and isinstance(data["tools"], list):
@@ -314,7 +314,7 @@ class BaseAgentConfig(VersionedConfig):
                 }
 
         # Migrate 2.0.0 -> 2.1.0: add skills: SkillsConfig
-        if from_ver < pkg_version.parse("2.1.0"):
+        if from_ver < parse_version("2.1.0"):
             if "skills" not in data:
                 data["skills"] = {
                     "patterns": [],
@@ -322,7 +322,7 @@ class BaseAgentConfig(VersionedConfig):
                 }
 
         # Migrate 2.1.0 -> 2.2.0: rename compression_llm->llm and add prompt/messages_to_keep
-        if from_ver < pkg_version.parse("2.2.0") and (compression := data.get("compression")):
+        if from_ver < parse_version("2.2.0") and (compression := data.get("compression")):
             if isinstance(compression, dict):
                 if "compression_llm" in compression and "llm" not in compression:
                     compression["llm"] = compression.pop("compression_llm")
@@ -337,11 +337,11 @@ class BaseAgentConfig(VersionedConfig):
                 cls._copy_missing_prompts(default_prompts)
 
         # Migrate 2.2.0 -> 2.2.1: copy default sandbox profiles if missing
-        if from_ver < pkg_version.parse("2.2.1"):
+        if from_ver < parse_version("2.2.1"):
             cls._copy_missing_sandbox_profiles()
 
         # Migrate 2.2.1 -> 2.3.0: add retry configuration (legacy shape)
-        if from_ver < pkg_version.parse("2.3.0"):
+        if from_ver < parse_version("2.3.0"):
             if "retry" not in data:
                 data["retry"] = {
                     "enabled": True,
@@ -354,7 +354,7 @@ class BaseAgentConfig(VersionedConfig):
                 }
 
         # Migrate 2.3.0 -> 2.4.0: align retry schema with deepagents parameters
-        if from_ver < pkg_version.parse("2.4.0"):
+        if from_ver < parse_version("2.4.0"):
             default_retry: dict[str, Any] = {
                 "enabled": True,
                 "model": {
@@ -595,6 +595,8 @@ class BatchAgentConfig(BaseBatchConfig):
         cls,
         file_path: Path | None = None,
         dir_path: Path | None = None,
+        prompt_base_path: Path | None = None,
+        allow_partial: bool = False,
         batch_llm_config: BatchLLMConfig | None = None,
         batch_checkpointer_config: BatchCheckpointerConfig | None = None,
         batch_subagent_config: BatchSubAgentConfig | None = None,
@@ -602,11 +604,11 @@ class BatchAgentConfig(BaseBatchConfig):
     ) -> BatchAgentConfig:
         """Load agent configurations from YAML files."""
         agents = []
-        prompt_base_path = None
+        resolved_prompt_base_path = prompt_base_path
 
         if file_path and file_path.exists():
             agents.extend(await _load_single_file(file_path, "agents", AgentConfig))
-            prompt_base_path = file_path.parent
+            resolved_prompt_base_path = resolved_prompt_base_path or file_path.parent
 
         if dir_path and dir_path.exists():
             agents.extend(
@@ -617,7 +619,7 @@ class BatchAgentConfig(BaseBatchConfig):
                     config_class=AgentConfig,
                 )
             )
-            prompt_base_path = dir_path.parent
+            resolved_prompt_base_path = resolved_prompt_base_path or dir_path.parent
 
         if not agents:
             raise ValueError("No agents found in YAML file")
@@ -627,7 +629,10 @@ class BatchAgentConfig(BaseBatchConfig):
         validated_agents: list[AgentConfig] = []
         for agent in agents:
             if prompt_content := agent.get("prompt", ""):
-                agent["prompt"] = await load_prompt_content(prompt_base_path or Path(), prompt_content)
+                agent["prompt"] = await load_prompt_content(
+                    resolved_prompt_base_path or Path(),
+                    prompt_content,
+                )
 
             if batch_llm_config and isinstance(agent.get("llm"), str):
                 llm_name = agent["llm"]
@@ -685,12 +690,17 @@ class BatchAgentConfig(BaseBatchConfig):
                         compression["llm"] = agent["llm"]
 
                     if prompt_content := compression.get("prompt"):
-                        compression["prompt"] = await load_prompt_content(prompt_base_path or Path(), prompt_content)
+                        compression["prompt"] = await load_prompt_content(
+                            resolved_prompt_base_path or Path(),
+                            prompt_content,
+                        )
                     else:
                         compression["prompt"] = None
 
             validated_agents.append(AgentConfig.model_validate(agent))
 
+        if allow_partial:
+            return cls.model_construct(agents=validated_agents)
         return cls.model_validate({"agents": validated_agents})
 
 
@@ -712,15 +722,16 @@ class BatchSubAgentConfig(BaseBatchConfig):
         cls,
         file_path: Path | None = None,
         dir_path: Path | None = None,
+        prompt_base_path: Path | None = None,
         batch_llm_config: BatchLLMConfig | None = None,
     ) -> BatchSubAgentConfig:
         """Load subagent configurations from YAML files."""
         subagents = []
-        prompt_base_path = None
+        resolved_prompt_base_path = prompt_base_path
 
         if file_path and file_path.exists():
             subagents.extend(await _load_single_file(file_path, "agents", SubAgentConfig))
-            prompt_base_path = file_path.parent
+            resolved_prompt_base_path = resolved_prompt_base_path or file_path.parent
 
         if dir_path and dir_path.exists():
             subagents.extend(
@@ -731,7 +742,7 @@ class BatchSubAgentConfig(BaseBatchConfig):
                     config_class=SubAgentConfig,
                 )
             )
-            prompt_base_path = dir_path.parent
+            resolved_prompt_base_path = resolved_prompt_base_path or dir_path.parent
 
         if not subagents:
             raise ValueError("No subagents found in YAML file")
@@ -741,7 +752,10 @@ class BatchSubAgentConfig(BaseBatchConfig):
         validated_subagents: list[SubAgentConfig] = []
         for subagent in subagents:
             if prompt_content := subagent.get("prompt", ""):
-                subagent["prompt"] = await load_prompt_content(prompt_base_path or Path(), prompt_content)
+                subagent["prompt"] = await load_prompt_content(
+                    resolved_prompt_base_path or Path(),
+                    prompt_content,
+                )
 
             if batch_llm_config and isinstance(subagent.get("llm"), str):
                 llm_name = subagent["llm"]

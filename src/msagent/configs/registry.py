@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-import json
-import shutil
 from importlib.resources import files
 from pathlib import Path
+from typing import Any, Callable, TypeVar
 
 import yaml
+from pydantic import BaseModel
 
 from msagent.configs.agent import (
     AgentConfig,
@@ -27,25 +27,85 @@ from msagent.core.constants import (
     CONFIG_APPROVAL_FILE_NAME,
     CONFIG_CHECKPOINTERS_DIR,
     CONFIG_CHECKPOINTERS_FILE_NAME,
-    CONFIG_CHECKPOINTS_URL_FILE_NAME,
-    CONFIG_DIR_NAME,
     CONFIG_LLMS_DIR,
     CONFIG_LLMS_FILE_NAME,
     CONFIG_MCP_FILE_NAME,
-    CONFIG_MEMORY_FILE_NAME,
     CONFIG_SANDBOXES_DIR,
     CONFIG_SUBAGENTS_DIR,
     CONFIG_SUBAGENTS_FILE_NAME,
 )
+from msagent.core.paths import AppPaths
 from msagent.tools.internal.memory import ensure_memory_file, is_default_memory_content
+
+T = TypeVar("T")
+
+
+def _merge_items(base: list[T], overrides: list[T], key: Callable[[T], Any]) -> list[T]:
+    """Merge named configuration objects while preserving stable ordering."""
+    merged = list(base)
+    positions = {key(item): index for index, item in enumerate(merged)}
+    for item in overrides:
+        item_key = key(item)
+        if item_key in positions:
+            merged[positions[item_key]] = item
+        else:
+            positions[item_key] = len(merged)
+            merged.append(item)
+    return merged
+
+
+def _overlay_model(base: T, override: T) -> T:
+    """Apply only fields explicitly present in a validated override model."""
+    if not isinstance(base, BaseModel) or not isinstance(override, BaseModel):
+        return override
+
+    updates: dict[str, object] = {}
+    for field_name in override.model_fields_set:
+        override_value = getattr(override, field_name)
+        base_value = getattr(base, field_name, None)
+        if isinstance(base_value, BaseModel) and isinstance(override_value, BaseModel):
+            updates[field_name] = _overlay_model(base_value, override_value)
+        else:
+            updates[field_name] = override_value
+    return base.model_copy(update=updates)
+
+
+def _merge_model_overrides(base: list[T], overrides: list[T], key: Callable[[T], Any]) -> list[T]:
+    """Merge partial Pydantic config overrides while preserving packaged fields."""
+    merged = list(base)
+    positions = {key(item): index for index, item in enumerate(merged)}
+    for item in overrides:
+        item_key = key(item)
+        if item_key in positions:
+            index = positions[item_key]
+            merged[index] = _overlay_model(merged[index], item)
+        else:
+            positions[item_key] = len(merged)
+            merged.append(item)
+    return merged
 
 
 class ConfigRegistry:
     """Central registry for loading, saving, and caching all configurations."""
 
-    def __init__(self, working_dir: Path):
-        self.working_dir = working_dir
-        self.config_dir = working_dir / CONFIG_DIR_NAME
+    def __init__(self, working_dir: Path, app_paths: AppPaths | None = None):
+        self.working_dir = working_dir.expanduser().resolve()
+        self.app_paths = app_paths or AppPaths.resolve()
+        self.project_paths = self.app_paths.for_project(self.working_dir)
+        self.config_dir = self.app_paths.config_dir
+        self.default_config_dir = Path(str(files("resources") / "configs" / "default"))
+
+        self.llms_file = self.config_dir / CONFIG_LLMS_FILE_NAME.name
+        self.llms_dir = self.config_dir / CONFIG_LLMS_DIR.name
+        self.checkpointers_file = self.config_dir / CONFIG_CHECKPOINTERS_FILE_NAME.name
+        self.checkpointers_dir = self.config_dir / CONFIG_CHECKPOINTERS_DIR.name
+        self.agents_file = self.config_dir / CONFIG_AGENTS_FILE_NAME.name
+        self.agents_dir = self.config_dir / CONFIG_AGENTS_DIR.name
+        self.subagents_file = self.config_dir / CONFIG_SUBAGENTS_FILE_NAME.name
+        self.subagents_dir = self.config_dir / CONFIG_SUBAGENTS_DIR.name
+        self.sandboxes_dir = self.config_dir / CONFIG_SANDBOXES_DIR.name
+        self.mcp_file = self.config_dir / CONFIG_MCP_FILE_NAME.name
+        self.approval_file = self.config_dir / CONFIG_APPROVAL_FILE_NAME.name
 
         # Lazy-loaded caches
         self._llms: BatchLLMConfig | None = None
@@ -59,117 +119,13 @@ class ConfigRegistry:
     # === Setup ===
 
     async def ensure_config_dir(self) -> None:
-        """Ensure config directory exists, copy from template if needed."""
-        template_config_dir = Path(str(files("resources") / "configs" / "default"))
+        """Create global directories without materializing packaged defaults."""
+        await asyncio.to_thread(self.project_paths.ensure)
+        await asyncio.to_thread(ensure_memory_file, state_dir=self.project_paths.root)
 
-        if not self.config_dir.exists():
-            await asyncio.to_thread(
-                shutil.copytree,
-                template_config_dir,
-                self.config_dir,
-                ignore=shutil.ignore_patterns(
-                    CONFIG_CHECKPOINTS_URL_FILE_NAME.name.replace(".db", ".*"),
-                ),
-            )
-        else:
-            await self._copy_missing_template_files(template_config_dir)
-            await self._normalize_legacy_defaults(template_config_dir)
-
-        await asyncio.to_thread(ensure_memory_file, self.working_dir)
-
-        # Ensure CONFIG_DIR_NAME is ignored in git (local-only, not committed)
-        git_info_exclude = self.working_dir / ".git" / "info" / "exclude"
-        if git_info_exclude.parent.exists():
-            try:
-                existing_content = ""
-                if git_info_exclude.exists():
-                    existing_content = await asyncio.to_thread(git_info_exclude.read_text)
-
-                ignore_pattern = f"{CONFIG_DIR_NAME}/"
-                if ignore_pattern not in existing_content:
-
-                    def write_exclude():
-                        with git_info_exclude.open("a") as f:
-                            f.write(f"\n# msAgent configuration\n{ignore_pattern}\n")
-
-                    await asyncio.to_thread(write_exclude)
-            except Exception:
-                pass
-
-    async def _copy_missing_template_files(self, template_config_dir: Path) -> None:
-        """Copy newly-added default template files into existing config directories."""
-
-        def copy_missing() -> None:
-            for template_path in template_config_dir.rglob("*"):
-                if not template_path.is_file():
-                    continue
-                relative_path = template_path.relative_to(template_config_dir)
-                target_path = self.config_dir / relative_path
-                if not target_path.exists():
-                    target_path.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(template_path, target_path)
-
-        await asyncio.to_thread(copy_missing)
-
-    async def _normalize_legacy_defaults(self, template_config_dir: Path) -> None:
-        """Gently upgrade legacy default files without overwriting user customizations."""
-
-        def normalize() -> None:
-            prompt_path = self.config_dir / "prompts" / "agents" / "general.md"
-            template_prompt_path = template_config_dir / "prompts" / "agents" / "general.md"
-            if prompt_path.exists() and template_prompt_path.exists():
-                prompt_text = prompt_path.read_text(encoding="utf-8")
-                if (
-                    "You are a versatile AI assistant" in prompt_text
-                    and "Ascend NPU Profiling 性能分析助手" not in prompt_text
-                ):
-                    shutil.copy2(template_prompt_path, prompt_path)
-
-            mcp_path = self.config_dir / CONFIG_MCP_FILE_NAME.name
-            template_mcp_path = template_config_dir / CONFIG_MCP_FILE_NAME.name
-            if mcp_path.exists() and template_mcp_path.exists():
-                current = json.loads(mcp_path.read_text(encoding="utf-8"))
-                template = json.loads(template_mcp_path.read_text(encoding="utf-8"))
-                current_servers = current.setdefault("mcpServers", {})
-                template_servers = template.get("mcpServers", {})
-                for name, server in template_servers.items():
-                    current_servers.setdefault(name, server)
-                mcp_path.write_text(
-                    json.dumps(current, indent=2, ensure_ascii=False),
-                    encoding="utf-8",
-                )
-
-            general_agent_path = self.config_dir / "agents" / "general.yml"
-            template_general_agent_path = template_config_dir / "agents" / "general.yml"
-            if general_agent_path.exists() and template_general_agent_path.exists():
-                current_agent = yaml.safe_load(general_agent_path.read_text(encoding="utf-8")) or {}
-                template_agent = yaml.safe_load(template_general_agent_path.read_text(encoding="utf-8")) or {}
-                current_patterns = current_agent.setdefault("tools", {}).setdefault("patterns", [])
-                template_patterns = template_agent.get("tools", {}).get("patterns", [])
-                for pattern in template_patterns:
-                    if pattern not in current_patterns:
-                        current_patterns.append(pattern)
-                general_agent_path.write_text(
-                    yaml.safe_dump(current_agent, sort_keys=False, allow_unicode=True),
-                    encoding="utf-8",
-                )
-
-            modeling_agent_path = self.config_dir / "agents" / "Modeling.yml"
-            template_modeling_agent_path = template_config_dir / "agents" / "Modeling.yml"
-            if modeling_agent_path.exists() and template_modeling_agent_path.exists():
-                current_agent = yaml.safe_load(modeling_agent_path.read_text(encoding="utf-8")) or {}
-                template_agent = yaml.safe_load(template_modeling_agent_path.read_text(encoding="utf-8")) or {}
-                current_patterns = current_agent.setdefault("skills", {}).setdefault("patterns", [])
-                template_patterns = template_agent.get("skills", {}).get("patterns", [])
-                for pattern in template_patterns:
-                    if pattern not in current_patterns:
-                        current_patterns.append(pattern)
-                modeling_agent_path.write_text(
-                    yaml.safe_dump(current_agent, sort_keys=False, allow_unicode=True),
-                    encoding="utf-8",
-                )
-
-        await asyncio.to_thread(normalize)
+    @staticmethod
+    def _source_exists(file_path: Path, dir_path: Path) -> bool:
+        return file_path.is_file() or (dir_path.is_dir() and any(dir_path.glob("*.yml")))
 
     # === LLM configs ===
 
@@ -177,10 +133,14 @@ class ConfigRegistry:
         """Load all LLM configs (cached)."""
         if self._llms is None or force_reload:
             await self.ensure_config_dir()
-            self._llms = await BatchLLMConfig.from_yaml(
-                file_path=self.working_dir / CONFIG_LLMS_FILE_NAME,
-                dir_path=self.working_dir / CONFIG_LLMS_DIR,
+            defaults = await BatchLLMConfig.from_yaml(
+                file_path=self.default_config_dir / CONFIG_LLMS_FILE_NAME.name,
+                dir_path=self.default_config_dir / CONFIG_LLMS_DIR.name,
             )
+            overrides: list[LLMConfig] = []
+            if self._source_exists(self.llms_file, self.llms_dir):
+                overrides = (await BatchLLMConfig.from_yaml(self.llms_file, self.llms_dir)).llms
+            self._llms = BatchLLMConfig(llms=_merge_items(defaults.llms, overrides, lambda item: item.alias))
         return self._llms
 
     async def get_llm(self, alias: str) -> LLMConfig:
@@ -197,9 +157,20 @@ class ConfigRegistry:
         """Load all checkpointer configs (cached)."""
         if self._checkpointers is None or force_reload:
             await self.ensure_config_dir()
-            self._checkpointers = await BatchCheckpointerConfig.from_yaml(
-                file_path=self.working_dir / CONFIG_CHECKPOINTERS_FILE_NAME,
-                dir_path=self.working_dir / CONFIG_CHECKPOINTERS_DIR,
+            defaults = await BatchCheckpointerConfig.from_yaml(
+                file_path=self.default_config_dir / CONFIG_CHECKPOINTERS_FILE_NAME.name,
+                dir_path=self.default_config_dir / CONFIG_CHECKPOINTERS_DIR.name,
+            )
+            overrides: list[CheckpointerConfig] = []
+            if self._source_exists(self.checkpointers_file, self.checkpointers_dir):
+                overrides = (
+                    await BatchCheckpointerConfig.from_yaml(
+                        self.checkpointers_file,
+                        self.checkpointers_dir,
+                    )
+                ).checkpointers
+            self._checkpointers = BatchCheckpointerConfig(
+                checkpointers=_merge_items(defaults.checkpointers, overrides, lambda item: item.type)
             )
         return self._checkpointers
 
@@ -215,14 +186,24 @@ class ConfigRegistry:
         if self._subagents is None or force_reload:
             await self.ensure_config_dir()
 
-            llm_config = None
-            if (self.working_dir / CONFIG_LLMS_FILE_NAME).exists() or (self.working_dir / CONFIG_LLMS_DIR).exists():
-                llm_config = await self.load_llms()
-
-            self._subagents = await BatchSubAgentConfig.from_yaml(
-                file_path=self.working_dir / CONFIG_SUBAGENTS_FILE_NAME,
-                dir_path=self.working_dir / CONFIG_SUBAGENTS_DIR,
+            llm_config = await self.load_llms()
+            defaults = await BatchSubAgentConfig.from_yaml(
+                file_path=self.default_config_dir / CONFIG_SUBAGENTS_FILE_NAME.name,
+                dir_path=self.default_config_dir / CONFIG_SUBAGENTS_DIR.name,
                 batch_llm_config=llm_config,
+            )
+            overrides: list[SubAgentConfig] = []
+            if self._source_exists(self.subagents_file, self.subagents_dir):
+                overrides = (
+                    await BatchSubAgentConfig.from_yaml(
+                        file_path=self.subagents_file,
+                        dir_path=self.subagents_dir,
+                        prompt_base_path=self.app_paths.home,
+                        batch_llm_config=llm_config,
+                    )
+                ).subagents
+            self._subagents = BatchSubAgentConfig(
+                subagents=_merge_model_overrides(defaults.subagents, overrides, lambda item: item.name)
             )
         return self._subagents
 
@@ -237,8 +218,14 @@ class ConfigRegistry:
         """Load all sandbox configs (cached)."""
         if self._sandboxes is None or force_reload:
             await self.ensure_config_dir()
-            self._sandboxes = await BatchSandboxConfig.from_yaml(
-                dir_path=self.working_dir / CONFIG_SANDBOXES_DIR,
+            defaults = await BatchSandboxConfig.from_yaml(
+                dir_path=self.default_config_dir / CONFIG_SANDBOXES_DIR.name,
+            )
+            overrides: list[SandboxConfig] = []
+            if self.sandboxes_dir.is_dir() and any(self.sandboxes_dir.glob("*.yml")):
+                overrides = (await BatchSandboxConfig.from_yaml(self.sandboxes_dir)).sandboxes
+            self._sandboxes = BatchSandboxConfig(
+                sandboxes=_merge_items(defaults.sandboxes, overrides, lambda item: item.name)
             )
         return self._sandboxes
 
@@ -257,44 +244,59 @@ class ConfigRegistry:
         if self._agents is None or force_reload:
             await self.ensure_config_dir()
 
-            llm_config = None
-            checkpointer_config = None
+            llm_config = await self.load_llms()
+            checkpointer_config = await self.load_checkpointers()
+            subagents_config = await self.load_subagents()
+            sandboxes_config = await self.load_sandboxes()
 
-            if (self.working_dir / CONFIG_LLMS_FILE_NAME).exists() or (self.working_dir / CONFIG_LLMS_DIR).exists():
-                llm_config = await self.load_llms()
-
-            if (self.working_dir / CONFIG_CHECKPOINTERS_FILE_NAME).exists() or (
-                self.working_dir / CONFIG_CHECKPOINTERS_DIR
-            ).exists():
-                checkpointer_config = await self.load_checkpointers()
-
-            subagents_config = None
-            if (self.working_dir / CONFIG_SUBAGENTS_FILE_NAME).exists() or (
-                self.working_dir / CONFIG_SUBAGENTS_DIR
-            ).exists():
-                subagents_config = await self.load_subagents()
-
-            sandboxes_config = None
-            if (self.working_dir / CONFIG_SANDBOXES_DIR).exists():
-                sandboxes_config = await self.load_sandboxes()
-
-            self._agents = await BatchAgentConfig.from_yaml(
-                file_path=self.working_dir / CONFIG_AGENTS_FILE_NAME,
-                dir_path=self.working_dir / CONFIG_AGENTS_DIR,
+            defaults = await BatchAgentConfig.from_yaml(
+                file_path=self.default_config_dir / CONFIG_AGENTS_FILE_NAME.name,
+                dir_path=self.default_config_dir / CONFIG_AGENTS_DIR.name,
                 batch_llm_config=llm_config,
                 batch_checkpointer_config=checkpointer_config,
                 batch_subagent_config=subagents_config,
                 batch_sandbox_config=sandboxes_config,
             )
+            overrides: list[AgentConfig] = []
+            if self._source_exists(self.agents_file, self.agents_dir):
+                overrides = (
+                    await BatchAgentConfig.from_yaml(
+                        file_path=self.agents_file,
+                        dir_path=self.agents_dir,
+                        prompt_base_path=self.app_paths.home,
+                        allow_partial=True,
+                        batch_llm_config=llm_config,
+                        batch_checkpointer_config=checkpointer_config,
+                        batch_subagent_config=subagents_config,
+                        batch_sandbox_config=sandboxes_config,
+                    )
+                ).agents
+
+            base_agents = defaults.agents
+            selected_default = next(
+                (item.name for item in overrides if "default" in item.model_fields_set and item.default),
+                None,
+            )
+            if selected_default is not None:
+                base_agents = [
+                    item.model_copy(update={"default": False}) if item.name != selected_default else item
+                    for item in base_agents
+                ]
+            self._agents = BatchAgentConfig(
+                agents=_merge_model_overrides(base_agents, overrides, lambda item: item.name)
+            )
         return self._agents
 
     async def get_agent(self, name: str | None = None) -> AgentConfig:
-        """Get single agent by name, or default agent if name is None."""
+        """Get an explicit Agent, or the workspace selection, or the packaged default."""
         agents = await self.load_agents()
-        agent = agents.get_agent_config(name)
+        selected_name = name if name is not None else self.project_paths.get_current_agent()
+        agent = agents.get_agent_config(selected_name)
+        if agent is None and name is None:
+            agent = agents.get_default_agent()
         if agent:
             return agent
-        raise ValueError(f"Agent '{name}' not found. Available: {agents.agent_names}")
+        raise ValueError(f"Agent '{selected_name}' not found. Available: {agents.agent_names}")
 
     # === MCP config ===
 
@@ -302,12 +304,14 @@ class ConfigRegistry:
         """Load MCP server config (cached)."""
         if self._mcp is None or force_reload:
             await self.ensure_config_dir()
-            self._mcp = await MCPConfig.from_json(self.working_dir / CONFIG_MCP_FILE_NAME)
+            defaults = await MCPConfig.from_json(self.default_config_dir / CONFIG_MCP_FILE_NAME.name)
+            overrides = await MCPConfig.from_json(self.mcp_file)
+            self._mcp = MCPConfig(servers={**defaults.servers, **overrides.servers})
         return self._mcp
 
     async def save_mcp(self, config: MCPConfig) -> None:
         """Save MCP config to file."""
-        config.to_json(self.working_dir / CONFIG_MCP_FILE_NAME)
+        config.to_json(self.mcp_file)
         self._mcp = config
 
     # === Approval config ===
@@ -315,12 +319,17 @@ class ConfigRegistry:
     def load_approval(self, force_reload: bool = False) -> ToolApprovalConfig:
         """Load tool approval config (cached)."""
         if self._approval is None or force_reload:
-            self._approval = ToolApprovalConfig.from_json_file(self.working_dir / CONFIG_APPROVAL_FILE_NAME)
+            source = (
+                self.approval_file
+                if self.approval_file.is_file()
+                else self.default_config_dir / CONFIG_APPROVAL_FILE_NAME.name
+            )
+            self._approval = ToolApprovalConfig.from_json_file(source)
         return self._approval
 
     def save_approval(self, config: ToolApprovalConfig) -> None:
         """Save approval config to file."""
-        config.save_to_json_file(self.working_dir / CONFIG_APPROVAL_FILE_NAME)
+        config.save_to_json_file(self.approval_file)
         self._approval = config
 
     # === User memory ===
@@ -331,7 +340,7 @@ class ConfigRegistry:
         Returns:
             Formatted user memory string for prompt injection, or empty string if no memory
         """
-        memory_path = self.working_dir / CONFIG_MEMORY_FILE_NAME
+        memory_path = self.project_paths.memory_file
         if memory_path.exists():
             content = await asyncio.to_thread(memory_path.read_text, encoding="utf-8")
             content = content.strip()
@@ -343,43 +352,109 @@ class ConfigRegistry:
 
     async def update_agent_llm(self, agent_name: str, llm_alias: str) -> None:
         """Update an agent's LLM reference and persist."""
+        await self._ensure_named_override(agent_name, subagent=False)
         await BatchAgentConfig.update_agent_llm(
-            file_path=self.working_dir / CONFIG_AGENTS_FILE_NAME,
+            file_path=self.agents_file,
             agent_name=agent_name,
             new_llm_name=llm_alias,
-            dir_path=self.working_dir / CONFIG_AGENTS_DIR,
+            dir_path=self.agents_dir,
         )
         self._agents = None  # Invalidate cache
 
     async def update_subagent_llm(self, subagent_name: str, llm_alias: str) -> None:
         """Update a subagent's LLM reference and persist."""
+        await self._ensure_named_override(subagent_name, subagent=True)
         await BatchAgentConfig.update_agent_llm(
-            file_path=self.working_dir / CONFIG_SUBAGENTS_FILE_NAME,
+            file_path=self.subagents_file,
             agent_name=subagent_name,
             new_llm_name=llm_alias,
-            dir_path=self.working_dir / CONFIG_SUBAGENTS_DIR,
+            dir_path=self.subagents_dir,
         )
         self._subagents = None  # Invalidate cache
 
+    async def set_current_agent(self, agent_name: str) -> None:
+        """Persist the selected Agent in this workspace's project state."""
+        agents = await self.load_agents()
+        if agents.get_agent_config(agent_name) is None:
+            raise ValueError(f"Agent '{agent_name}' not found. Available: {agents.agent_names}")
+        await asyncio.to_thread(self.project_paths.set_current_agent, agent_name)
+
+    async def get_current_model(self, agent_name: str) -> str | None:
+        """Return a valid workspace model preference for an Agent."""
+        model_name = self.project_paths.get_current_model(agent_name)
+        if model_name is None:
+            return None
+        llms = await self.load_llms()
+        return model_name if llms.get_llm_config(model_name) is not None else None
+
+    async def set_current_model(self, agent_name: str, model_name: str) -> None:
+        """Persist an Agent's model preference in this workspace's project state."""
+        await self.get_agent(agent_name)
+        await self.get_llm(model_name)
+        await asyncio.to_thread(self.project_paths.set_current_model, agent_name, model_name)
+
     async def update_default_agent(self, agent_name: str) -> None:
-        """Set the default agent and persist."""
-        await BatchAgentConfig.update_default_agent(
-            file_path=self.working_dir / CONFIG_AGENTS_FILE_NAME,
-            agent_name=agent_name,
-            dir_path=self.working_dir / CONFIG_AGENTS_DIR,
-        )
-        self._agents = None  # Invalidate cache
+        """Compatibility alias for workspace-scoped Agent selection."""
+        await self.set_current_agent(agent_name)
 
     async def add_agent_skill_pattern(self, agent_name: str, skill_pattern: str) -> bool:
         """Append a skill pattern to an agent's config if it is not already present."""
+        await self._ensure_named_override(agent_name, subagent=False, include_fields=("skills",))
         changed = await BatchAgentConfig.add_agent_skill_pattern(
-            file_path=self.working_dir / CONFIG_AGENTS_FILE_NAME,
+            file_path=self.agents_file,
             agent_name=agent_name,
             skill_pattern=skill_pattern,
-            dir_path=self.working_dir / CONFIG_AGENTS_DIR,
+            dir_path=self.agents_dir,
         )
         self._agents = None  # Invalidate cache
         return changed
+
+    async def _ensure_named_override(
+        self,
+        name: str,
+        *,
+        subagent: bool,
+        include_fields: tuple[str, ...] = (),
+    ) -> None:
+        """Create the smallest valid override before mutating one field."""
+        await self.ensure_config_dir()
+        target_dir = self.subagents_dir if subagent else self.agents_dir
+        target_file = target_dir / f"{name}.yml"
+        aggregate_file = self.subagents_file if subagent else self.agents_file
+        if target_file.is_file() or aggregate_file.is_file():
+            return
+
+        source_dir_name = CONFIG_SUBAGENTS_DIR.name if subagent else CONFIG_AGENTS_DIR.name
+        source_dir = self.default_config_dir / source_dir_name
+        source_file = source_dir / f"{name}.yml"
+        if not source_file.is_file():
+            for candidate in source_dir.glob("*.yml"):
+                data = yaml.safe_load(candidate.read_text(encoding="utf-8")) or {}
+                if data.get("name") == name:
+                    source_file = candidate
+                    break
+        if not source_file.is_file():
+            raise ValueError(f"Cannot create an override for unknown config item '{name}'")
+
+        source_data = yaml.safe_load(await asyncio.to_thread(source_file.read_text, encoding="utf-8")) or {}
+        minimal_override = {
+            "version": source_data.get("version"),
+            "name": source_data.get("name", name),
+            "llm": source_data.get("llm"),
+        }
+        for field_name in include_fields:
+            if field_name in source_data:
+                minimal_override[field_name] = source_data[field_name]
+        if not minimal_override["llm"]:
+            raise ValueError(f"Cannot create an override without an LLM for '{name}'")
+
+        target_dir.mkdir(parents=True, exist_ok=True)
+        yaml_content = yaml.safe_dump(
+            minimal_override,
+            sort_keys=False,
+            allow_unicode=True,
+        )
+        await asyncio.to_thread(target_file.write_text, yaml_content, encoding="utf-8")
 
     # === Cache management ===
 

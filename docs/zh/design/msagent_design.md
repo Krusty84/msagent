@@ -34,7 +34,7 @@ Ascend生态下利用Agent调试调优存在几个典型难点：
 | -- | -- |
 | 统一入口 | 通过 `msagent` CLI 暴露统一入口，降低学习和切换成本。 |
 | 领域分治 | 用 Agent + SubAgent + Skill 的组合承载不同领域知识，而不是把所有逻辑塞进一个 Prompt。 |
-| 配置驱动 | LLM、Agent、Checkpointer、MCP、Sandbox、Approval 均通过 `.msagent/` 本地配置驱动。 |
+| 配置驱动 | LLM、Agent、Checkpointer、MCP、Sandbox、Approval 由安装包默认值和全局用户覆盖共同驱动。 |
 | 可控扩展 | Tool Pattern、Skill Pattern、MCP include/exclude 共同限定能力边界。 |
 | 稳定运行 | 检查点、重试、超时、审批、中间件和上下文压缩保证长链路对话可持续。 |
 
@@ -43,7 +43,7 @@ Ascend生态下利用Agent调试调优存在几个典型难点：
 #### 4.1 设计目标
 
 - 支持多专业 Agent 并保持统一运行时模型。
-- 支持本地配置、默认模板、版本迁移和目录式扩展。
+- 支持全局配置、只读默认模板、项目状态隔离和目录式扩展。
 - 支持 CLI/TUI 交互使用统一的图运行时。
 - 支持 Tool、Skill、MCP 的可组合装配与精细过滤。
 - 支持长会话上下文治理，包括检查点、记忆注入、压缩卸载与大结果外置。
@@ -75,7 +75,7 @@ flowchart TB
 
     CLI --> INIT["Initializer<br/>运行时装配与缓存中心"]
 
-    INIT --> REG["ConfigRegistry<br/>.msagent 配置加载/迁移"]
+    INIT --> REG["ConfigRegistry<br/>内置默认 + 全局覆盖"]
     INIT --> AF["AgentFactory<br/>deepagents 图构建"]
     INIT --> MF["MCPFactory / MCPClient"]
     INIT --> SF["SkillFactory"]
@@ -87,11 +87,11 @@ flowchart TB
     DAG --> TOOLS["运行时 Tools<br/>deepagents 内置 + catalog tools + web_search + MCP tools"]
     DAG --> CTX["AgentContext / AgentState"]
 
-    REG --> LOCAL["工作目录 .msagent/"]
+    REG --> GLOBAL["MSAGENT_HOME<br/>默认 ~/.msagent/"]
     REG --> DEFAULTS["resources/configs/default/"]
 
     MF --> MCP["外部 MCP Servers<br/>默认 msprof-mcp"]
-    SF --> SKILLS["项目 skills/ + 内置 skills + .msagent/skills"]
+    SF --> SKILLS["项目 skills/ + 全局 skills + 内置 skills"]
     LF --> MODELS["OpenAI / Anthropic / Google(Gemini)"]
     CPF --> CHECKPOINT["Memory / SQLite Checkpointer"]
 
@@ -105,7 +105,7 @@ flowchart TB
 整体上，`msAgent` 采用“**入口层统一、运行时集中装配、能力模块解耦**”的方案：
 
 - CLI/TUI 作为统一入口，所有交互最终都依赖 `Initializer.create_graph()` 组装同一类图运行时。
-- `ConfigRegistry` 负责把模板资源、工作目录配置和历史兼容迁移整理为强类型配置对象。
+- `ConfigRegistry` 负责合并安装包内置默认值与 `MSAGENT_HOME` 用户覆盖，并整理为强类型配置对象。
 - `AgentFactory` 负责把 LLM、工具、技能、中间件、后端和检查点真正拼成一个 `CompiledStateGraph`。
 - `MessageDispatcher` 负责运行时阶段的消息流、流式渲染、审批恢复、自动压缩和 token 统计。
 - Tools / Skills / MCP 三种能力来源通过 Pattern 过滤共同决定每个 Agent 的“能力边界”。
@@ -146,7 +146,7 @@ sequenceDiagram
     App->>Chat: 解析为默认会话命令
     Chat->>Ctx: 创建运行时 Context
     Ctx->>Init: load_agent_config / load_llm_config
-    Init->>Reg: 确保 .msagent 目录存在并加载配置
+    Init->>Reg: 解析全局路径、项目状态并加载分层配置
     Reg-->>Init: Agent/LLM/MCP/Approval/Checkpointer 配置
     Init->>MCP: 创建 MCPClient
     MCP-->>Init: 可见 MCP tools + module_map
@@ -163,8 +163,8 @@ sequenceDiagram
 1. **CLI 兼容路由**
    `legacy.py` 将命令表面收敛为 `config` 与默认会话两类，同时保留 `--agent`、`--model`、`--approval-mode` 等运行参数。
 
-2. **工作目录本地化配置**
-   `ConfigRegistry.ensure_config_dir()` 在首次运行时把 `resources/configs/default/` 复制到 `<working-dir>/.msagent/`，并尽量将其加入 `.git/info/exclude`，保证配置本地化、避免误提交。
+2. **配置与工作目录分离**
+   `AppPaths` 解析 `MSAGENT_HOME`，`ConfigRegistry` 直接读取 wheel 默认值并叠加全局覆盖；`working_dir` 仅保留为工具执行根目录。
 
 3. **缓存式装配**
    `Initializer` 在 graph 构建后缓存：
@@ -276,7 +276,7 @@ flowchart LR
 
 #### 6.1 配置源与优先级
 
-`msAgent` 的配置采用“安装包默认模板 + 工作目录本地实例”的组织方式。首次运行时，`ConfigRegistry.ensure_config_dir()` 会将安装包中的默认模板复制到当前工作目录下的 `.msagent/`，后续运行优先读取该本地目录。
+`msAgent` 的配置采用“安装包只读默认值 + 全局用户覆盖”的组织方式。`ConfigRegistry` 不再复制整套默认模板，项目 memory、checkpoint 和历史等运行状态统一写入全局 home 下的项目隔离目录。
 
 典型结构如下：
 
@@ -301,49 +301,52 @@ resources/configs/default/
 ├─ prompts/
 └─ skills/
 
-<working-dir>/.msagent/
-├─ config.llms.yml
-├─ config.mcp.json
-├─ config.approval.json
-├─ config.checkpoints.db
-├─ memory.md
-├─ .history
-├─ agents/
-├─ subagents/
-├─ llms/
-├─ checkpointers/
-├─ sandboxes/
+~/.msagent/
+├─ config/
+│  ├─ config.llms.yml
+│  ├─ config.mcp.json
+│  ├─ config.approval.json
+│  ├─ agents/
+│  ├─ subagents/
+│  ├─ llms/
+│  ├─ checkpointers/
+│  └─ sandboxes/
+├─ prompts/
 ├─ skills/
-├─ logs/
 ├─ cache/
 ├─ oauth/
-└─ conversation_history/
+├─ logs/
+└─ state/projects/<project-id>/
+   ├─ project.json
+   ├─ checkpoints.sqlite
+   ├─ memory.md
+   ├─ history
+   ├─ conversation_history/
+   └─ audit_log/
 ```
 
 配置目录分为两层：
 
-- `resources/configs/default/`：随源码或安装包分发的**默认模板层**，定义开箱即用的 Agent、Prompt、Skill、MCP 与检查点模板。
-- `<working-dir>/.msagent/`：针对当前工程实例化的**项目本地配置层**，既保存用户可编辑配置，也保存运行时状态与副产物。
+- `resources/configs/default/`：随源码或安装包分发的**只读默认层**。
+- `~/.msagent/config/`：所有项目共享的**用户覆盖层**。
+- `~/.msagent/state/projects/<project-id>/`：按 canonical working directory 隔离的**项目状态层**。
 
 配置读取与初始化规则如下：
 
 | 场景 | 行为 |
 | -- | -- |
-| 首次进入某个工作目录运行 `msagent` | 若 `.msagent/` 不存在，则从 `resources/configs/default/` 复制模板。 |
-| 版本升级后再次运行 | 若模板新增文件，本地缺失则补齐；部分历史默认项会被温和迁移，但不会粗暴覆盖用户自定义。 |
-| 读取 LLM 配置 | 组合读取 `.msagent/config.llms.yml` 与 `.msagent/llms/*.yml`。 |
-| 读取 Agent 配置 | 优先读取 `.msagent/config.agents.yml`（若存在），并结合 `.msagent/agents/*.yml`。 |
-| 读取 SubAgent 配置 | 优先读取 `.msagent/config.subagents.yml`（若存在），并结合 `.msagent/subagents/*.yml`。 |
-| 读取 Checkpointer 配置 | 优先读取 `.msagent/config.checkpointers.yml`（若存在），并结合 `.msagent/checkpointers/*.yml`。 |
-| 读取 Sandbox 配置 | 读取 `.msagent/sandboxes/*.yml`。 |
-| 读取 MCP 配置 | 读取 `.msagent/config.mcp.json`。 |
-| 读取审批配置 | 读取 `.msagent/config.approval.json`。 |
+| 首次进入某个工作目录运行 `msagent` | 创建全局目录和当前项目的 state 目录，不修改工作目录。 |
+| 读取 LLM/Agent/SubAgent/Checkpointer/Sandbox | 按语义键将 `~/.msagent/config/` 中的用户项覆盖到内置默认项。 |
+| 切换 Agent 或 Model | 将当前选择写入项目 `project.json`，不修改或复制内置 Agent 定义。 |
+| 读取 MCP | 按 server name 合并内置定义和 `config/config.mcp.json`。 |
+| 读取审批配置 | 用户文件存在时读取 `config/config.approval.json`，否则直接读取内置默认。 |
+| 高级修改内置 Agent | 仅写入名称、版本及被修改字段；其余字段继续继承安装包默认定义。 |
 
 配置系统的关键特性如下：
 
-- **默认模板复制**：把“安装态默认值”和“项目本地配置”分层，避免用户直接改包内资源。
+- **默认值不复制**：wheel 更新可以直接提供新默认项，用户目录只保存实际覆盖。
 - **目录式扩展**：支持 `agents/*.yml`、`llms/*.yml`、`checkpointers/*.yml`、`sandboxes/*.yml` 等目录化组织方式，便于逐个维护。
-- **温和迁移**：`ConfigRegistry` 与 `AgentConfig.migrate()` 共同负责缺失文件补齐和旧版字段平滑迁移，例如 `tools`、`skills`、`compression`、`retry` 的历史格式兼容。
+- **显式路径注入**：`AppPaths`、`ProjectPaths` 统一控制配置、全局资源和项目状态落点。
 - **强类型校验**：最终都会收敛为 Pydantic 配置对象，保证 Provider、Pattern、超时、审批规则、MCP transport 等关键字段可校验。
 
 #### 6.2 关键配置对象
@@ -358,22 +361,13 @@ resources/configs/default/
 | `ToolApprovalConfig` | `interrupt_on`、`decision_rules` | 将高风险工具纳入审批与自动决策框架。 |
 | `CheckpointerConfig` | `type`、`connection_string` | 决定会话状态持久化后端。 |
 
-#### 6.3 本地目录布局
+#### 6.3 路径职责
 
-工作目录 `.msagent/` 既是运行时配置根目录，也是会话副产物落地点。典型内容包括：
+- `working_dir`：Agent 文件操作、shell 和项目级 `skills/` 的根目录。
+- `AppPaths`：全局配置、Prompt、Skill、cache、OAuth 和日志目录。
+- `ProjectPaths`：当前项目的 memory、history、checkpoint、conversation history 和 audit。
 
-- `config.llms.yml`
-- `agents/*.yml`
-- `subagents/*.yml`
-- `checkpointers/*.yml`
-- `config.mcp.json`
-- `config.approval.json`
-- `memory.md`
-- `logs/`
-- `conversation_history/`
-- `config.checkpoints.db`
-
-这种布局让 `msAgent` 天然适合作为“项目级 Agent 工具链”，不同工程目录可以有自己的 Agent/MCP/Skill 组合，而不是共用一份全局状态。
+不同项目共享用户配置，但不会共享会话状态。
 
 ### 7. Tool / Skill / MCP 能力面设计
 
@@ -396,12 +390,12 @@ resources/configs/default/
 Skill 是面向工作流复用的轻量资产，当前扫描顺序为：
 
 1. `<working-dir>/skills`
-2. 仓库根目录或打包后的内置 `skills/`
-3. `<working-dir>/.msagent/skills`
+2. `~/.msagent/skills`
+3. 仓库根目录或打包后的内置 `skills/`
 
 这意味着：
 
-- 项目级 Skill 可以覆盖默认 Skill。
+- 项目级和全局用户 Skill 可以覆盖默认 Skill。
 - 打包态和源码态共用统一的内置 Skill 分发方案。
 - Skill 通过 `SKILL.md` 描述触发语义与执行要求，而不是强绑定到 Python 代码入口。
 
@@ -600,7 +594,7 @@ CLI 层由 `Session + InteractivePrompt + Renderer + Dispatcher/Handler` 组成�
 
 #### 1.1 初始化与查看配置
 
-首次在项目目录运行 `msagent` 时，会自动生成 `.msagent/` 本地配置目录。可通过以下命令查看当前配置：
+首次运行时会在 `MSAGENT_HOME`（默认 `~/.msagent/`）创建全局目录和当前项目状态目录，不会修改项目工作目录。可通过以下命令查看当前配置：
 
 ```bash
 msagent config --show
@@ -645,7 +639,7 @@ msagent --approval-mode active
 
 #### 2.1 LLM 配置
 
-默认模板中的 `config.llms.yml` 定义了主模型入口，额外模型别名可以放入 `.msagent/llms/*.yml`。当前 schema 支持：
+默认模板中的 `config.llms.yml` 定义了主模型入口，额外模型别名可以放入 `~/.msagent/config/llms/*.yml`。当前 schema 支持：
 
 - `openai`
 - `anthropic`
@@ -690,7 +684,7 @@ skills:
 
 #### 2.3 MCP 配置
 
-MCP 配置位于 `.msagent/config.mcp.json`。默认服务如下：
+MCP 用户覆盖配置位于 `~/.msagent/config/config.mcp.json`。内置服务定义来自安装包资源，例如本地 stdio 服务可写为：
 
 ```json
 {
@@ -716,13 +710,13 @@ MCP 配置位于 `.msagent/config.mcp.json`。默认服务如下：
 推荐优先放在以下位置之一：
 
 - `<working-dir>/skills/<category>/<skill-name>/SKILL.md`
-- `<working-dir>/.msagent/skills/<category>/<skill-name>/SKILL.md`
+- `~/.msagent/skills/<category>/<skill-name>/SKILL.md`
 
 同时需要在目标 Agent 配置中放开对应 `skills.patterns`。
 
 #### 3.2 新增 Agent
 
-可在 `.msagent/agents/` 下新增 YAML 文件，定义：
+可在 `~/.msagent/config/agents/` 下新增 YAML 文件，定义：
 
 - `name`
 - `prompt`
@@ -768,11 +762,12 @@ MCP 配置位于 `.msagent/config.mcp.json`。默认服务如下：
 
 #### 3.1 配置系统测试
 
-**目标**：保证 `.msagent` 模板复制、配置装载、目录式扩展、版本迁移和兼容行为稳定。
+**目标**：保证全局路径解析、内置值与用户覆盖装载、项目状态隔离和目录式扩展行为稳定。
 
 覆盖的核心用例如下：
 
-- 首次运行时自动生成 `.msagent/`，并能从模板目录复制缺失文件。
+- 首次运行时只在 `MSAGENT_HOME` 创建目录，工作目录不生成 `.msagent/`。
+- 相同项目路径的 project id 稳定，同名但路径不同的项目状态互相隔离。
 - `config.llms.yml` 与 `llms/*.yml` 混合加载时，别名不重复且 Provider 正常归一化。
 - Agent/SubAgent/Checkpointer/Sandbox 配置能正确解析引用关系。
 - 历史字段迁移正常，例如：

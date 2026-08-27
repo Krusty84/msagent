@@ -23,6 +23,8 @@ from __future__ import annotations
 import logging
 import string
 import os
+import json
+import sys
 import tempfile
 from functools import partial
 from fnmatch import fnmatch
@@ -68,6 +70,7 @@ logger = logging.getLogger(__name__)
 
 _TAVILY_SERVER_KEYWORDS = ("tavily",)
 _TAVILY_API_KEY_ENV = "TAVILY_API_KEY"
+_DUMP_SYSTEM_PROMPT_PATH_ENV = "MSAGENT_DUMP_SYSTEM_PROMPT_PATH"
 _TAVILY_VALIDATE_URL = "https://api.tavily.com/usage"
 _TAVILY_VALIDATE_TIMEOUT_SECONDS = 5.0
 _TAVILY_KEY_VALIDATION_CACHE: dict[str, bool] = {}
@@ -189,21 +192,84 @@ class _SystemMessageMiddleware(AgentMiddleware[Any, Any, Any]):
         return rendered_item
 
     @staticmethod
+    def _resolve_dump_path(request) -> Path | None:
+        raw_path = os.getenv(_DUMP_SYSTEM_PROMPT_PATH_ENV, "").strip()
+        if not raw_path:
+            return None
+
+        dump_path = Path(raw_path).expanduser()
+        if dump_path.is_absolute():
+            return dump_path
+
+        runtime = getattr(request, "runtime", None)
+        context = getattr(runtime, "context", None) if runtime is not None else None
+        working_dir = getattr(context, "working_dir", None) if context is not None else None
+        if isinstance(working_dir, Path):
+            return (working_dir / dump_path).resolve()
+        if working_dir:
+            return (Path(working_dir).expanduser() / dump_path).resolve()
+        return dump_path.resolve()
+
+    @staticmethod
+    def _emit_dump_debug(message: str) -> None:
+        raw_path = os.getenv(_DUMP_SYSTEM_PROMPT_PATH_ENV, "").strip()
+        if not raw_path:
+            return
+        try:
+            print(f"[msagent] system prompt dump: {message}", file=sys.stderr, flush=True)
+        except OSError:
+            logger.debug("Failed to emit system prompt dump debug message", exc_info=True)
+
+    @staticmethod
+    def _serialize_system_prompt_content(content: Any) -> str:
+        if isinstance(content, str):
+            return content
+        try:
+            return json.dumps(content, ensure_ascii=False, indent=2)
+        except TypeError:
+            return str(content)
+
+    @classmethod
+    def _dump_rendered_system_prompt(cls, request, content: Any) -> None:
+        dump_path = cls._resolve_dump_path(request)
+        if dump_path is None:
+            return
+
+        try:
+            cls._emit_dump_debug(f"resolved path: {dump_path}")
+            dump_path.parent.mkdir(parents=True, exist_ok=True)
+            dump_path.write_text(cls._serialize_system_prompt_content(content), encoding="utf-8")
+            cls._emit_dump_debug(f"wrote rendered prompt to {dump_path}")
+        except OSError as exc:
+            cls._emit_dump_debug(f"failed to write {dump_path}: {exc}")
+            logger.warning("Failed to dump rendered system prompt to %s", dump_path, exc_info=True)
+
+    @staticmethod
     def _render_request_system_message(request):
         system_message = getattr(request, "system_message", None)
         runtime = getattr(request, "runtime", None)
         context = getattr(runtime, "context", None) if runtime is not None else None
         template_vars = getattr(context, "template_vars", None) if context is not None else None
-        if system_message is None or not template_vars:
+        if system_message is None:
+            _SystemMessageMiddleware._emit_dump_debug("request has no system_message; skipping dump")
             return request
 
-        rendered_content = _SystemMessageMiddleware._safe_render_templates(
-            system_message.content,
-            template_vars,
+        _SystemMessageMiddleware._emit_dump_debug(
+            f"rendering system_message type={type(system_message.content).__name__}, "
+            f"template_vars={'yes' if template_vars else 'no'}"
         )
+
+        rendered_content = (
+            _SystemMessageMiddleware._safe_render_templates(system_message.content, template_vars)
+            if template_vars
+            else system_message.content
+        )
+        _SystemMessageMiddleware._dump_rendered_system_prompt(request, rendered_content)
         if rendered_content == system_message.content:
+            _SystemMessageMiddleware._emit_dump_debug("rendered content unchanged")
             return request
 
+        _SystemMessageMiddleware._emit_dump_debug("rendered content updated from template variables")
         return request.override(system_message=system_message.model_copy(update={"content": rendered_content}))
 
     def wrap_model_call(self, request, handler):
@@ -220,21 +286,41 @@ class _FilteredSkillsMiddleware(SkillsMiddleware):
 
     def __init__(self, *, backend: Any, sources: list[str], allowed_skills: list[Any] | None) -> None:
         super().__init__(backend=backend, sources=sources)
-        self._allowed_skill_names = {
+        self._default_allowed_skill_names = {
             str(getattr(skill, "name", "")).strip()
             for skill in (allowed_skills or [])
             if str(getattr(skill, "name", "")).strip()
         }
         self.system_prompt_prefix = _FILTERED_SKILLS_SYSTEM_PROMPT_PREFIX
 
-    def _filter_skills_metadata(self, skills_metadata: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        if not self._allowed_skill_names:
-            return []
-        return [skill for skill in skills_metadata if str(skill.get("name", "")).strip() in self._allowed_skill_names]
+    def _allowed_skill_names(self, runtime: Any | None = None) -> set[str]:
+        context = getattr(runtime, "context", None)
+        runtime_skills = getattr(context, "skill_catalog", None)
+        if runtime_skills is None:
+            return set(self._default_allowed_skill_names)
+        return {
+            str(getattr(skill, "name", "")).strip()
+            for skill in runtime_skills
+            if str(getattr(skill, "name", "")).strip()
+        }
 
-    def _sorted_filtered_skills(self, skills_metadata: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def _filter_skills_metadata(
+        self,
+        skills_metadata: list[dict[str, Any]],
+        runtime: Any | None = None,
+    ) -> list[dict[str, Any]]:
+        allowed_skill_names = self._allowed_skill_names(runtime)
+        if not allowed_skill_names:
+            return []
+        return [skill for skill in skills_metadata if str(skill.get("name", "")).strip() in allowed_skill_names]
+
+    def _sorted_filtered_skills(
+        self,
+        skills_metadata: list[dict[str, Any]],
+        runtime: Any | None = None,
+    ) -> list[dict[str, Any]]:
         return sorted(
-            self._filter_skills_metadata(skills_metadata),
+            self._filter_skills_metadata(skills_metadata, runtime),
             key=lambda skill: (
                 str(skill.get("category", "default")).casefold(),
                 str(skill.get("name", "")).casefold(),
@@ -256,7 +342,9 @@ class _FilteredSkillsMiddleware(SkillsMiddleware):
 
     def modify_request(self, request):
         skills_metadata = list(request.state.get("skills_metadata", []))
-        skills_list = self._format_skills_list(skills_metadata)
+        skills_list = self._format_skills_list(
+            self._sorted_filtered_skills(skills_metadata, getattr(request, "runtime", None))
+        )
         skills_section = f"{self.system_prompt_prefix}\n{skills_list}\n"
         system_message = getattr(request, "system_message", None)
         if system_message is None:
@@ -269,13 +357,13 @@ class _FilteredSkillsMiddleware(SkillsMiddleware):
         update = super().before_agent(state, runtime, config)
         if update is None:
             return None
-        return {"skills_metadata": self._sorted_filtered_skills(list(update.get("skills_metadata", [])))}
+        return {"skills_metadata": self._sorted_filtered_skills(list(update.get("skills_metadata", [])), runtime)}
 
     async def abefore_agent(self, state, runtime, config):
         update = await super().abefore_agent(state, runtime, config)
         if update is None:
             return None
-        return {"skills_metadata": self._sorted_filtered_skills(list(update.get("skills_metadata", [])))}
+        return {"skills_metadata": self._sorted_filtered_skills(list(update.get("skills_metadata", [])), runtime)}
 
 
 def patch_third_party_prompt_defaults() -> None:

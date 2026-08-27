@@ -210,6 +210,7 @@ python skills/quantizer/quant-tuning-evaluate/scripts/run_evaluation.py \
 - **Script-only**：禁止用裸 CLI 替代 `run_evaluation.py`
 - **路径格式**：必须是 JSON 字符串
 - **单轮单次**：每次调用只执行一次完整评测
+- **禁止派生或修改评测配置**：只能按编排层给定的 `evaluate_config_path` 执行评测，**不得**自行派生、修改或生成新的 Evaluation YAML。子集不达标时 fast-fail 跳过后序数据集属正常行为，按原样回传结果，由编排层决策后续流程。评测配置仅由编排层 `evaluation-generator` 生成。
 - **服务生命周期**：由脚本内部评测服务管理。如果你需要测多个数据集，请你在测完所有数据集后再关闭服务化，**避免**重复多次拉起。服务化测评运行时长可能较长，超过 timeout 3600s，**务必避免**在测评的中途关闭服务化和测评，你应该等待测评完成，必要时可以通过看日志（如vllm_server.log）最新的消息时间来确认测评任务是否还活跃。
 
 ---

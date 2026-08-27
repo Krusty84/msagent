@@ -23,6 +23,7 @@ from __future__ import annotations
 import logging
 import string
 import os
+import json
 import tempfile
 from functools import partial
 from fnmatch import fnmatch
@@ -68,6 +69,7 @@ logger = logging.getLogger(__name__)
 
 _TAVILY_SERVER_KEYWORDS = ("tavily",)
 _TAVILY_API_KEY_ENV = "TAVILY_API_KEY"
+_DUMP_SYSTEM_PROMPT_PATH_ENV = "MSAGENT_DUMP_SYSTEM_PROMPT_PATH"
 _TAVILY_VALIDATE_URL = "https://api.tavily.com/usage"
 _TAVILY_VALIDATE_TIMEOUT_SECONDS = 5.0
 _TAVILY_KEY_VALIDATION_CACHE: dict[str, bool] = {}
@@ -189,18 +191,60 @@ class _SystemMessageMiddleware(AgentMiddleware[Any, Any, Any]):
         return rendered_item
 
     @staticmethod
+    def _resolve_dump_path(request) -> Path | None:
+        raw_path = os.getenv(_DUMP_SYSTEM_PROMPT_PATH_ENV, "").strip()
+        if not raw_path:
+            return None
+
+        dump_path = Path(raw_path).expanduser()
+        if dump_path.is_absolute():
+            return dump_path
+
+        runtime = getattr(request, "runtime", None)
+        context = getattr(runtime, "context", None) if runtime is not None else None
+        working_dir = getattr(context, "working_dir", None) if context is not None else None
+        if isinstance(working_dir, Path):
+            return (working_dir / dump_path).resolve()
+        if working_dir:
+            return (Path(working_dir).expanduser() / dump_path).resolve()
+        return dump_path.resolve()
+
+    @staticmethod
+    def _serialize_system_prompt_content(content: Any) -> str:
+        if isinstance(content, str):
+            return content
+        try:
+            return json.dumps(content, ensure_ascii=False, indent=2)
+        except TypeError:
+            return str(content)
+
+    @classmethod
+    def _dump_rendered_system_prompt(cls, request, content: Any) -> None:
+        dump_path = cls._resolve_dump_path(request)
+        if dump_path is None:
+            return
+
+        try:
+            dump_path.parent.mkdir(parents=True, exist_ok=True)
+            dump_path.write_text(cls._serialize_system_prompt_content(content), encoding="utf-8")
+        except OSError:
+            logger.warning("Failed to dump rendered system prompt to %s", dump_path, exc_info=True)
+
+    @staticmethod
     def _render_request_system_message(request):
         system_message = getattr(request, "system_message", None)
         runtime = getattr(request, "runtime", None)
         context = getattr(runtime, "context", None) if runtime is not None else None
         template_vars = getattr(context, "template_vars", None) if context is not None else None
-        if system_message is None or not template_vars:
+        if system_message is None:
             return request
 
-        rendered_content = _SystemMessageMiddleware._safe_render_templates(
-            system_message.content,
-            template_vars,
+        rendered_content = (
+            _SystemMessageMiddleware._safe_render_templates(system_message.content, template_vars)
+            if template_vars
+            else system_message.content
         )
+        _SystemMessageMiddleware._dump_rendered_system_prompt(request, rendered_content)
         if rendered_content == system_message.content:
             return request
 

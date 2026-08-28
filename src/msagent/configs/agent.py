@@ -98,6 +98,18 @@ class ModelRetryConfig(BaseModel):
             "init_chat_model(timeout=...). If null, use LLM config timeout."
         ),
     )
+    retry_on: list[str] | None = Field(
+        default=None,
+        description=(
+            "Optional exception class names to retry on at the middleware layer, "
+            "e.g. 'openai.APITimeoutError', 'openai.APIConnectionError', "
+            "'httpx.ReadTimeout'. Defaults to built-in timeout/connection exceptions."
+        ),
+    )
+    on_failure: Literal["continue", "error"] = Field(
+        default="error",
+        description="Forwarded to ModelRetryMiddleware(on_failure=...)",
+    )
 
 
 class ToolRetryConfig(BaseModel):

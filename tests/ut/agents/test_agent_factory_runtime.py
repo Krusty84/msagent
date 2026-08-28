@@ -533,6 +533,39 @@ async def test_agent_factory_disables_retry_when_flag_off(
     assert all(item.__class__.__name__ != "ToolRetryMiddleware" for item in middleware)
 
 
+def test_build_model_retry_middleware_should_use_default_streaming_whitelist_when_retry_on_is_none() -> None:
+    factory = AgentFactory(llm_factory=_DummyLLMFactory())
+    retry_cfg = SimpleNamespace(
+        enabled=True,
+        model=SimpleNamespace(
+            enabled=True,
+            max_retries=4,
+            timeout=77.0,
+            retry_on=None,
+            on_failure="error",
+        ),
+    )
+
+    middleware = factory._build_model_retry_middleware(retry_cfg)
+
+    assert middleware is not None
+    assert middleware.max_retries == 4
+    assert middleware.on_failure == "error"
+
+
+def test_build_model_retry_middleware_should_return_none_when_disabled() -> None:
+    factory = AgentFactory(llm_factory=_DummyLLMFactory())
+
+    assert factory._build_model_retry_middleware(None) is None
+    assert factory._build_model_retry_middleware(SimpleNamespace(enabled=False)) is None
+
+    disabled_model = SimpleNamespace(
+        enabled=True,
+        model=SimpleNamespace(enabled=True, max_retries=0),
+    )
+    assert factory._build_model_retry_middleware(disabled_model) is None
+
+
 @pytest.mark.asyncio
 async def test_agent_factory_adds_tool_result_eviction_middleware_when_output_limit_configured(
     monkeypatch,

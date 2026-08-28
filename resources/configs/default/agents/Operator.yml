@@ -35,7 +35,7 @@ retry:
   model:
     enabled: true
     max_retries: 5
-    timeout: 120.0
+    timeout: 300.0
   tool:
     enabled: true
     max_retries: 5

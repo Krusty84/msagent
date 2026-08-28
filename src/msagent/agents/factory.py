@@ -35,7 +35,7 @@ from deepagents.backends import CompositeBackend, LocalShellBackend
 from deepagents.backends.filesystem import FilesystemBackend
 from deepagents.middleware import MemoryMiddleware, SkillsMiddleware
 import httpx
-from langchain.agents.middleware import ToolRetryMiddleware
+from langchain.agents.middleware import ModelRetryMiddleware, ToolRetryMiddleware
 from langchain.agents.middleware.types import AgentMiddleware
 
 from msagent.agents.local_context import ensure_local_context_prompt
@@ -74,6 +74,10 @@ _TAVILY_KEY_VALIDATION_CACHE: dict[str, bool] = {}
 _SEARCH_TOOL_NAME_KEYWORDS = ("search", "web_search")
 _SEARCH_TOOL_DESCRIPTION_KEYWORDS = ("search", "web", "internet", "query")
 _THIRD_PARTY_PROMPTS_PATCHED = False
+_DEFAULT_MODEL_RETRY_ON_EXCEPTIONS = (
+    "httpx.ReadTimeout",
+    "httpx.ReadError",
+)
 _FILTERED_SKILLS_SYSTEM_PROMPT_PREFIX = """
 
 ## Skills
@@ -523,6 +527,10 @@ class AgentFactory:
                     tool_token_limit_before_evict=tool_output_max_tokens,
                 )
             )
+        model_retry_middleware = self._build_model_retry_middleware(retry_cfg)
+        if model_retry_middleware is not None:
+            middleware.append(model_retry_middleware)
+
         middleware.append(_SystemMessageMiddleware())
 
         raw_system_prompt = config.prompt
@@ -606,6 +614,40 @@ class AgentFactory:
         elif retry_cfg is not None and not retry_cfg.enabled:
             llm_max_retries = 0
         return llm_max_retries, llm_timeout_seconds
+
+    def _build_model_retry_middleware(
+        self,
+        retry_cfg: RetryPolicyConfig | None,
+    ) -> ModelRetryMiddleware | None:
+        """Build a `ModelRetryMiddleware` covering the full model call lifecycle.
+
+        Unlike the SDK-level `max_retries` (which only retries before the first token),
+        this middleware wraps the entire async model call — including streaming body
+        reads — so mid-stream timeouts (`httpx.ReadTimeout` / `openai.APITimeoutError`)
+        are retried with the same exponential-backoff policy.
+        """
+        model_retry_cfg = getattr(retry_cfg, "model", None) if retry_cfg is not None else None
+        if (
+            retry_cfg is None
+            or not retry_cfg.enabled
+            or model_retry_cfg is None
+            or not getattr(model_retry_cfg, "enabled", True)
+            or int(getattr(model_retry_cfg, "max_retries", 0)) <= 0
+        ):
+            return None
+
+        retry_on_names = getattr(model_retry_cfg, "retry_on", None)
+        if retry_on_names is None:
+            retry_on_names = list(_DEFAULT_MODEL_RETRY_ON_EXCEPTIONS)
+        retry_on = self._resolve_retry_on_exceptions(list(retry_on_names))
+
+        kwargs: dict[str, Any] = {
+            "max_retries": int(getattr(model_retry_cfg, "max_retries")),
+            "on_failure": getattr(model_retry_cfg, "on_failure", "error"),
+        }
+        if retry_on is not None:
+            kwargs["retry_on"] = retry_on
+        return ModelRetryMiddleware(**kwargs)
 
     @staticmethod
     def _agent_system_prompt_text(prompt: str | list[str]) -> str:
@@ -708,6 +750,9 @@ class AgentFactory:
     ) -> list[AgentMiddleware[Any, Any, Any]]:
         extra: list[AgentMiddleware[Any, Any, Any]] = []
         retry_cfg = sub.retry if sub.retry is not None else fallback_retry
+        model_retry_middleware = self._build_model_retry_middleware(retry_cfg)
+        if model_retry_middleware is not None:
+            extra.append(model_retry_middleware)
         tool_retry_cfg = getattr(retry_cfg, "tool", None) if retry_cfg is not None else None
         if (
             retry_cfg is not None

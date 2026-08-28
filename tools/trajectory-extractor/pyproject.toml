@@ -1,0 +1,21 @@
+[project]
+name = "msagent-trajectory-extractor"
+version = "0.1.0"
+description = "Extract normalized step graphs from msagent trajectories for SKILL.md synthesis"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+# Only needed to read LangGraph checkpoints; the audit, history and trace
+# sources run on the standard library alone.
+checkpoints = ["langgraph-checkpoint-sqlite~=3.1.1"]
+
+[project.scripts]
+msagent-trajectory = "trajectory_extractor.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["trajectory_extractor"]

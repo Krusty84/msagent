@@ -69,7 +69,7 @@ class LLMConfig(VersionedConfig):
     temperature: float = Field(description="The temperature to use")
     streaming: bool = Field(default=True, description="Whether to stream the response")
     request_timeout_seconds: float = Field(
-        default=120.0,
+        default=300.0,
         description="LLM request timeout in seconds",
         gt=0,
     )

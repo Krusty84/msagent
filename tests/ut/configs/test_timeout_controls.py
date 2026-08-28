@@ -40,7 +40,7 @@ def test_default_timeout_settings_are_applied() -> None:
     )
     tools = ToolsConfig()
 
-    assert llm.request_timeout_seconds == 120
+    assert llm.request_timeout_seconds == 300
     assert tools.execution_timeout_seconds == 300
 
 

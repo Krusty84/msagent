@@ -93,3 +93,28 @@ def test_agent_config_migrate_to_2_4_rewrites_retry_shape() -> None:
     assert migrated["retry"]["tool"]["max_retries"] == 4
     assert migrated["retry"]["tool"]["initial_delay"] == 2.0
     assert migrated["retry"]["tool"]["max_delay"] == 25.0
+
+
+def test_model_retry_config_should_accept_retry_on_and_on_failure_when_provided() -> None:
+    retry = RetryPolicyConfig.model_validate(
+        {
+            "enabled": True,
+            "model": {
+                "enabled": True,
+                "max_retries": 3,
+                "timeout": 200.0,
+                "retry_on": ["httpx.ReadTimeout", "httpx.ReadError"],
+                "on_failure": "continue",
+            },
+        }
+    )
+
+    assert retry.model.retry_on == ["httpx.ReadTimeout", "httpx.ReadError"]
+    assert retry.model.on_failure == "continue"
+
+
+def test_model_retry_config_should_default_retry_on_to_none_and_on_failure_to_error_when_missing() -> None:
+    retry = RetryPolicyConfig.model_validate({"enabled": True, "model": {}})
+
+    assert retry.model.retry_on is None
+    assert retry.model.on_failure == "error"

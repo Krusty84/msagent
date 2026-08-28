@@ -72,10 +72,13 @@ class SkillInstaller:
                 "The skill will still be installed."
             )
 
-        category = DEFAULT_SKILL_CATEGORY
+        category = self._infer_category(source_root)
         pattern = f"{category}:{name}"
         target_dir_name = self._build_target_dir_name(name)
-        target_root = self.skills_dir / target_dir_name
+        if category == DEFAULT_SKILL_CATEGORY:
+            target_root = self.skills_dir / target_dir_name
+        else:
+            target_root = self.skills_dir / category / target_dir_name
         target_skill_file = target_root / "SKILL.md"
 
         if target_root.exists():
@@ -87,7 +90,7 @@ class SkillInstaller:
         await asyncio.to_thread(shutil.copytree, source_root, target_root, ignore=COPY_IGNORE_PATTERNS)
 
         try:
-            installed_skills = await self.skill_factory.load_skills(target_root.parent)
+            installed_skills = await self.skill_factory.load_skills(self.skills_dir)
             installed = installed_skills.get(category, {}).get(name)
             if installed is None or installed.path.resolve() != target_skill_file.resolve():
                 raise SkillInstallError("Installed skill could not be loaded from the destination directory")
@@ -162,3 +165,11 @@ class SkillInstaller:
         if not SKILL_NAME_PATTERN.fullmatch(name):
             raise SkillInstallError("Skill name may only contain letters, numbers, '-' and '_'")
         return name
+
+    @staticmethod
+    def _infer_category(source_root: Path) -> str:
+        parent = source_root.parent
+        grandparent = parent.parent
+        if grandparent.name == "skills" and parent.name:
+            return parent.name
+        return DEFAULT_SKILL_CATEGORY

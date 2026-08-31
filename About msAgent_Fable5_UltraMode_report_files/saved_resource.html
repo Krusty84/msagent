@@ -1,0 +1,652 @@
+<!DOCTYPE html>
+<!-- saved from url=(0253)https://15f3efb5-8c05-414e-a909-caa23bbe6009.frame.claudeusercontent.com/_f/1788178803-0fa9/?__frame_t=oBycpQe_RVTPxPBNY1MKIt12.d901f624-1527-4e6c-a914-9bb2cf09ee86.35027eb0-df68-4e06-b785-ee1c9a604485.1788184091&__frame_v=manifest.155e997702a4b8fc.json -->
+<html><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8"><!-- frame-runtime --><!--<base href="/_f/1788178803-0fa9/">--><base href="."><script>window.__FRAME_PREAMBLE={"v":1,"capabilities":{"artifact":"artifact.D_F1mx8d.js","assets":"assets.8Gk803W0.js","comments":"comments.GLuHR3zP.js","db":"db.h-3sndFg.js","downloads":"downloads.C3GSvEDP.js","embed":"embed.CxGAyc-v.js","mcp":"mcp.Bvma3qD7.js","network":"network.B5UA9Su4.js","notifications":"notifications.ssU4jy7G.js","permissions":"permissions.BNySkLV5.js","room":"room.BMMoe2BY.js","sample":"sample.BW2Uysoh.js","self":"artifact.D_F1mx8d.js","user":"user.BpKav-Rf.js"},"transforms":"_transforms.DSB5x63f.js","comments":"_comments.BoakUwmM.js","translate":"_translate.5HCW4BJh.js"}</script><script>(function(){"use strict";var te=["light","dark","system"],re=/^[A-Za-z0-9_-]{1,64}$/,$=/^[a-zA-Z_:][a-zA-Z0-9_:.-]{0,127}$/,ne=new Set(["class","hidden","value","checked","style","title","alt","placeholder","lang","dir","role","tabindex","disabled","readonly","contenteditable","open","colspan","rowspan"]);function oe(e){const t=e.toLowerCase();return t.startsWith("data-")||t.startsWith("aria-")||ne.has(t)}var Be="http://www.w3.org/1999/xhtml",se="http://www.w3.org/2000/svg",ae=new Set(["script","style","iframe","noscript","noframes","noembed","xmp","plaintext","template","title","textarea","object","embed"]),ie=new Set(["script","style"]);function ce(e){const t=e.localName.toLowerCase();return e.namespaceURI==="http://www.w3.org/1999/xhtml"?!ae.has(t):e.namespaceURI===se?!ie.has(t):!1}function M(e,t){return e===t||(e===160||e===32)&&(t===160||t===32)}function le(e,t){const r=e.length,n=t.length;let s=0;for(;s<r&&s<n&&M(e.charCodeAt(s),t.charCodeAt(s));)s++;let o=0;for(;o<r-s&&o<n-s&&M(e.charCodeAt(r-1-o),t.charCodeAt(n-1-o));)o++;return{p:s,s:o}}function ue(e,t){const r=e.firstChild;if(e.childNodes.length!==1||r===null||r.nodeType!==Node.TEXT_NODE){e.textContent=t;return}const n=r.data,s=n.length,o=t.length,{p:i,s:c}=le(n,t);i===s&&c===0&&s===o||r.replaceData(i,s-i-c,t.slice(i,o-c));const h=r.data,p=e.ownerDocument.getSelection?.()??null,w=p!==null&&p.rangeCount>0&&(p.anchorNode===r||p.focusNode===r)?{anchor:p.anchorNode,anchorOffset:p.anchorOffset,focus:p.focusNode,focusOffset:p.focusOffset}:null;let m=-1,g=-1;for(let f=0;f<h.length&&f<t.length;f++){const v=h.charCodeAt(f),b=t.charCodeAt(f);v!==b&&M(v,b)&&(m<0&&(m=f),g=f)}const a=m>=0;if(a&&r.replaceData(m,g-m+1,t.slice(m,g+1)),a&&w!==null&&w.anchor!==null&&w.focus!==null)try{p.setBaseAndExtent(w.anchor,w.anchorOffset,w.focus,w.focusOffset)}catch{}}var fe=new Set(["html","head","body","frameset"]);function de(e){return e.namespaceURI==="http://www.w3.org/1999/xhtml"&&fe.has(e.localName)}function pe(e){if(e===null||typeof e!="object")return!1;const t=e;if(typeof t.target!="string"||!re.test(t.target)||t.text!==void 0&&typeof t.text!="string")return!1;if(t.attrsSet!==void 0){if(t.attrsSet===null||typeof t.attrsSet!="object")return!1;for(const[r,n]of Object.entries(t.attrsSet))if(!$.test(r)||typeof n!="string")return!1}if(t.attrsRemoved!==void 0){if(!Array.isArray(t.attrsRemoved))return!1;for(const r of t.attrsRemoved)if(typeof r!="string"||!$.test(r))return!1}return!0}function me(e,t){if(e===null||typeof e!="object")return!1;const{seq:r,elements:n}=e;if(typeof r!="number"||!Number.isSafeInteger(r)||!Array.isArray(n)||n.length===0||n.length>64)return!1;for(let s=0;s<n.length;s++)if(!t(n[s]))return!1;return!0}function he(e){return e===null||typeof e!="object"?!1:me(e.__frame_patch,pe)}function _e(e){if(e===null||typeof e!="object")return!1;const t=e.__frame_init;return t!==null&&typeof t=="object"}function ve(e){return e!==null&&typeof e=="object"&&e.__frame_size_poke===!0}function ye(e){if(e===null||typeof e!="object")return!1;const t=e.__frame_theme;if(t===null||typeof t!="object")return!1;const r=t.theme;return typeof r=="string"&&te.includes(r)}var A=/^[\w.-]+\.js$/;function we(e,t,r){return r?"inert":typeof t=="string"&&A.test(t)?e?[t]:"inert":e?"inert":"framed"}function ge(){return{post(e,t){parent.postMessage(e,t)},on(e){const t=r=>{r.source===parent&&e(r.data,r.origin,r.isTrusted)};return addEventListener("message",t),()=>removeEventListener("message",t)}}}function be(){return{post:()=>{},on:()=>()=>{}}}var j="__frame_scroll",Ee=150,Ae=310,Se=160,Te=3e4;function ke(){let e=0,t=!1,r=!1,n=!1,s=0,o=null;const i=l=>{try{sessionStorage.setItem(j,JSON.stringify({y:l}))}catch{}},c=()=>{if(clearTimeout(e),o===null)return;const l=o;o=null,i(l)},h=()=>{if(t){t=!1;return}r=!0,o=scrollY,clearTimeout(e),e=setTimeout(c,Ee)};try{addEventListener("scroll",h,{passive:!0}),addEventListener("pagehide",c)}catch{}const p=()=>{let l;try{l=sessionStorage.getItem(j)}catch{return null}if(l===null)return null;let _;try{_=JSON.parse(l)}catch{_=null}const d=_?.y;if(!(typeof d=="number"&&Number.isFinite(d)&&d>=0)){try{sessionStorage.removeItem(j)}catch{}return null}return d};let w=!1;const m=l=>{try{const _=scrollY;scrollTo({top:l,left:0,behavior:"instant"}),s=l,n=!0,clearTimeout(e),o=null,i(l);const d=scrollY;d!==_&&(t=!0),d!==l&&!w&&(w=!0,addEventListener("load",()=>{try{if(scrollY===d){const T=p();m(T!==null?T:s)}}catch{}},{once:!0}))}catch{}},g=()=>{try{return!!location.hash}catch{return!0}};let a=!1;const f=()=>{try{if(a||innerWidth>Ae||innerHeight>Se)return;a=!0;const l=Date.now(),_=()=>{try{removeEventListener("resize",_)}catch{}if(Date.now()-l>Te||r||g())return;const d=p();m(d!==null?d:s)};addEventListener("resize",_)}catch{}};let v=!1,b=!1;return{restore(){if(v||(v=!0,g()))return;const l=p();l!==null&&(m(l),f())},promoted(){if(b||(b=!0,g()))return;const l=p();l!==null?(m(l),f()):n&&m(s)}}}function Re(e,t,r,n){let s=null;try{s=window.trustedTypes?.createPolicy("frame-runtime",{createScriptURL:h=>h})??null}catch{}const o=window.Worker,i=o?.prototype,c=Object.freeze({Worker:o,workerOn:i?.addEventListener,workerPost:i?.postMessage,workerTerminate:i?.terminate,fetch:window.fetch.bind(window),preventDefault:Event.prototype.preventDefault,policy:s,origins:t});r(e).then(h=>h?.bootTopLevel?h.bootTopLevel(c,n):n.settle()).catch(()=>n.settle())}var De="modulepreload",Ie=function(e){return"/"+e},Ue={},Le=function(t,r,n){let s=Promise.resolve();function o(i){const c=new Event("vite:preloadError",{cancelable:!0});if(c.payload=i,window.dispatchEvent(c),!c.defaultPrevented)throw i}return s.then(i=>{for(const c of i||[])c.status==="rejected"&&o(c.reason);return t().catch(o)})},Oe=window===top,q=Object.getOwnPropertyDescriptor(window,"claude"),k=we(Oe,window.__FRAME_PREAMBLE?.topLevel,q?.writable===!1),N=typeof k=="object"&&k[0],y=N?be():ge();(function(){const e=Object.defineProperty,t=globalThis,r=["RTCPeerConnection","webkitRTCPeerConnection","RTCDataChannel","RTCIceCandidate","RTCSessionDescription","RTCRtpSender","RTCRtpReceiver"];let n=0;for(let s=0;s<r.length;s++){const o=r[s];try{e(t,o,{value:void 0,writable:!1,configurable:!1})}catch{try{delete t[o]}catch{}try{e(t,o,{value:void 0,writable:!1,configurable:!0})}catch{}}typeof t[o]=="function"&&n++}if(n&&k==="framed")try{y.post({__frame_rtc_lockdown_failed:n},"*")}catch{}})();var Pe=1e4,Y=Object.freeze([...window.__FRAME_PREAMBLE?.origins??["https://claude.ai","https://preview.claude.ai"]]);function X(e){for(const t of Y)if(t.endsWith(":*"))try{const r=new URL(e);if(`${r.protocol}//${r.hostname}:*`===t)return!0}catch{}else if(e===t)return!0;return!1}var R=Object.freeze({...window.__FRAME_PREAMBLE?.capabilities}),B=window.__FRAME_PREAMBLE?.transforms,D=window.__FRAME_PREAMBLE?.comments,I=window.__FRAME_PREAMBLE?.translate;function S(e){return Le(()=>import("/_runtime/"+e),void 0)}function G(e,t){return{contract:e.contract,changes:new Set(e.changes??[]),flags:new Set(e.flags??[]),capabilities:e.capabilities??{},capBudgets:e.capBudgets??{},transforms:new Map,shellOrigin:t,mount:x,hooks:O,pipe:()=>({wrap:(r,n)=>(...s)=>{try{return n(...s)}catch(o){return Promise.reject(o)}}})}}var L=null,E=null;function V(e,t,r){try{Object.defineProperty(e,t,{value:r,writable:!1,configurable:!1,enumerable:!0})}catch{try{Object.defineProperty(e,t,{value:r,writable:!1,configurable:!0,enumerable:!0})}catch{}}}var U=!1,O={editBefore:null,edit:null};function Ce(e,t,r=!1){const n=[];let s;if(r)try{O.editBefore?.(e)}catch{}for(const o of e.elements){const i=document.querySelector(`[data-id="${o.target}"]`);if(!i){s=o.target;break}if([...Object.keys(o.attrsSet??{}),...o.attrsRemoved??[]].some(c=>!oe(c))){s=o.target;break}if(o.text!==void 0&&(!ce(i)||de(i))){s=o.target;break}for(const[c,h]of Object.entries(o.attrsSet??{}))if(!J(i,c)){try{i.setAttribute(c,h)}catch{}Z(i,c,h)}for(const c of o.attrsRemoved??[])J(i,c)||(i.removeAttribute(c),Z(i,c,null));typeof o.text=="string"&&ue(i,o.text),n.push(o.target)}if(r)try{O.edit?.(e.seq,n,s)}catch{}if(s!==void 0){y.post({__frame_patch_miss:{seq:e.seq}},t);return}try{document.dispatchEvent(new CustomEvent("claude:edit",{detail:{seq:e.seq,targets:n}}))}catch{}}function Z(e,t,r){if(!(e instanceof HTMLInputElement))return;const n=t.toLowerCase();n==="checked"?e.checked=r!==null:n==="value"&&e.type!=="file"&&(e.value=r??"")}function J(e,t){const r=t.toLowerCase(),n=e;return r==="data-id"||(r==="value"||r==="checked")&&(n.__artifactSecret===!0||/^(password|hidden|file)$/.test(n.type??"")||/(^|\s)(cc-|one-time-code|current-password|new-password)/i.test(`${e.getAttribute("autocomplete")??""} ${n.autocomplete??""}`))}function Q(e){const t=document.documentElement;e==="light"||e==="dark"?(t.dataset.theme=e,t.style.colorScheme=e,U=!0):U&&(delete t.dataset.theme,t.style.colorScheme="",U=!1)}var P=new Map;function Me(){let e;const t={u:new Promise(r=>{e=r}),r:r=>{t.done=!0,e(r)},done:!1,nulled:!1};return t}function F(){for(const e of P.values())e.done||(e.nulled=!0,e.r(null))}var je=Object.freeze(Object.assign(Object.create(null),{call:Function.prototype.call,apply:Function.prototype.apply,bind:Function.prototype.bind})),x=(e,t)=>{const r=P.get(e);if(!r||r.done){r?.nulled&&E&&y.post({__frame_cap_telemetry:{kind:"cap-load-error",cap:e}},E);return}const n=typeof t=="function"?Object.setPrototypeOf(t,je):Object.assign(Object.create(null),t);typeof n.then=="function"&&delete n.then,r.r(Object.freeze(n))};function ee(){const e=q?.value??{};V(window,"claude",e);for(const t of Object.keys(R)){if(e[t]!==void 0){V(e,t,e[t]);continue}P.set(t,Me())}if(e.use===void 0){const t=r=>{if(typeof r!="string"||!Object.hasOwn(R,r))return Promise.resolve(null);const n=P.get(r);return n?n.u:Promise.resolve(e[r]??null)};try{Object.defineProperty(e,"use",{value:t,writable:!0,configurable:!0,enumerable:!1})}catch{}}}if(k==="framed"){const e=B&&A.test(B)?S(B).catch(()=>{}):Promise.resolve(void 0),t=a=>{if(a.type==="auxclick"&&a.button!==1)return;const f=a.target,v=f&&f.closest?f.closest("a[href],area[href]"):null;if(!v)return;const b=v.getAttribute("href");if(!b)return;let l;try{l=new URL(b,document.baseURI)}catch{return}if((l.protocol==="http:"||l.protocol==="https:")&&l.origin!==location.origin){a.preventDefault();const _=(v.getAttribute("target")??"").toLowerCase(),d=a.type==="auxclick"||a.metaKey||a.ctrlKey||a.shiftKey||a.altKey||!["","_self","_top","_parent"].includes(_);y.post({__frame_nav:!0,url:l.href,newTab:d},"*")}};addEventListener("click",t,!0),addEventListener("auxclick",t,!0);const r={},n=a=>{a.isTrusted&&(r.pointer=!0)},s=a=>{a.isTrusted&&(r.click=!0)};addEventListener("pointermove",n,{capture:!0,passive:!0}),addEventListener("click",s,{capture:!0,passive:!0}),e.then(a=>{a?.wireNav&&(a.wireNav(),removeEventListener("click",t,!0),removeEventListener("auxclick",t,!0),removeEventListener("pointermove",n,!0),removeEventListener("click",s,!0),a.wireEngagement?.(r))});let o=null;try{o=ke()}catch{}ee();let i=null,c=null,h=0;const p=y.on((a,f)=>{X(f)&&_e(a)&&(i=a.__frame_init,E=f,p(),clearTimeout(h),c?.())});y.post({__frame_connect:!0},"*");const w=new Promise(a=>{c=a,h=setTimeout(()=>{p(),a()},Pe)}),m=document.readyState==="loading"?new Promise(a=>document.addEventListener("DOMContentLoaded",()=>a(),{once:!0})):Promise.resolve();m.then(()=>{try{o?.restore()}catch{}});const g={cb:null};y.on((a,f)=>{if(X(f)&&ve(a)){try{o?.promoted()}catch{}g.cb?.()}}),w.then(async()=>{if(!i||!E){F();return}Q(i.theme);const a=E;let f=!1,v=!1;y.on((u,z,C)=>{if(z!==a)return;ye(u)&&Q(u.__frame_theme.theme),he(u)&&Ce(u.__frame_patch,a,C);const H=u?.__fc_mode;H&&typeof H=="object"&&!f&&D&&A.test(D)&&(f=!0,S(D).then(K=>K.install?.(a,H.on===!0)).catch(()=>{}));const W=u?.__ft_cmd;W&&typeof W=="object"&&!v&&I&&A.test(I)&&(v=!0,S(I).then(K=>K.install?.(a,W)).catch(()=>{}))});const b=Object.keys(i.capabilities??{}).filter(u=>Object.hasOwn(R,u)).map(u=>[u,R[u]]).filter(u=>typeof u[1]=="string"&&A.test(u[1])),l=await Promise.allSettled(b.map(([,u])=>S(u))),_=await e,d=E;if(_?.buildBoot||y.post({__frame_cap_telemetry:{kind:"cap-load-error",cap:"_transforms"}},d),_?.buildBoot)try{L=_.buildBoot(i,_.TRANSFORMS??{},{shellOrigin:d,mount:x,hooks:O},u=>y.post({__frame_cap_telemetry:u},d))}catch{y.post({__frame_cap_telemetry:{kind:"cap-load-error",cap:"_transforms"}},d),L=G(i,d)}else L=G(i,d);const T=u=>y.post({__frame_cap_telemetry:{kind:"cap-load-error",cap:u}},d),Ne=L;l.forEach((u,z)=>{const C=b[z][0];if(u.status!=="fulfilled"){T(C);return}try{u.value?.install?.(Ne)}catch{T(C)}}),F(),await m,y.post({__frame_ready:!0},E),e.then(u=>u?.installSizeReporter?.(d,g))})}else N&&(ee(),Re(N,Y,S,{settle:F,mount:x}))})();</script><!-- /frame-runtime --><meta name="viewport" content="width=device-width,initial-scale=1"><style>:root{color-scheme:light}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#faf9f5;color:#141413}img{max-width:100%}</style></head><body>
+<title>Архитектура msagent</title>
+<link rel="preconnect" href="https://fonts.googleapis.com/">
+<link rel="stylesheet" href="./css2">
+<style>
+  :root {
+    --bg: #F7F8FC;
+    --surface: #FFFFFF;
+    --surface-2: #EEF1F8;
+    --ink: #24283B;
+    --muted: #5A607D;
+    --accent: #2E4FBF;
+    --accent-soft: rgba(46, 79, 191, 0.10);
+    --accent-2: #0F7B78;
+    --line: #D9DEEC;
+    --line-strong: #B9C2DA;
+    --code-bg: #EEF1F8;
+    --warn: #8A5A00;
+    --warn-bg: rgba(196, 138, 22, 0.10);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #16161E;
+      --surface: #1B1E2B;
+      --surface-2: #232739;
+      --ink: #C4CDF0;
+      --muted: #7982A9;
+      --accent: #7AA2F7;
+      --accent-soft: rgba(122, 162, 247, 0.12);
+      --accent-2: #73DACA;
+      --line: #2C3149;
+      --line-strong: #3B4261;
+      --code-bg: #1F2335;
+      --warn: #E0AF68;
+      --warn-bg: rgba(224, 175, 104, 0.10);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #16161E;
+    --surface: #1B1E2B;
+    --surface-2: #232739;
+    --ink: #C4CDF0;
+    --muted: #7982A9;
+    --accent: #7AA2F7;
+    --accent-soft: rgba(122, 162, 247, 0.12);
+    --accent-2: #73DACA;
+    --line: #2C3149;
+    --line-strong: #3B4261;
+    --code-bg: #1F2335;
+    --warn: #E0AF68;
+    --warn-bg: rgba(224, 175, 104, 0.10);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+    font-size: 16px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+  .shell {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 48px 24px 96px;
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 40px;
+  }
+  @media (min-width: 1100px) {
+    .shell { grid-template-columns: 240px minmax(0, 1fr); }
+  }
+
+  /* ---------- TOC ---------- */
+  nav.toc {
+    display: none;
+  }
+  @media (min-width: 1100px) {
+    nav.toc {
+      display: block;
+      position: sticky;
+      top: 32px;
+      align-self: start;
+      font-size: 13.5px;
+      border-right: 1px solid var(--line);
+      padding-right: 20px;
+    }
+  }
+  nav.toc .toc-label {
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 12px;
+  }
+  nav.toc a {
+    display: flex;
+    gap: 10px;
+    color: var(--muted);
+    text-decoration: none;
+    padding: 5px 0;
+    line-height: 1.4;
+  }
+  nav.toc a:hover, nav.toc a:focus-visible { color: var(--accent); }
+  nav.toc a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+  nav.toc .n {
+    font-family: "IBM Plex Mono", monospace;
+    color: var(--accent);
+    flex: none;
+    width: 1.4em;
+  }
+
+  main { min-width: 0; }
+
+  /* ---------- Header ---------- */
+  header.doc {
+    border-bottom: 2px solid var(--ink);
+    padding-bottom: 28px;
+    margin-bottom: 40px;
+  }
+  .doc-kicker {
+    font-size: 12px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--accent);
+    font-weight: 600;
+    margin-bottom: 14px;
+  }
+  h1 {
+    font-family: "IBM Plex Serif", Georgia, serif;
+    font-size: clamp(30px, 4.5vw, 44px);
+    font-weight: 700;
+    line-height: 1.15;
+    margin: 0 0 10px;
+    text-wrap: balance;
+  }
+  .doc-sub {
+    font-size: 17px;
+    color: var(--muted);
+    max-width: 66ch;
+    margin: 0 0 22px;
+  }
+  .meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 10px;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 12.5px;
+  }
+  .meta span {
+    border: 1px solid var(--line);
+    background: var(--surface);
+    border-radius: 4px;
+    padding: 3px 10px;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+  .meta span b { color: var(--ink); font-weight: 500; }
+
+  /* ---------- Sections ---------- */
+  section { margin-bottom: 56px; }
+  h2 {
+    font-family: "IBM Plex Serif", Georgia, serif;
+    font-size: 26px;
+    font-weight: 600;
+    line-height: 1.25;
+    margin: 0 0 6px;
+    padding-top: 8px;
+    display: flex;
+    gap: 14px;
+    align-items: baseline;
+    text-wrap: balance;
+    border-top: 1px solid var(--line-strong);
+  }
+  h2 .num {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 17px;
+    color: var(--accent);
+    font-weight: 500;
+    flex: none;
+  }
+  .h2-note { color: var(--muted); font-size: 15px; margin: 0 0 20px; }
+  h3 {
+    font-family: "IBM Plex Serif", Georgia, serif;
+    font-size: 19px;
+    font-weight: 600;
+    margin: 30px 0 8px;
+    text-wrap: balance;
+  }
+  h4 {
+    font-size: 15px;
+    font-weight: 600;
+    margin: 22px 0 6px;
+    letter-spacing: 0.01em;
+  }
+  p { max-width: 76ch; margin: 0 0 14px; }
+  ul, ol { max-width: 76ch; padding-left: 24px; margin: 0 0 14px; }
+  li { margin-bottom: 6px; }
+  li::marker { color: var(--accent); }
+  strong { font-weight: 600; }
+  a { color: var(--accent); }
+  a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+
+  code {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 0.87em;
+    background: var(--code-bg);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 1px 5px;
+    white-space: nowrap;
+  }
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 14px 18px;
+    overflow-x: auto;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 13px;
+    line-height: 1.55;
+    margin: 0 0 16px;
+  }
+  pre code { background: none; border: none; padding: 0; white-space: pre; }
+
+  /* ---------- Tables ---------- */
+  .tbl-wrap { overflow-x: auto; margin: 0 0 18px; border: 1px solid var(--line); border-radius: 6px; }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: 14px;
+    background: var(--surface);
+  }
+  th, td {
+    text-align: left;
+    padding: 9px 14px;
+    border-bottom: 1px solid var(--line);
+    vertical-align: top;
+  }
+  th {
+    font-size: 11.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--muted);
+    font-weight: 600;
+    background: var(--surface-2);
+    white-space: nowrap;
+  }
+  tr:last-child td { border-bottom: none; }
+  td code { white-space: nowrap; }
+  td { font-variant-numeric: tabular-nums; }
+
+  /* ---------- Layer diagram ---------- */
+  .layers { display: flex; flex-direction: column; gap: 0; margin: 22px 0 24px; max-width: 860px; }
+  .layer {
+    border: 1px solid var(--line-strong);
+    background: var(--surface);
+    border-radius: 6px;
+    padding: 14px 18px;
+    display: grid;
+    grid-template-columns: 168px 1fr;
+    gap: 8px 18px;
+    align-items: start;
+  }
+  @media (max-width: 640px) { .layer { grid-template-columns: 1fr; } }
+  .layer + .layer-arrow + .layer { margin-top: 0; }
+  .layer-arrow {
+    text-align: center;
+    color: var(--muted);
+    font-size: 15px;
+    line-height: 1;
+    padding: 5px 0;
+  }
+  .layer .lt {
+    font-weight: 600;
+    font-size: 14px;
+  }
+  .layer .lt small { display: block; font-weight: 400; color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 12px;
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 2px 8px;
+    color: var(--ink);
+    white-space: nowrap;
+  }
+  .chip.acc { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+
+  /* ---------- Flow (numbered rail) ---------- */
+  .flow { list-style: none; padding: 0; margin: 22px 0 24px; max-width: 860px; counter-reset: step; }
+  .flow > li {
+    counter-increment: step;
+    position: relative;
+    padding: 0 0 22px 56px;
+    margin: 0;
+  }
+  .flow > li::before {
+    content: counter(step);
+    position: absolute;
+    left: 0; top: 0;
+    width: 34px; height: 34px;
+    border-radius: 50%;
+    border: 1.5px solid var(--accent);
+    color: var(--accent);
+    background: var(--surface);
+    display: grid;
+    place-items: center;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 14px;
+    font-weight: 500;
+  }
+  .flow > li:not(:last-child)::after {
+    content: "";
+    position: absolute;
+    left: 17px; top: 38px; bottom: 2px;
+    width: 1.5px;
+    background: var(--line-strong);
+  }
+  .flow .ft { font-weight: 600; margin-bottom: 3px; }
+  .flow .ft code { font-weight: 500; }
+  .flow .fd { color: var(--muted); font-size: 14.5px; max-width: 72ch; }
+  .flow .fd code { font-size: 0.85em; }
+
+  /* ---------- Callouts ---------- */
+  .note {
+    border-left: 3px solid var(--accent);
+    background: var(--accent-soft);
+    border-radius: 0 6px 6px 0;
+    padding: 12px 18px;
+    margin: 0 0 18px;
+    max-width: 78ch;
+    font-size: 14.5px;
+  }
+  .note.warn { border-left-color: var(--warn); background: var(--warn-bg); }
+  .note p:last-child { margin-bottom: 0; }
+  .note .nl {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    font-weight: 600;
+    color: var(--accent);
+    margin-bottom: 4px;
+  }
+  .note.warn .nl { color: var(--warn); }
+
+  footer {
+    border-top: 1px solid var(--line);
+    margin-top: 64px;
+    padding-top: 18px;
+    color: var(--muted);
+    font-size: 13px;
+    max-width: 76ch;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+</style>
+
+<div class="shell">
+<nav class="toc" aria-label="Оглавление">
+  <div class="toc-label">Содержание</div>
+  <a href="https://15f3efb5-8c05-414e-a909-caa23bbe6009.frame.claudeusercontent.com/_f/1788178803-0fa9/#s1"><span class="n">1</span> Общая реализация</a>
+  <a href="https://15f3efb5-8c05-414e-a909-caa23bbe6009.frame.claudeusercontent.com/_f/1788178803-0fa9/#s2"><span class="n">2</span> Точки входа</a>
+  <a href="https://15f3efb5-8c05-414e-a909-caa23bbe6009.frame.claudeusercontent.com/_f/1788178803-0fa9/#s3"><span class="n">3</span> Жизненный цикл запроса</a>
+  <a href="https://15f3efb5-8c05-414e-a909-caa23bbe6009.frame.claudeusercontent.com/_f/1788178803-0fa9/#s4"><span class="n">4</span> Взаимодействие с LLM</a>
+  <a href="https://15f3efb5-8c05-414e-a909-caa23bbe6009.frame.claudeusercontent.com/_f/1788178803-0fa9/#s5"><span class="n">5</span> Точки расширения</a>
+  <a href="https://15f3efb5-8c05-414e-a909-caa23bbe6009.frame.claudeusercontent.com/_f/1788178803-0fa9/#s6"><span class="n">6</span> Дополнительные наблюдения</a>
+</nav>
+
+<main>
+<header class="doc">
+  <div class="doc-kicker">Аналитический отчёт по кодовой базе</div>
+  <h1>Архитектура msagent</h1>
+  <p class="doc-sub">MindStudio Agent — CLI-платформа доменных AI-агентов для отладки и оптимизации на Ascend NPU. Отчёт описывает реализацию, жизненный цикл запроса, точки входа, взаимодействие с LLM и механизмы расширения.</p>
+  <div class="meta">
+    <span>версия <b>26.1.0-alpha.2</b></span>
+    <span>ветка <b>master @ d20e22c</b></span>
+    <span>Python <b>≥ 3.11</b></span>
+    <span>deepagents <b>0.6.12</b></span>
+    <span>langchain <b>1.3.x</b> · langgraph <b>1.2.x</b></span>
+    <span>дата анализа <b>2026-08-31</b></span>
+  </div>
+</header>
+
+<!-- ============================================================ 1 -->
+<section id="s1">
+  <h2><span class="num">1</span> Общая реализация</h2>
+  <p class="h2-note">Технологическая основа, слои системы и распределение ответственности по модулям.</p>
+
+  <p><strong>msagent</strong> представляет собой тонкую специализированную обвязку над стеком LangChain: ядро агентного цикла (вызов LLM → вызовы инструментов → повтор) не реализовано в проекте самостоятельно, а предоставляется библиотекой <strong>deepagents</strong>, которая компилирует агент в граф <strong>LangGraph</strong> (<code>CompiledStateGraph</code>). Проект добавляет к этому ядру: декларативную конфигурационную систему (Pydantic + YAML/JSON с версионированием и миграциями), фабрики сборки (LLM, инструменты, скиллы, MCP, агенты), собственные middleware, интерактивный CLI (prompt-toolkit + rich), персистентность состояния (SQLite-чекпоинты), управление контекстным окном (суммаризация с выгрузкой) и аудит.</p>
+
+  <div class="layers" role="img" aria-label="Слои системы msagent">
+    <div class="layer">
+      <div class="lt">Интерфейсный слой<small>src/msagent/cli</small></div>
+      <div class="chips">
+        <span class="chip">bootstrap/app.py · legacy.py</span>
+        <span class="chip">core/session.py</span>
+        <span class="chip">dispatchers (messages, commands)</span>
+        <span class="chip">handlers (interrupts, skills, …)</span>
+        <span class="chip">ui / theme / completers</span>
+      </div>
+    </div>
+    <div class="layer-arrow" aria-hidden="true">▼</div>
+    <div class="layer">
+      <div class="lt">Слой сборки<small>Initializer + фабрики</small></div>
+      <div class="chips">
+        <span class="chip acc">Initializer.create_graph()</span>
+        <span class="chip">ConfigRegistry</span>
+        <span class="chip">AgentFactory</span>
+        <span class="chip">LLMFactory</span>
+        <span class="chip">MCPFactory</span>
+        <span class="chip">SkillFactory</span>
+        <span class="chip">ToolFactory</span>
+      </div>
+    </div>
+    <div class="layer-arrow" aria-hidden="true">▼</div>
+    <div class="layer">
+      <div class="lt">Агентное ядро<small>deepagents / langchain / langgraph</small></div>
+      <div class="chips">
+        <span class="chip acc">create_deep_agent → CompiledStateGraph</span>
+        <span class="chip">FilesystemMiddleware</span>
+        <span class="chip">SubAgentMiddleware (task)</span>
+        <span class="chip">HumanInTheLoopMiddleware</span>
+        <span class="chip">SummarizationMiddleware</span>
+        <span class="chip">msagent-middleware</span>
+      </div>
+    </div>
+    <div class="layer-arrow" aria-hidden="true">▼</div>
+    <div class="layer">
+      <div class="lt">Инфраструктура<small>состояние и внешние системы</small></div>
+      <div class="chips">
+        <span class="chip">LocalShellBackend / CompositeBackend</span>
+        <span class="chip">AsyncSqliteSaver (чекпоинты)</span>
+        <span class="chip">MCP-серверы (msprof-mcp, …)</span>
+        <span class="chip">~/.msagent (конфигурация, состояние)</span>
+        <span class="chip">AuditWriter (JSONL)</span>
+      </div>
+    </div>
+  </div>
+
+  <h3>1.1 Распределение ответственности</h3>
+  <div class="tbl-wrap"><table>
+    <tbody><tr><th>Модуль</th><th>Назначение</th><th>Ключевые единицы</th></tr>
+    <tr><td><code>cli/</code></td><td>Интерактивная сессия, маршрутизация ввода, потоковый рендеринг, HITL-диалоги</td><td><code>Session</code>, <code>MessageDispatcher</code>, <code>CommandDispatcher</code>, <code>InterruptHandler</code></td></tr>
+    <tr><td><code>agents/</code></td><td>Сборка графа deepagents, runtime-контекст, локальный снимок окружения</td><td><code>AgentFactory.create</code>, <code>AgentContext</code>, <code>build_local_environment_context</code></td></tr>
+    <tr><td><code>configs/</code></td><td>Схемы конфигурации, наложение «дефолты + пользовательские переопределения», миграции версий</td><td><code>ConfigRegistry</code>, <code>AgentConfig</code>, <code>LLMConfig</code>, <code>ToolApprovalConfig</code></td></tr>
+    <tr><td><code>llms/</code></td><td>Создание клиентов чат-моделей через <code>init_chat_model</code></td><td><code>LLMFactory.create</code></td></tr>
+    <tr><td><code>tools/</code></td><td>Каталожные инструменты, обёртка таймаутов, встроенный web-поиск</td><td><code>fetch_tools/get_tool/run_tool</code>, <code>ToolFactory</code>, <code>web_search</code></td></tr>
+    <tr><td><code>skills/</code></td><td>Загрузка метаданных SKILL.md из трёх каталогов, установка скиллов</td><td><code>SkillFactory</code>, <code>Skill</code></td></tr>
+    <tr><td><code>mcp/</code></td><td>Подключение MCP-серверов через langchain-mcp-adapters</td><td><code>MCPClient</code>, <code>MCPFactory</code></td></tr>
+    <tr><td><code>middlewares/</code></td><td>Собственные middleware поверх реэкспорта deepagents</td><td><code>ToolResultEvictionMiddleware</code></td></tr>
+    <tr><td><code>audit/</code></td><td>Журнал событий сессии и делегирований сабагентам, типизированный IO-протокол</td><td><code>AuditWriter</code>, <code>SubagentAuditTracker</code>, <code>protocol.py</code></td></tr>
+    <tr><td><code>core/</code></td><td>Пути (<code>~/.msagent</code>), константы, логирование, настройки</td><td><code>AppPaths</code>, <code>ProjectPaths</code></td></tr>
+    <tr><td><code>utils/</code></td><td>Сжатие/выгрузка контекста, рендер шаблонов, патчи совместимости</td><td><code>perform_conversation_offload</code>, <code>deepagents_compat</code></td></tr>
+    <tr><td><code>resources/configs/default/</code></td><td>Пакетируемые декларативные определения агентов, промптов, LLM, MCP</td><td>6 агентов, 8 сабагентов, промпты, sandbox-профили</td></tr>
+    <tr><td><code>skills/ (корень)</code></td><td>Дистрибутив доменных скиллов (73+ SKILL.md по категориям)</td><td>profiler, accuracy, modeling, operator, minos, …</td></tr>
+  </tbody></table></div>
+
+  <h3>1.2 Определяющее проектное решение</h3>
+  <p>Доменные агенты (Profiler, Accuracy, Quantizer, Modeling, Operator, Minos) <strong>не имеют программного кода</strong> — каждый является YAML-файлом с набором Markdown-промптов. Различия между агентами исчерпываются: системным промптом, фильтрами инструментов (<code>tools.patterns</code>), фильтрами скиллов (<code>skills.patterns</code>), перечнем сабагентов и политиками (сжатие, ретраи, чекпоинтер). Экспертиза домена вынесена в промпты и скиллы; код остаётся универсальным.</p>
+</section>
+
+<!-- ============================================================ 2 -->
+<section id="s2">
+  <h2><span class="num">2</span> Точки входа</h2>
+  <p class="h2-note">Все способы запуска исполняемого кода системы.</p>
+
+  <div class="tbl-wrap"><table>
+    <tbody><tr><th>Точка входа</th><th>Расположение</th><th>Назначение</th></tr>
+    <tr><td><code>msagent</code> (console script)</td><td><code>pyproject.toml → msagent.cli.bootstrap.app:cli</code></td><td>Основной вход установленного пакета</td></tr>
+    <tr><td><code>run.py</code></td><td>корень репозитория</td><td>Запуск из исходников: добавляет <code>src</code> в <code>sys.path</code>, вызывает тот же <code>cli()</code></td></tr>
+    <tr><td>Интерактивный режим</td><td><code>msagent [--agent … --model …]</code></td><td><code>Session.start()</code> — основной цикл ввода</td></tr>
+    <tr><td>One-shot режим</td><td><code>msagent "текст запроса"</code></td><td><code>Session.send()</code> — одно сообщение, выход</td></tr>
+    <tr><td>Подкоманда <code>config</code></td><td><code>msagent config [--show | --llm-*]</code></td><td>Просмотр/запись LLM-конфигурации без запуска сессии</td></tr>
+    <tr><td>Программный вход</td><td><code>Initializer.create_graph()</code> / <code>AgentFactory.create()</code></td><td>Получение готового <code>CompiledStateGraph</code> для встраивания</td></tr>
+    <tr><td>Тестовый контур</td><td><code>MSAGENT_FAKE_BACKEND=1</code></td><td>Подмена графа на <code>FakeGraph</code> без сети и LLM</td></tr>
+  </tbody></table></div>
+
+  <p>Диспетчеризация в <code>app.py</code> устроена так: <code>cli() → asyncio.run(main())</code>; функция <code>normalize_argv</code> направляет любой ввод, не являющийся <code>config</code>/<code>--help</code>/<code>--version</code>, во внутреннюю команду <code>__session__</code>. Далее <code>dispatch_legacy_command → handle_chat_command</code> создаёт <code>Context</code> (агент → модель → thread_id → лимиты) и объект <code>Session</code>. Флаги: <code>--agent</code>, <code>--model</code>, <code>--working-dir</code>, <code>--approval-mode</code>, <code>--stream/--no-stream</code>, <code>--trace-jsonl</code>, <code>--timer</code>, <code>--verbose</code>.</p>
+</section>
+
+<!-- ============================================================ 3 -->
+<section id="s3">
+  <h2><span class="num">3</span> Жизненный цикл запроса</h2>
+  <p class="h2-note">От нажатия Enter до ответа: две фазы — однократная сборка графа и обработка каждого сообщения.</p>
+
+  <h3>3.1 Фаза A — сборка графа (при старте сессии)</h3>
+  <ol class="flow">
+    <li><div class="ft"><code>Session.start()</code> → <code>initializer.get_graph()</code></div>
+      <div class="fd">Контекстный менеджер над <code>Initializer.create_graph(agent, model, working_dir)</code>; по завершении закрывает MCP-клиент и чекпоинтер.</div></li>
+    <li><div class="ft">Загрузка конфигурации — <code>ConfigRegistry</code></div>
+      <div class="fd">Параллельно (<code>asyncio.gather</code>) читаются агент, LLM и MCP. Каждый вид конфигурации — наложение: пакетные дефолты из wheel (<code>resources/configs/default</code>) + пользовательские переопределения из <code>~/.msagent/config</code> с пофайловой миграцией версий и field-level overlay по <code>model_fields_set</code>.</div></li>
+    <li><div class="ft">Политика одобрений → <code>interrupt_on</code></div>
+      <div class="fd"><code>config.approval.json</code> преобразуется в payload для <code>HumanInTheLoopMiddleware</code>; по умолчанию прерывание объявлено только для инструмента <code>execute</code>.</div></li>
+    <li><div class="ft">Чекпоинтер</div>
+      <div class="fd"><code>AsyncSqliteSaver</code> над <code>~/.msagent/state/projects/&lt;id&gt;/checkpoints.sqlite</code> (либо <code>InMemorySaver</code>).</div></li>
+    <li><div class="ft">MCP-клиент</div>
+      <div class="fd"><code>MCPClient.tools()</code> строит подключения (stdio/sse/http/websocket) и грузит инструменты через <code>MultiServerMCPClient</code> с префиксацией имён <code>&lt;server&gt;__&lt;tool&gt;</code>; применяются include/exclude и обёртка таймаута <code>invoke_timeout</code>.</div></li>
+    <li><div class="ft">Скиллы</div>
+      <div class="fd"><code>SkillFactory.load_skills</code> сканирует <code>SKILL.md</code> в <code>&lt;cwd&gt;/skills</code> → <code>~/.msagent/skills</code> → встроенный каталог (первый выигрывает), затем фильтр по <code>skills.patterns</code> агента (<code>категория:имя</code>, fnmatch, префикс <code>!</code> — исключение).</div></li>
+    <li><div class="ft"><code>AgentFactory.create()</code> → <code>create_deep_agent()</code></div>
+      <div class="fd">Монки-патчи промптов deepagents и Windows-путей; создание модели через <code>LLMFactory</code>; каталог runtime-инструментов + MCP-инструменты; фильтрация по <code>tools.patterns</code> (<code>категория:модуль:имя</code>); бекенд <code>LocalShellBackend</code>/<code>CompositeBackend</code>; middleware-стек; спецификации сабагентов; компиляция в <code>CompiledStateGraph</code>.</div></li>
+  </ol>
+
+  <h3>3.2 Фаза B — обработка каждого сообщения</h3>
+  <ol class="flow">
+    <li><div class="ft">Ввод — <code>InteractivePrompt.get_input()</code></div>
+      <div class="fd">prompt-toolkit: автодополнение, горячие клавиши (Shift+Tab — цикл режима одобрений, переключатель bash-режима), ссылки <code>@файл</code>/<code>@изображение</code>.</div></li>
+    <li><div class="ft">Маршрутизация в <code>Session._main_loop()</code></div>
+      <div class="fd">bash-режим → <code>BashDispatcher</code>; префикс <code>/</code> → <code>CommandDispatcher</code> (включая ярлыки скиллов <code>/&lt;имя-скилла&gt; задача</code>); иначе → <code>MessageDispatcher.dispatch()</code>.</div></li>
+    <li><div class="ft">Построение сообщения</div>
+      <div class="fd"><code>MessageContentBuilder.build()</code> разбирает ссылки <code>@:file:…</code>/<code>@:image:…</code>/упоминания, формирует мультимодальные content-блоки → <code>HumanMessage</code>. Отдельно собирается <code>AgentContext</code>: рабочая директория, платформа, дата, снимок окружения (git-ветка, языки, доступные утилиты), список MCP-серверов, память проекта, каталоги инструментов и скиллов.</div></li>
+    <li><div class="ft">Запуск графа</div>
+      <div class="fd"><code>graph.astream({"messages": [msg]}, RunnableConfig(thread_id, recursion_limit), context=AgentContext, stream_mode=["messages","updates"], subgraphs=True)</code>. Чекпоинтер восстанавливает историю треда по <code>thread_id</code>.</div></li>
+    <li><div class="ft">Агентный цикл внутри графа</div>
+      <div class="fd">Хуки <code>wrap_model_call</code> (подстановка шаблонных переменных в системный промпт, фильтрация инструментов, prompt-caching) → вызов LLM → при наличии <code>tool_calls</code> хуки <code>wrap_tool_call</code> (ретраи, вытеснение крупных результатов, HITL-перехват) → исполнение инструментов (ФС/шелл deepagents, каталожные, MCP, <code>task</code> для сабагентов) → <code>ToolMessage</code> → повтор до ответа без вызовов инструментов.</div></li>
+    <li><div class="ft">Потоковый рендеринг и HITL</div>
+      <div class="fd">Канал <code>messages</code> — токен-превью и индикаторы активных инструментов; канал <code>updates</code> — финальные сообщения (склейка чанков, отложенные заголовки инструментов, учёт токенов, аудит). Ключ <code>__interrupt__</code> → <code>InterruptHandler</code>: авторазрешение по <code>decision_rules</code> либо диалог approve/reject/always_*; ответ возвращается как <code>Command(resume={interrupt_id: …})</code>, и поток продолжается.</div></li>
+    <li><div class="ft">Завершение хода</div>
+      <div class="fd">Чекпоинт сохранён; счётчики токенов обновлены; при <code>input_tokens / context_window ≥ порога</code> выполняется авто-компакция: суммаризация старых сообщений вспомогательным LLM-вызовом и выгрузка оригиналов в <code>/conversation_history/&lt;thread&gt;.md</code>, затем <code>graph.aupdate_state(_summarization_event)</code>.</div></li>
+  </ol>
+</section>
+
+<!-- ============================================================ 4 -->
+<section id="s4">
+  <h2><span class="num">4</span> Взаимодействие с LLM</h2>
+  <p class="h2-note">Единственный канал — абстракции LangChain; прямых вызовов провайдерских SDK в проекте нет.</p>
+
+  <h3>4.1 Конфигурация и создание клиента</h3>
+  <p>Модель описывается <code>LLMConfig</code> (провайдер, модель, alias, <code>api_key_env</code>, <code>base_url</code>, лимиты, температура, таймаут, <code>context_window</code>, произвольные <code>params</code>). <code>LLMFactory.create()</code> нормализует провайдера (<code>openai | anthropic | google/gemini → google_genai</code>) и вызывает <code>init_chat_model("провайдер:модель", …)</code>. Ключ API разрешается по цепочке: <code>api_key_env</code> → стандартная переменная провайдера → <code>LLMSettings</code>.</p>
+
+  <h3>4.2 Особенности OpenAI-совместимого контура</h3>
+  <ul>
+    <li>Responses API включается только для хостов <code>*.openai.com</code>; произвольный <code>base_url</code> (DeepSeek, vLLM, локальные шлюзы) работает через Chat Completions;</li>
+    <li><code>stream_usage=true</code> — метрики токенов заполняются и в потоковом режиме;</li>
+    <li>патч <code>patch_chat_openai_reasoning_content_support</code> — поддержка поля <code>reasoning_content</code> «думающих» моделей;</li>
+    <li>при нестандартных <code>http2 / trust_env / verify</code> создаются явные клиенты <code>httpx.Client/AsyncClient</code>.</li>
+  </ul>
+
+  <h3>4.3 Надёжность и места вызова</h3>
+  <div class="tbl-wrap"><table>
+    <tbody><tr><th>Аспект</th><th>Механизм</th></tr>
+    <tr><td>Ретраи запросов к модели</td><td><code>retry.model.max_retries/timeout</code> → параметры <code>init_chat_model</code></td></tr>
+    <tr><td>Ретраи инструментов</td><td><code>retry.tool</code> → <code>ToolRetryMiddleware</code> (экспоненциальная задержка, jitter, фильтр классов исключений по именам)</td></tr>
+    <tr><td>Стриминг в CLI</td><td>LangGraph-канал <code>messages</code>; финальное сообщение — сложение <code>AIMessageChunk</code></td></tr>
+    <tr><td>Основной вызов</td><td>Внутри графа на каждом шаге агентного цикла; свой экземпляр модели у каждого сабагента (собственный <code>LLMConfig</code>)</td></tr>
+    <tr><td>Служебный вызов</td><td>Суммаризация при сжатии контекста — отдельная модель <code>compression.llm</code></td></tr>
+    <tr><td>Кэширование промпта</td><td><code>AnthropicPromptCachingMiddleware</code> (no-op для прочих провайдеров)</td></tr>
+  </tbody></table></div>
+
+  <h3>4.4 Сборка системного промпта</h3>
+  <p>Порядок: (1) конкатенация Markdown-файлов из поля <code>prompt</code> агента; (2) гарантированный блок <code>&lt;local-context&gt;</code>; (3) deepagents дописывает базовый промпт (заменён компактной версией через <code>patch_third_party_prompt_defaults</code>) и секции middleware — инструкции ФС, todo, task, отфильтрованный список скиллов, память; (4) на каждом вызове модели <code>_SystemMessageMiddleware</code> подставляет шаблонные переменные <code>{working_dir}</code>, <code>{platform}</code>, <code>{current_date_time_zoned}</code>, <code>{local_environment_context}</code>, <code>{mcp_servers}</code>, <code>{user_memory}</code> из <code>AgentContext.template_vars</code> (неизвестные плейсхолдеры сохраняются).</p>
+</section>
+
+<!-- ============================================================ 5 -->
+<section id="s5">
+  <h2><span class="num">5</span> Точки расширения</h2>
+  <p class="h2-note">Упорядочены по возрастанию инвазивности: от «без кода» к модификации исходников.</p>
+
+  <h3>5.1 Без изменения кода (конфигурация)</h3>
+  <div class="tbl-wrap"><table>
+    <tbody><tr><th>Механизм</th><th>Где</th><th>Содержание</th></tr>
+    <tr><td><strong>Новый агент</strong></td><td><code>agents/*.yml</code> + <code>prompts/agents/*.md</code> (в дистрибутиве или <code>~/.msagent/config</code>)</td><td>Имя, промпт, LLM-alias, чекпоинтер, сабагенты, <code>tools.patterns</code>, <code>skills.patterns</code>, сжатие, ретраи. Официальная процедура — <code>docs/zh/developer_guide/add-agent.md</code></td></tr>
+    <tr><td><strong>Сабагент</strong></td><td><code>subagents/*.yml</code></td><td>Собственный промпт, модель, фильтры инструментов; вызывается родителем через инструмент <code>task</code></td></tr>
+    <tr><td><strong>Модель / провайдер-совместимый шлюз</strong></td><td><code>config.llms.yml</code>, <code>llms/*.yml</code></td><td>Alias + <code>base_url</code> + <code>params</code>; выбор через <code>/model</code> или <code>--model</code></td></tr>
+    <tr><td><strong>MCP-сервер</strong> — основной канал новых инструментов</td><td><code>config.mcp.json</code></td><td>stdio/sse/http/websocket, include/exclude, <code>invoke_timeout</code>; далее открыть агенту паттерном <code>mcp:&lt;server&gt;:*</code></td></tr>
+    <tr><td><strong>Скилл</strong></td><td><code>&lt;cwd&gt;/skills</code>, <code>~/.msagent/skills</code>, <code>/add-skill</code></td><td><code>SKILL.md</code> с frontmatter <code>name/description</code>; автоматически доступен как slash-ярлык <code>/&lt;имя&gt; задача</code></td></tr>
+    <tr><td><strong>Политика одобрений</strong></td><td><code>config.approval.json</code></td><td><code>interrupt_on</code> (какие инструменты прерывать) + <code>decision_rules</code> (regex-правила по аргументам: ask / always_approve / always_reject)</td></tr>
+    <tr><td><strong>Промпт сжатия, память, ретраи</strong></td><td>YAML агента, <code>/remember</code></td><td>Настройка суммаризации, долговременная память проекта, политика повторов</td></tr>
+  </tbody></table></div>
+
+  <h3>5.2 Программные точки (модификация исходников)</h3>
+  <div class="tbl-wrap"><table>
+    <tbody><tr><th>Точка</th><th>Расположение</th><th>Порядок действий</th></tr>
+    <tr><td><strong>Встроенный инструмент</strong></td><td><code>agents/factory.py</code> (список <code>runtime_tools</code>)</td><td>Объявить <code>@tool</code> (langchain), добавить в список и в <code>ToolFactory._BUILTIN_TOOL_PREVIEWS</code>; открыть паттерном <code>impl:deepagents:&lt;имя&gt;</code></td></tr>
+    <tr><td><strong>Middleware</strong> — самая мощная точка</td><td><code>middlewares/</code> + подключение в <code>AgentFactory.create</code></td><td>Класс от <code>AgentMiddleware</code>; хуки <code>before_agent</code>, <code>wrap_model_call</code>, <code>wrap_tool_call</code>, <code>modify_request</code>. Четыре образца уже в проекте (<code>_SystemMessageMiddleware</code>, <code>_FilteredSkillsMiddleware</code>, <code>_ToolPatternFilterMiddleware</code>, <code>ToolResultEvictionMiddleware</code>)</td></tr>
+    <tr><td><strong>Slash-команда CLI</strong></td><td><code>cli/dispatchers/commands.py</code></td><td>Handler-класс в <code>cli/handlers/</code> + запись в <code>_register_commands()</code></td></tr>
+    <tr><td><strong>LLM-провайдер</strong></td><td><code>llms/factory.py</code></td><td>Расширить <code>_SUPPORTED_PROVIDER_MAP</code> и карты ключей/URL; добавить зависимость <code>langchain-*</code></td></tr>
+    <tr><td><strong>Бекенд чекпоинтов</strong></td><td><code>initializer._create_checkpointer</code>, <code>configs/checkpointer.py</code></td><td>Новый <code>CheckpointerProvider</code> + ветка создания (например, Postgres)</td></tr>
+    <tr><td><strong>Шаблонная переменная промпта</strong></td><td><code>agents/context.py</code></td><td>Поле в <code>AgentContext</code> + ключ в <code>template_vars</code>; сразу доступна во всех промптах</td></tr>
+    <tr><td><strong>Маршрут виртуальной ФС</strong></td><td><code>AgentFactory._build_agent_backend</code></td><td>Дополнительный префикс в <code>CompositeBackend.routes</code></td></tr>
+    <tr><td><strong>IO-протокол сабагентов</strong></td><td><code>audit/protocol.py</code></td><td>Валидаторы типизированных конвертов ввода/вывода для новых типов сабагентов</td></tr>
+  </tbody></table></div>
+
+  <div class="note">
+    <div class="nl">Синтаксис фильтров</div>
+    <p>Инструменты: <code>категория:модуль:имя</code> — категории <code>impl</code> (встроенные, модуль <code>deepagents</code>) и <code>mcp</code> (модуль — имя сервера); подстановка <code>*</code>, префикс <code>!</code> — исключение. Скиллы: <code>категория:имя</code>. Фильтр применяется дважды: при сборке списка и на каждом вызове модели (<code>_ToolPatternFilterMiddleware</code>) — поэтому ограничивает и инструменты, добавляемые middleware самого deepagents.</p>
+  </div>
+</section>
+
+<!-- ============================================================ 6 -->
+<section id="s6">
+  <h2><span class="num">6</span> Дополнительные наблюдения</h2>
+  <p class="h2-note">Сведения, существенные для планирования доработок.</p>
+
+  <h3>6.1 Конфигурационная система</h3>
+  <ul>
+    <li><strong>Двухуровневое наложение</strong>: дефолты читаются напрямую из wheel и не копируются; пользовательский файл может содержать только изменяемые поля — <code>_overlay_model</code> накладывает по <code>model_fields_set</code>, остальное наследуется. Обновления пакета не конфликтуют с пользовательскими правками.</li>
+    <li><strong>Версионирование</strong>: каждый конфиг несёт <code>version</code>; <code>VersionedConfig.migrate()</code> содержит пошаговые миграции, файлы перезаписываются атомарно.</li>
+    <li><strong>Изоляция проектов</strong>: состояние — в <code>~/.msagent/state/projects/&lt;slug&gt;-&lt;sha256[:12]&gt;/</code> (чекпоинты, память, история диалогов, аудит); рабочая директория кода не засоряется.</li>
+  </ul>
+
+  <h3>6.2 Управление контекстным окном</h3>
+  <ul>
+    <li><code>tools.output_max_tokens</code> — результат инструмента сверх лимита вытесняется в виртуальную ФС (<code>/large_tool_results/</code>), в контексте остаётся ссылка;</li>
+    <li>авто-компакция по порогу 0.8 и ручная <code>/offload</code>: суммаризация + выгрузка оригиналов в <code>/conversation_history/&lt;thread&gt;.md</code> с возможностью последующего чтения агентом;</li>
+    <li>каталожные инструменты <code>fetch_tools/get_tool/run_tool</code> позволяют держать в схеме LLM минимум инструментов, вызывая остальные по имени.</li>
+  </ul>
+
+  <h3>6.3 Зафиксированные несоответствия и риски</h3>
+  <div class="note warn">
+    <div class="nl">Требует внимания при доработке</div>
+    <ul>
+      <li><strong>Приватные API deepagents</strong>: оффлоад (<code>utils/offload.py</code>) вызывает <code>SummarizationMiddleware._acreate_summary</code>, <code>_filter_summary_messages</code> и др.; монки-патчи промптов и <code>validate_path</code> глобальны для процесса. Обновление deepagents/langchain — операция повышенного риска; фиксация версий в <code>pyproject.toml</code> обоснована.</li>
+      <li><strong>verify=False по умолчанию</strong> в <code>LLMConfig</code>: для OpenAI-совместимого контура всегда создаются httpx-клиенты с отключённой проверкой TLS-сертификата. Для публичных эндпоинтов рекомендуется явно устанавливать <code>verify: true</code>.</li>
+      <li><strong>Декларированные, но не задействованные элементы</strong>: <code>use_catalog</code> читается, но не используется фабрикой; <code>ApprovalMode</code> (semi-active/active/aggressive) влияет только на индикацию CLI — фактическое управление одобрениями выполняют <code>interrupt_on</code>/<code>decision_rules</code>; <code>middlewares/approval.py</code> — заглушка; <code>SandboxConfig</code> и профили <code>sandboxes/*.yml</code> загружаются, однако <code>sandbox_bindings</code> в фабриках отбрасываются (зарезервировано).</li>
+      <li><strong>Синглтоны и неявные контракты</strong>: модульный <code>initializer</code> с кэшами; служебные атрибуты <code>_llm_tools</code>, <code>_agent_backend</code> навешиваются на скомпилированный граф для интроспекции CLI.</li>
+    </ul>
+  </div>
+
+  <h3>6.4 Наблюдаемость и тестируемость</h3>
+  <ul>
+    <li><strong>Аудит</strong>: JSONL-события <code>user.turn</code>, <code>user.response</code>, делегирования сабагентам (с валидацией типизированных IO-конвертов) — включается <code>audit_log.enabled</code> в YAML агента;</li>
+    <li><strong>Трассировка</strong>: <code>--trace-jsonl</code> пишет полный протокол прогона (<code>CliRunRecorder</code>);</li>
+    <li><strong>Тестовые двойники</strong>: <code>FakeGraph</code> + <code>MSAGENT_FAKE_BACKEND=1</code> позволяют выполнять e2e-тесты CLI без LLM; каталог <code>tests/</code>, маркер <code>integration</code>.</li>
+  </ul>
+
+  <h3>6.5 Рекомендуемая последовательность освоения</h3>
+  <ol>
+    <li><code>cli/bootstrap/app.py</code> → <code>legacy.py</code> → <code>chat.py</code> — маршрутизация запуска;</li>
+    <li><code>cli/bootstrap/initializer.py</code> — сборка всех зависимостей;</li>
+    <li><code>agents/factory.py</code> — центральный узел: инструменты, middleware, сабагенты, компиляция графа;</li>
+    <li><code>cli/dispatchers/messages.py</code> — потоковая обработка и прерывания;</li>
+    <li><code>resources/configs/default/</code> — образцы декларативных определений;</li>
+    <li>документация: <code>docs/zh/developer_guide/arch_overview.md</code>, <code>add-agent.md</code>, <code>docs/zh/user_guide/configuration-and-extension.md</code>.</li>
+  </ol>
+</section>
+
+<footer>
+  Отчёт подготовлен по результатам статического анализа ветки <code>master @ d20e22c</code> (worktree <code>agent-architecture-analysis-39351a</code>), 31.08.2026. Составлен Claude Code.
+</footer>
+</main>
+</div>
+
+</body></html>

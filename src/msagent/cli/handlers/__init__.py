@@ -11,6 +11,7 @@ from msagent.cli.handlers.skills import SkillsHandler
 from msagent.cli.handlers.tool_outputs import ToolOutputHandler
 from msagent.cli.handlers.threads import ThreadsHandler
 from msagent.cli.handlers.tools import ToolsHandler
+from msagent.cli.handlers.direct_skill_generation import DirectSkillGenerationHandler
 
 __all__ = [
     "AddSkillHandler",
@@ -24,4 +25,5 @@ __all__ = [
     "ToolOutputHandler",
     "ThreadsHandler",
     "ToolsHandler",
+    "DirectSkillGenerationHandler",
 ]

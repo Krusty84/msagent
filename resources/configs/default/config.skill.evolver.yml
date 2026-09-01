@@ -1,0 +1,4 @@
+active: prompts/default                 # folder under skill-evolver contains prompts for SKILL.md generating
+prompt_file: prompt_v1.md        # the prompt for generating a new SKILL.md, if not set will combined all *.md files
+# category: default             # the category (folder in fact) of the created SKILL.md files
+# output_dir: ~/.msagent/skills # output folder for generated SKILL.md files, by default: <working_dir>/skills

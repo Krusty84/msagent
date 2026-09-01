@@ -6,8 +6,14 @@ import json
 import os
 import uuid
 from pathlib import Path
+import logging
+import shutil
 
 from msagent.core.paths import AppPaths
+from msagent.core.constants import (
+    CONFIG_SKILL_EVOLVER_FILE_NAME,
+    SKILL_EVOLVER_CONFIG_FOLDER_NAME,
+)
 
 STORAGE_LAYOUT_VERSION = 2
 
@@ -41,8 +47,10 @@ _MANAGED_DIRECTORIES = (
     "oauth",
     "oauth/mcp",
     "logs",
+    "skill-evolver",
 )
 
+logger = logging.getLogger(__name__)
 
 class StorageLayoutError(RuntimeError):
     """Raised when the global storage directory cannot be used safely."""
@@ -55,6 +63,7 @@ def validate_and_initialize_storage_layout(paths: AppPaths) -> None:
     # another process or an external tool changing the directory.
     metadata_version = _inspect_storage_layout(paths)
     _ensure_layout_directories(paths)
+    _seed_skill_evolver_defaults(paths)
     if metadata_version is not None:
         return
 
@@ -222,3 +231,33 @@ def _skills_backup_note(home: Path) -> str:
     return (
         f"  • {home}/skills 可能包含您自己添加的 Skill，请单独备份\n  • 新版内置 Skill 由安装包提供，无需备份或恢复\n"
     )
+
+def _seed_skill_evolver_defaults(paths: AppPaths) -> None:
+    """Materialize skill-evolver config and prompt templates (copy-if-missing)."""
+    try:
+        from importlib.resources import files
+
+        default_root = Path(str(files("resources") / "configs" / "default"))
+        seeds: list[tuple[Path, Path]] = []
+
+        config_source = default_root / CONFIG_SKILL_EVOLVER_FILE_NAME.name
+        if config_source.is_file():
+            seeds.append((config_source, paths.config_dir / CONFIG_SKILL_EVOLVER_FILE_NAME.name))
+
+        component_source_root = default_root / SKILL_EVOLVER_CONFIG_FOLDER_NAME
+        if component_source_root.is_dir():
+            component_target_root = paths.home / SKILL_EVOLVER_CONFIG_FOLDER_NAME
+            seeds.extend(
+                (source, component_target_root / source.relative_to(component_source_root))
+                for source in sorted(component_source_root.rglob("*"))
+                if source.is_file()
+            )
+
+        for source, target in seeds:
+            if target.exists():
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+    except Exception:
+        # Seeding is a convenience; never abort startup because of it.
+        logger.warning("Failed to seed skill-evolver defaults", exc_info=True)

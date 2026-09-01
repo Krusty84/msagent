@@ -89,3 +89,7 @@ MCP_CACHE_VERSION = "1.0.0"
 
 PLATFORM = platform.system()
 OS_VERSION = platform.version()
+
+# For skill-evolver component
+CONFIG_SKILL_EVOLVER_FILE_NAME = Path(f"{CONFIG_DIR_NAME}/config.skill.evolver.yml")
+SKILL_EVOLVER_CONFIG_FOLDER_NAME = "skill-evolver"

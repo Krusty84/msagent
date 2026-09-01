@@ -16,7 +16,9 @@ from msagent.cli.handlers import (
     ToolOutputHandler,
     ThreadsHandler,
     ToolsHandler,
+    DirectSkillGenerationHandler
 )
+
 from msagent.cli.theme import console
 from msagent.core.logging import get_logger
 
@@ -40,6 +42,7 @@ class CommandDispatcher:
         self.threads_handler = ThreadsHandler(session)
         self.compression_handler = CompressionHandler(session)
         self.tool_output_handler = ToolOutputHandler(session)
+        self.direct_skill_generation_handler = DirectSkillGenerationHandler(session)
 
     def _register_commands(self) -> dict[str, Callable]:
         """Register all available commands."""
@@ -59,6 +62,7 @@ class CommandDispatcher:
             "/tool-output": self.cmd_tool_output,
             "/clear": self.cmd_clear,
             "/exit": self.cmd_exit,
+            "/direct-skill-generation": self.cmd_direct_skill_generation
         }
 
     async def dispatch(self, command_line: str) -> None:
@@ -170,3 +174,7 @@ class CommandDispatcher:
     async def _refresh_skills_cache(self) -> None:
         ctx = self.session.context
         await initializer.refresh_cached_skills(agent=ctx.agent, working_dir=ctx.working_dir)
+
+    async def cmd_direct_skill_generation(self, args: list[str]) -> None:
+        """Distill a session into a SKILL.md draft. Usage: /direct-skill-generation [last|<id>]."""
+        await self.direct_skill_generation_handler.handle(args)

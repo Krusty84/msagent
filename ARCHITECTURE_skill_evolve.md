@@ -38,7 +38,7 @@ New files:
 
 | File | Role |
 |---|---|
-| `src/msagent/cli/handlers/direct_skill_generation.py` | `DirectSkillGenerationHandler`: config/prompt resolution, session replay, LLM call, SKILL.md post-processing and write |
+| `src/msagent/skill_evolver/direct_skill_generation.py` | `DirectSkillGenerationHandler`: config/prompt resolution, session replay, LLM call, SKILL.md post-processing and write |
 | `src/msagent/cli/handlers/session_history.py` | Shared **read-only** access to persisted thread history: `load_history`, `latest_other_thread`, `trim_history` (reusable by other report-style commands) |
 | `resources/configs/default/config.skill.evolver.yml` | Packaged default component config |
 | `resources/configs/default/skill-evolver/prompts/<variant>/*.md` | Packaged prompt variants (e.g. `default/default_v1.md`) |

@@ -1,0 +1,52 @@
+# Trajectory recorder configuration.
+#
+# The recorder writes an append-only JSONL "flight recorder" log of every
+# conversation thread: user turns, assistant messages (including subagent
+# internals), tool calls/results with timings, approvals and compression
+# events. Files are meant for downstream processing (analytics, skill
+# mining, knowledge graphs).
+#
+# Override per user: copy this file to <MSAGENT_HOME>/config/ and edit.
+# Kill switch without editing files: set MSAGENT_TRAJECTORY_DISABLED=1.
+# Explicit config path: set MSAGENT_TRAJECTORY_CONFIG=/path/to/file.yml.
+version: "1.0"
+
+# Is recorder enabled?.
+enabled: true
+
+capture:
+  # off      - record nothing (same as enabled: false)
+  # messages - final AI messages, tool calls/results, turn boundaries (recommended)
+  # llm_io   - additionally the exact message window of every LLM call (verbose!)
+  level: messages
+  # Record tool.start events (inputs) in addition to tool.result
+  tool_starts: true
+  # Record LLM retry events
+  retries: true
+  # Attach langgraph metadata (node, step, checkpoint_ns) to events.
+  # checkpoint_ns is what links events to a specific subagent invocation.
+  graph_metadata: true
+
+output:
+  # Directory for trajectory files. A relative path is resolved against the
+  # project state dir (~/.msagent/state/projects/<project>/); an absolute
+  # path is used as-is.
+  directory: trajectories
+  # File name per conversation thread. Available fields: {agent}, {thread_id}
+  filename: "{agent}_{thread_id}.jsonl"
+
+limits:
+  # Max characters kept per string field, 0 = unlimited (recommended for
+  # downstream processing; set a value only to bound disk usage).
+  max_field_chars: 0
+  # Hard cap per trajectory file in megabytes, 0 = unlimited. When exceeded,
+  # a final recorder.limit event is written and recording for that thread stops.
+  max_file_mb: 0
+
+redaction:
+  # Regex patterns replaced in every captured string value.
+  # Example:
+  #   patterns:
+  #     - "(?i)(api[_-]?key\\s*[=:]\\s*)\\S+"
+  patterns: []
+  replacement: "[REDACTED]"

@@ -42,6 +42,7 @@ from msagent.core.constants import OS_VERSION, PLATFORM
 from msagent.core.logging import get_logger
 from msagent.middlewares.token_cost import extract_usage_counts
 from msagent.audit.user_interaction import extract_last_agent_prompt
+from msagent.trajectory import hooks as trajectory_hooks
 from msagent.utils.compression import should_auto_compress
 from msagent.utils.render import TOOL_TIMING_RESPONSE_METADATA_KEY
 
@@ -203,6 +204,15 @@ class MessageDispatcher:
             )
 
             run_id = str(uuid.uuid4())
+
+            run_id = str(uuid.uuid4())
+            graph_config = trajectory_hooks.instrument_config(
+                graph_config,
+                context=ctx,
+                run_id=run_id,
+                user_message=content,
+            )
+
             prior_prompt = await self._resolve_prior_agent_prompt(graph_config)
             self.session.subagent_audit.begin_run(
                 run_id,
@@ -222,8 +232,9 @@ class MessageDispatcher:
                     graph_config,
                     agent_context,
                 )
-
+            trajectory_hooks.finish_turn(context=ctx, run_id=run_id, status="completed")
         except Exception as e:
+            trajectory_hooks.finish_turn(context=self.session.context, error=e)
             recorder = getattr(self.session, "run_recorder", None)
             if recorder is not None:
                 recorder.record_error(e)
@@ -1724,7 +1735,17 @@ class MessageDispatcher:
             recursion_limit=ctx.recursion_limit,
         )
 
+        graph_config = trajectory_hooks.instrument_config(
+            graph_config,
+            context=ctx,
+            run_id=str(uuid.uuid4()),
+            source="resume",
+        )
+
         if not self.session.subagent_audit.run_id:
             self.session.subagent_audit.begin_run(str(uuid.uuid4()))
 
+        await self._stream_response(cmd, graph_config, agent_context)
+        trajectory_hooks.finish_turn(context=ctx, status="completed")
+        
         await self._stream_response(cmd, graph_config, agent_context)

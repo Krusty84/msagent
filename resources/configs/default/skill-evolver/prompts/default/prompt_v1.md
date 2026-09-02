@@ -26,13 +26,7 @@ A sequence of actions that happened to end in success is not automatically a reu
 
 Follow these phases in order.
 
-## Phase 1 — Inventory
-
-Before any mutation, call `skills_list` exactly once to inspect the existing skill library.
-
-Do not create, update, rename, or write support files before this inventory.
-
-## Phase 2 — Identify candidate learnings
+## Phase 1 — Identify candidate learnings
 
 Review the trajectory for possible reusable knowledge.
 
@@ -51,17 +45,7 @@ In autonomous or daemon-triggered sessions, the absence of human correction is n
 
 Do not treat ordinary competent execution as a candidate merely because it worked.
 
-## Phase 3 — Inspect overlaps
-
-For each candidate that survives initial review, identify existing skills whose name or description could plausibly govern the same class of work.
-
-Call `skill_view` for those skills before deciding whether to mutate anything.
-
-Inspect the most relevant existing umbrella skills rather than creating a new skill from the task wording.
-
-If a candidate is already adequately covered, do not save it again.
-
-## Phase 4 — Apply the eligibility test
+## Phase 2 — Apply the eligibility test
 
 A candidate is save-worthy only when **all five conditions** below are satisfied.
 

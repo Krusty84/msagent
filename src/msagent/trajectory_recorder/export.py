@@ -35,7 +35,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator
 
-from msagent.trajectory.config import load_trajectory_config
+from msagent.trajectory_recorder.config import load_trajectory_config
 
 
 def resolve_trajectories_dir(*, working_dir: Path | None = None, state_dir: Path | None = None) -> Path:

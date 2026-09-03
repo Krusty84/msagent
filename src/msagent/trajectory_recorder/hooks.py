@@ -33,10 +33,10 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from msagent.trajectory.callback import TrajectoryCallbackHandler
-from msagent.trajectory.config import TrajectoryRecorderConfig, load_trajectory_config
-from msagent.trajectory.recorder import SCHEMA_VERSION, TrajectoryRecorder
-from msagent.trajectory.serialize import json_safe
+from msagent.trajectory_recorder.callback import TrajectoryCallbackHandler
+from msagent.trajectory_recorder.config import TrajectoryRecorderConfig, load_trajectory_config
+from msagent.trajectory_recorder.recorder import SCHEMA_VERSION, TrajectoryRecorder
+from msagent.trajectory_recorder.serialize import json_safe
 
 if TYPE_CHECKING:
     from langchain_core.runnables import RunnableConfig

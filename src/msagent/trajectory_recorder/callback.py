@@ -38,9 +38,9 @@ from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.messages import BaseMessage, ToolMessage
 from langchain_core.outputs import LLMResult
 
-from msagent.trajectory.config import CaptureConfig, CaptureLevel
-from msagent.trajectory.recorder import TrajectoryRecorder
-from msagent.trajectory.serialize import json_safe, serialize_message, serialize_messages
+from msagent.trajectory_recorder.config import CaptureConfig, CaptureLevel
+from msagent.trajectory_recorder.recorder import TrajectoryRecorder
+from msagent.trajectory_recorder.serialize import json_safe, serialize_message, serialize_messages
 
 logger = logging.getLogger(__name__)
 

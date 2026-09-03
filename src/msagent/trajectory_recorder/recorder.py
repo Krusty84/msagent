@@ -37,8 +37,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from msagent.trajectory.config import TrajectoryRecorderConfig
-from msagent.trajectory.serialize import compile_redaction_patterns, json_safe, sanitize
+from msagent.trajectory_recorder.config import TrajectoryRecorderConfig
+from msagent.trajectory_recorder.serialize import compile_redaction_patterns, json_safe, sanitize
 
 logger = logging.getLogger(__name__)
 

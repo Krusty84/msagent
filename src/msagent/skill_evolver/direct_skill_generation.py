@@ -9,10 +9,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
-from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, SystemMessage, get_buffer_string
+from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, SystemMessage
 from msagent.utils.compression import calculate_message_tokens
 from msagent.cli.bootstrap.initializer import initializer
-from msagent.cli.handlers.session_history import load_history, trim_history
+from msagent.cli.handlers.session_history import load_history
 from msagent.cli.theme import console, theme
 from msagent.core.logging import get_logger
 from msagent.skills.factory import SkillFactory

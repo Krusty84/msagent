@@ -42,7 +42,7 @@ from msagent.core.constants import OS_VERSION, PLATFORM
 from msagent.core.logging import get_logger
 from msagent.middlewares.token_cost import extract_usage_counts
 from msagent.audit.user_interaction import extract_last_agent_prompt
-from msagent.trajectory import hooks as trajectory_hooks
+from msagent.trajectory_recorder import hooks as trajectory_hooks
 from msagent.utils.compression import should_auto_compress
 from msagent.utils.render import TOOL_TIMING_RESPONSE_METADATA_KEY
 

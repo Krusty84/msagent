@@ -13,6 +13,7 @@ from msagent.core.paths import AppPaths
 from msagent.core.constants import (
     CONFIG_SKILL_EVOLVER_FILE_NAME,
     SKILL_EVOLVER_CONFIG_FOLDER_NAME,
+    CONFIG_TRAJECTORY_RECORDER_FILE_NAME,
 )
 
 STORAGE_LAYOUT_VERSION = 2
@@ -64,6 +65,7 @@ def validate_and_initialize_storage_layout(paths: AppPaths) -> None:
     metadata_version = _inspect_storage_layout(paths)
     _ensure_layout_directories(paths)
     _seed_skill_evolver_defaults(paths)
+    _seed_trajectory_recorder_defaults(paths)
     if metadata_version is not None:
         return
 
@@ -261,3 +263,24 @@ def _seed_skill_evolver_defaults(paths: AppPaths) -> None:
     except Exception:
         # Seeding is a convenience; never abort startup because of it.
         logger.warning("Failed to seed skill-evolver defaults", exc_info=True)
+
+def _seed_trajectory_recorder_defaults(paths: AppPaths) -> None:
+    """Materialize trajectory recorder config (copy-if-missing)."""
+    try:
+        from importlib.resources import files
+
+        default_root = Path(str(files("resources") / "configs" / "default"))
+        seeds: list[tuple[Path, Path]] = []
+
+        config_source = default_root / CONFIG_TRAJECTORY_RECORDER_FILE_NAME.name
+        if config_source.is_file():
+            seeds.append((config_source, paths.config_dir / CONFIG_TRAJECTORY_RECORDER_FILE_NAME.name))
+
+        for source, target in seeds:
+            if target.exists():
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+    except Exception:
+        # Seeding is a convenience; never abort startup because of it.
+        logger.warning("Failed to seed  defaults", exc_info=True)

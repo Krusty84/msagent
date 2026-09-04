@@ -86,6 +86,8 @@ class SkillFactory:
                 continue
 
             for skill_file in sorted(directory.rglob("SKILL.md")):
+                if self._in_hidden_dir(skill_file, base_dir=directory):
+                    continue
                 skill = self._load_skill_file(skill_file, base_dir=directory)
                 if skill is None:
                     continue
@@ -99,6 +101,16 @@ class SkillFactory:
 
     def get_module_map(self) -> dict[str, str]:
         return dict(self._module_map)
+
+    @staticmethod
+    def _in_hidden_dir(skill_file: Path, *, base_dir: Path) -> bool:
+        """True when a dot-directory (e.g. ``.proposals``) lies below ``base_dir``.
+
+        The base itself may be a dot-directory (``~/.msagent/skills``), so only
+        the relative path is inspected.
+        """
+        relative = skill_file.parent.relative_to(base_dir)
+        return any(part.startswith(".") for part in relative.parts)
 
     @staticmethod
     def get_repo_skills_dir() -> Path:

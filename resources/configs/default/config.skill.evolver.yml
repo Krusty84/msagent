@@ -1,5 +1,5 @@
-active: default                  # prompt variant: a folder under skill-evolver/prompts/ (name only, no path separators)
-prompt_file: prompt_v1.md        # the prompt for generating a new SKILL.md, if not set will combined all *.md files
-# category: default             # the category (folder in fact) of the created SKILL.md files
-# output_dir: ~/.msagent/skills # output folder for generated SKILL.md files, by default: <working_dir>/skills
+active: default                  # legacy replay variant: a folder under skill-evolver/prompts/ (the evidence pipeline does not use it)
+prompt_file: prompt_v1.md        # prompt file inside each stage folder (prompts/classify/, prompts/render/); unset = all *.md of the folder
+# category: default             # library category a proposal is meant for (recorded in provenance.json; nothing is written there automatically)
+# output_dir: ~/.msagent/skills # root that receives .proposals/<thread>/<name>/; by default: <working_dir>/skills
 # min_evidence_score: 1.0      # code-computed evidence (features.evidence_score) a session needs before the LLM is called

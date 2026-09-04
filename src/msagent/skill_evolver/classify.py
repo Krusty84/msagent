@@ -134,7 +134,7 @@ def parse_classify_reply(raw: str) -> ClassifyResult:
         raise ClassifyParseError(f"schema violation: {exc}") from exc
 
 
-def _reply_text(response: Any) -> str:
+def reply_text(response: Any) -> str:
     """Text of an ``ainvoke`` result: ``.text``, else ``.content``, else str."""
     text = getattr(response, "text", None)
     if isinstance(text, str):
@@ -207,7 +207,7 @@ async def classify(
 
     # str.replace, never str.format: braces inside the bundle must stay inert.
     payload = [("human", template.replace(BUNDLE_PLACEHOLDER, bundle))]
-    raw = _reply_text(await llm.ainvoke(payload))
+    raw = reply_text(await llm.ainvoke(payload))
     try:
         result = parse_classify_reply(raw)
     except ClassifyParseError as first:
@@ -217,7 +217,7 @@ async def classify(
             ("ai", strip_think_blocks(raw).strip() or EMPTY_REPLY),
             ("human", _CORRECTION.format(error=str(first)[:ERROR_TEXT_LIMIT])),
         ]
-        raw = _reply_text(await llm.ainvoke(payload))
+        raw = reply_text(await llm.ainvoke(payload))
         try:
             result = parse_classify_reply(raw)
         except ClassifyParseError as second:

@@ -56,6 +56,9 @@ EpisodeKind = Literal[
     "skill_gap",
 ]
 EPISODE_KINDS: frozenset[str] = frozenset(get_args(EpisodeKind))
+# Version of the detector rules and weights, recorded in the provenance of
+# every proposal; bump it when a rule or a weight changes.
+FEATURES_VERSION = 1
 
 # Evidence weight of one episode of each kind (0.0..1.0).
 EPISODE_WEIGHTS: dict[str, float] = {

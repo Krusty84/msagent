@@ -114,3 +114,72 @@ def test_command_dispatcher_showmemory_is_registered_without_typo_alias(tmp_path
 
     assert dispatcher.commands["/showmemory"] == dispatcher.cmd_showmemory
     assert "/shommemory" not in dispatcher.commands
+
+
+def test_command_dispatcher_registers_the_trajectory_commands(tmp_path: Path) -> None:
+    dispatcher = CommandDispatcher(_build_session(tmp_path))
+
+    assert dispatcher.commands["/trajectories"] == dispatcher.cmd_trajectories
+    assert dispatcher.commands["/skill-mine"] == dispatcher.cmd_skill_mine
+    assert dispatcher.commands["/skill-review"] == dispatcher.cmd_skill_review
+    # The generator stays registered; it is deprecated, not removed.
+    assert "/direct-skill-generation" in dispatcher.commands
+
+
+def test_command_dispatcher_marks_direct_skill_generation_deprecated(
+    tmp_path: Path,
+) -> None:
+    dispatcher = CommandDispatcher(_build_session(tmp_path))
+
+    description = dispatcher.cmd_direct_skill_generation.__doc__ or ""
+    # Escaped for rich markup, so /help shows the marker instead of eating it.
+    assert description.startswith(r"\[deprecated]")
+    assert "/skill-mine" in description
+
+
+def test_command_dispatcher_trajectories_delegates(tmp_path: Path, monkeypatch) -> None:
+    dispatcher = CommandDispatcher(_build_session(tmp_path))
+    calls: list[list[str]] = []
+
+    async def fake_handle(args: list[str]) -> None:
+        calls.append(args)
+
+    monkeypatch.setattr(dispatcher.trajectories_handler, "handle", fake_handle)
+
+    import asyncio
+
+    asyncio.run(dispatcher.dispatch("/trajectories show thread-1"))
+
+    assert calls == [["show", "thread-1"]]
+
+
+def test_command_dispatcher_skill_mine_delegates(tmp_path: Path, monkeypatch) -> None:
+    dispatcher = CommandDispatcher(_build_session(tmp_path))
+    calls: list[list[str]] = []
+
+    async def fake_handle(args: list[str]) -> None:
+        calls.append(args)
+
+    monkeypatch.setattr(dispatcher.skill_mining_handler, "handle", fake_handle)
+
+    import asyncio
+
+    asyncio.run(dispatcher.dispatch("/skill-mine --dry-run --since 7d"))
+
+    assert calls == [["--dry-run", "--since", "7d"]]
+
+
+def test_command_dispatcher_skill_review_delegates(tmp_path: Path, monkeypatch) -> None:
+    dispatcher = CommandDispatcher(_build_session(tmp_path))
+    calls: list[list[str]] = []
+
+    async def fake_handle(args: list[str]) -> None:
+        calls.append(args)
+
+    monkeypatch.setattr(dispatcher.skill_review_handler, "handle", fake_handle)
+
+    import asyncio
+
+    asyncio.run(dispatcher.dispatch('/skill-review accept "my skill"'))
+
+    assert calls == [["accept", "my skill"]]

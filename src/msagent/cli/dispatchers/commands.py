@@ -12,10 +12,13 @@ from msagent.cli.handlers import (
     MCPHandler,
     MemoryHandler,
     ModelHandler,
+    SkillMiningHandler,
+    SkillReviewHandler,
     SkillsHandler,
     ToolOutputHandler,
     ThreadsHandler,
     ToolsHandler,
+    TrajectoriesHandler,
     DirectSkillGenerationHandler
 )
 
@@ -43,6 +46,9 @@ class CommandDispatcher:
         self.compression_handler = CompressionHandler(session)
         self.tool_output_handler = ToolOutputHandler(session)
         self.direct_skill_generation_handler = DirectSkillGenerationHandler(session)
+        self.trajectories_handler = TrajectoriesHandler(session)
+        self.skill_mining_handler = SkillMiningHandler(session)
+        self.skill_review_handler = SkillReviewHandler(session)
 
     def _register_commands(self) -> dict[str, Callable]:
         """Register all available commands."""
@@ -62,7 +68,10 @@ class CommandDispatcher:
             "/tool-output": self.cmd_tool_output,
             "/clear": self.cmd_clear,
             "/exit": self.cmd_exit,
-            "/direct-skill-generation": self.cmd_direct_skill_generation
+            "/direct-skill-generation": self.cmd_direct_skill_generation,
+            "/trajectories": self.cmd_trajectories,
+            "/skill-mine": self.cmd_skill_mine,
+            "/skill-review": self.cmd_skill_review,
         }
 
     async def dispatch(self, command_line: str) -> None:
@@ -176,5 +185,17 @@ class CommandDispatcher:
         await initializer.refresh_cached_skills(agent=ctx.agent, working_dir=ctx.working_dir)
 
     async def cmd_direct_skill_generation(self, args: list[str]) -> None:
-        """Distill a session into a SKILL.md draft. Usage: /direct-skill-generation [last|<id>]."""
+        r"""\[deprecated] Distill a session into a SKILL.md draft. Use /skill-mine."""
         await self.direct_skill_generation_handler.handle(args)
+
+    async def cmd_trajectories(self, args: list[str]) -> None:
+        """Browse recorded trajectories: list, or show a thread by id."""
+        await self.trajectories_handler.handle(args)
+
+    async def cmd_skill_mine(self, args: list[str]) -> None:
+        """Mine recent threads for SKILL.md proposals; try --dry-run first."""
+        await self.skill_mining_handler.handle(args)
+
+    async def cmd_skill_review(self, args: list[str]) -> None:
+        """Review skill proposals: list, accept a name, or reject a name."""
+        await self.skill_review_handler.handle(args)

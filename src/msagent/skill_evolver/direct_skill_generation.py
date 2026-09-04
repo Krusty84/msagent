@@ -92,6 +92,7 @@ CROSS_SESSION_LIMIT = 20
 _VARIANT_NAME_PATTERN = re.compile(r"[A-Za-z0-9._-]+")
 
 _REJECTED = "SKILL.md rejected after one correction; nothing written:"
+_DEPRECATION_HINT = "Use /skill-mine for trajectory-based generation."
 _NO_MESSAGES_HINT = " ".join(
     (
         "Current thread has no messages.",
@@ -185,6 +186,7 @@ class DirectSkillGenerationHandler:
 
     async def handle(self, args: list[str]) -> None:
         """Distill a thread into a SKILL.md proposal: [last|<thread-id>]."""
+        console.print_info(_DEPRECATION_HINT)
         try:
             target = args[0].strip() if args else None
             thread_id, messages = await load_history(self.session, target)

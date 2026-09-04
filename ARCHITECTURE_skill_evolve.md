@@ -19,9 +19,12 @@ executable part is a thin, generic pipeline.
 
 | Invocation | Effect |
 |---|---|
-| `/direct-skill-generation` | Analyze the **current** thread |
+| `/direct-skill-generation` | Analyze the **current** thread (deprecated; see section 17) |
 | `/direct-skill-generation last` | Analyze the most recent **previous** thread (e.g. after a CLI restart) |
 | `/direct-skill-generation <thread-id>` | Analyze an explicit thread |
+| `/skill-mine [--threads N] [--since 7d] [--dry-run] [--thread <id>]` | Mine several recorded threads, one proposal per thread (section 17) |
+| `/trajectories [list \| show <thread-id>]` | Browse the recorded trajectories (section 17) |
+| `/skill-review [list \| accept <name> \| reject <name>]` | Review, promote or delete a proposal (section 17) |
 
 Output: `<root>/.proposals/<thread-id>/<skill-name>/SKILL.md` plus `provenance.json`,
 where `<root>` is `<working_dir>/skills` (or `output_dir` from the component config).
@@ -51,14 +54,18 @@ New files:
 | `tests/fixtures/trajectories/skill_evolver_signals.jsonl` | Hand-written trajectory exercising every per-trajectory detector |
 | `tests/ut/skill_evolver/test_*.py` | Detector, retrieval, bundle, classify, render, validator, writer and handler tests on scripted fake LLMs; no-langchain/no-network probes |
 | `resources/configs/default/config.skill.evolver.yml` | Packaged default component config |
+| `src/msagent/skill_evolver/mining.py` | `SkillMiningHandler`: the multi-thread `/skill-mine` command, its argument parser, thread selection and the dry-run tables (section 17) |
+| `src/msagent/cli/handlers/trajectories.py` | `TrajectoriesHandler`: `/trajectories list` and `show` over `trajectory_recorder.export` (section 17) |
+| `src/msagent/cli/handlers/skill_review.py` | `SkillReviewHandler`: `/skill-review list`, `accept` and `reject` over `.proposals/` (section 17) |
+| `tests/ut/cli/handlers/test_skill_mining.py`, `test_trajectories_handler.py` | Command tests: parser, tables, the no-LLM dry run, the per-thread loop on a scripted LLM, proposal accept/reject |
 | `resources/configs/default/skill-evolver/prompts/<stage>/prompt_v1.md` | Packaged stage prompts `classify/` and `render/`; `default/` is the legacy replay prompt |
 
 Modified files (integration points):
 
 | File | Change |
 |---|---|
-| `src/msagent/cli/dispatchers/commands.py` | Handler instantiation, `"/direct-skill-generation"` entry in `_register_commands()`, `cmd_direct_skill_generation` delegate |
-| `src/msagent/cli/handlers/__init__.py` | Export of `DirectSkillGenerationHandler` |
+| `src/msagent/cli/dispatchers/commands.py` | Handler instantiation, `"/direct-skill-generation"` entry in `_register_commands()`, `cmd_direct_skill_generation` delegate; the three commands of section 17 and the `[deprecated]` marker on the generator's help text |
+| `src/msagent/cli/handlers/__init__.py` | Export of `DirectSkillGenerationHandler`, `SkillMiningHandler`, `TrajectoriesHandler`, `SkillReviewHandler` |
 | `src/msagent/core/constants.py` | `CONFIG_SKILL_EVOLVER_FILE_NAME`, `SKILL_EVOLVER_CONFIG_FOLDER_NAME` |
 | `src/msagent/core/storage_layout.py` | `_seed_skill_evolver_defaults()` called from `validate_and_initialize_storage_layout()`; `"skill-evolver"` added to `_MANAGED_DIRECTORIES` |
 | `src/msagent/skills/factory.py` | `SkillFactory.load_skills` skips dot-directories below a scanned root (`_in_hidden_dir`), so `.proposals/` never enters the catalogue |
@@ -542,3 +549,146 @@ failure / update name enforcement / guards, and the handler end to end on the
 `skill_evolver_signals.jsonl` fixture with a scripted LLM (proposal written, library untouched,
 refusals without an LLM call, threshold, `nothing` verdict, fabricated refs, double validation
 failure, reference-only, unknown update target, update with existing text).
+
+## 17. CLI surface: `/trajectories`, `/skill-mine`, `/skill-review`
+
+The pipeline of sections 14-16 was reachable only through `/direct-skill-generation`, which
+analyses one thread and always ends in LLM calls. Three commands open it up; the generator stays
+registered and working, marked `[deprecated]` in `/help` and printing
+`Use /skill-mine for trajectory-based generation.` at the start of every run.
+
+| Invocation | Effect |
+|---|---|
+| `/trajectories [list]` | Table of the project's recorded threads: thread, agent, turns, events, size, mtime, first user message |
+| `/trajectories show <thread-id>` | One thread as markdown (`export.render_markdown`); the id may be a unique prefix |
+| `/skill-mine [--threads N] [--since 7d] [--dry-run] [--thread <id>]` | Mine several threads, one proposal per thread |
+| `/skill-review [list]` | Table of the proposals on disk: name, category, action, threads, age, description |
+| `/skill-review accept <name>` | Re-validate and move the folder into `<root>/<category>/<name>/` |
+| `/skill-review reject <name>` | Delete the folder after an explicit confirmation |
+
+New files: `src/msagent/cli/handlers/trajectories.py` (`TrajectoriesHandler`),
+`src/msagent/skill_evolver/mining.py` (`SkillMiningHandler`),
+`src/msagent/cli/handlers/skill_review.py` (`SkillReviewHandler`),
+`tests/ut/cli/handlers/test_skill_mining.py` (53 tests, `/skill-mine` and `/skill-review`) and
+`tests/ut/cli/handlers/test_trajectories_handler.py`. Registration follows the existing pattern
+exactly: export from `cli/handlers/__init__.py`, instantiate in `CommandDispatcher.__init__`, one
+dict entry in `_register_commands()` and one `cmd_*` delegate whose **docstring is the help text**.
+Slash completion needs no change — `Session` derives it from `dispatcher.commands.keys()`, and
+`completers/reference.py` is the `@`-file-path completer, not a command table. There is no
+subcommand or flag completion for any command in this CLI.
+
+### 17.1 `/skill-mine`: one proposal per thread
+
+`handle()` parses, then `_run()` loads the config, resolves the trajectories directory, extracts
+evidence for every selected thread in one `asyncio.to_thread` call, prints the **Threads** table
+and either stops (dry run) or enters the per-thread loop.
+
+Evidence refs are flat ints, unique per thread only (section 15), so a multi-thread bundle cannot
+tell the same seq apart across threads. `/skill-mine` therefore keeps the single-trajectory bundle
+and loops: each thread whose `evidence_score()` reaches `min_evidence_score` gets its own
+classify + render pair, so a run costs at most `2 x threads` LLM calls and writes at most one
+proposal per thread. Cross-session `repeated_procedure` support is unchanged — the pool is still
+the agent's newest `CROSS_SESSION_LIMIT` (20) trajectories, and each target goes **first** into
+`_collect_episodes`, so the kept episodes cite that thread's own events.
+
+Selection (`select_trajectories`): one `load_trajectories(dir, agent=..., limit=max(N, 20))` pass
+feeds both the pool (first 20) and the targets, so no file is parsed twice. `--since` compares
+**file mtime**, not `Trajectory.started_at`: mtime always exists and means last activity, while
+`started_at` is the first event's `ts` and can be empty, which would force a keep-or-drop fallback
+on unparseable data. Since the listing is already mtime-descending, the window is a contiguous
+prefix and `--threads N` means "the newest N inside the window". Mtime does not survive copying
+files between machines — the documented cost of that choice. `--thread` resolves through
+`find_trajectory_file` (unique prefixes included) and reuses the pool object when it is there, so
+a thread older than the newest 20, or belonging to another agent, still works. Empty selections
+get three distinct warnings: nothing recorded, nothing for this agent, nothing inside the window.
+
+Argument parsing is hand-rolled, not argparse: argparse reports errors with `sys.exit`, and
+`SystemExit` is a `BaseException` that neither `CommandDispatcher.dispatch` nor `Session._main_loop`
+catches, so a mistyped flag would end the user's session. `--since` accepts `<count>` plus `h`,
+`d` or `w`; `m` is **rejected** as ambiguous between minutes and months. `--thread` combined with
+`--threads` or `--since` is an error, not a precedence rule, and a repeated flag is an error —
+silently ignoring a flag the user typed is the same masking pattern the project rules forbid.
+`--threads` defaults to 5.
+
+### 17.2 The dry run: the detector debugger
+
+`--dry-run` stops after feature extraction and never constructs an LLM. The single construction
+site is `LazyLlm.get()`, instantiated per invocation inside the loop and reached only after a
+thread passes the gate, so a real run in which every thread fails the gate also creates nothing.
+`test_dry_run_never_creates_an_llm` pins this by making `initializer.llm_factory.create` and
+`load_llm_config` raise.
+
+Two tables, because one cannot carry both "why nothing fired" and "what fired":
+
+- **Threads** (both modes): thread, turns, tools, ai, episodes, score, gate; the threshold is in
+  the title. A zero `tools` count is styled `warning` — it is the most diagnostic number in the
+  table, because every detector that needs tool calls is then dead.
+- **Episodes** (dry run only): thread, kind, weight, tool sequence, evidence seq, grouped per
+  thread with a `subtotal` row. Rows keep **detector order**, not weight order: the bundle sorts by
+  weight for the model, while a human wants to know which detector fired. Both list columns carry
+  the true element count in brackets before any clipping (5 tool names, 8 seqs, then `… +k`).
+
+Colour comes from column-level styles, never inline markup, and every data-derived cell is passed
+through `rich.markup.escape` or wrapped in `rich.text.Text`, so a tool named `[bold]` renders
+literally (`test_episodes_table_shows_markup_literally`).
+
+Files recorded before the recorder's `ignore_agent` fix carry no `tool.*` events at all
+(`ARCHITECTURE_trajectory_recorder.md` section 11), so **every** detector yields nothing on them —
+`user_correction` included, because it needs the tool-name sequence to differ between turns. That
+is the realistic first run on existing data, so a note under the Threads table names the cause once
+(not per row) whenever any selected thread shows zero tool calls.
+
+### 17.3 Failure policy
+
+Two tiers, which is how "the analyzer must fail loudly" and a usable multi-thread loop coexist:
+
+- Parsing, selection, loading and detection have **no `try` at all**. They reach the single
+  top-level guard in `handle()`, which prints and `logger.exception`s, and the run stops. One
+  corrupt neighbouring file raises `TrajectoryReadError` naming itself.
+- Per-thread generation is guarded: the message is printed with the thread id, the traceback is
+  logged, the id is repeated in the summary and the summary switches to `print_error`. The loop
+  continues, because aborting would discard the remaining threads after earlier ones already wrote
+  files. `KeyboardInterrupt` is caught by neither tier.
+
+Every run ends on one fixed-shape line: threads mined, proposals, below threshold, nothing to save,
+failed.
+
+### 17.4 `/skill-review`
+
+Proposals are read from `<root>/.proposals/<thread>/<name>/` — `SkillFactory.load_skills` skips
+dot-directories, so `/skills` never shows them and the review command must scan the tree itself.
+The directory name is not always the skill name (collisions get `-2`), so `accept` takes the
+destination name from the frontmatter via `skill_name()`, which is what the loader reads. A
+proposal is addressed by bare name when that name exists in exactly one batch, and by
+`<thread>/<name>` otherwise; an ambiguous bare name lists the qualified candidates instead of
+guessing. A proposal whose `provenance.json` is missing or unparseable is **listed with its error**
+rather than skipped — a half-written folder must stay visible to the person who has to decide.
+
+`accept` re-runs `validate_skill_md` because the file may have been edited by hand, refuses when
+`<root>/<category>/<name>/` already exists (the only guard against shadowing a library skill),
+then moves the whole folder with `shutil.move` so `provenance.json` travels with it, and prunes the
+emptied batch directory. `reject` deletes after an explicit confirmation, implemented as
+`SkillReviewHandler._confirm` (a `PromptSession` with a yes/no completer, shaped like
+`InterruptHandler._prompt_choice`) — there is no y/N helper anywhere else in the CLI, and being a
+method is what makes it patchable in tests. Anything but an explicit yes, and `Ctrl+C`, mean no.
+
+**Update proposals are refused, not moved** (an addition beyond the task, which describes only the
+create case): an `update` carries the name of a library skill, so moving it into
+`<root>/<category>/<name>/` would create a second skill with that name in another category. The
+command prints `provenance.target.existing_path` and says the file must be replaced by hand, which
+matches the activation hint the generator already prints and section 12.
+
+Note that `skill_review.py` imports the generator handler **inside** `_root()`: `handlers/__init__`
+loads this module before the generator, which re-enters the package for `session_history`. A
+module-level import would widen the pre-existing cycle documented in
+`test_direct_skill_generation.py`.
+
+Verification: `pytest tests/ut/cli tests/ut/skill_evolver -q`. The mining tests cover the parser
+(every error message, `30m` and `0d` rejected, `7D` accepted, the `--thread` conflicts, duplicate
+flags, defaults), the formatters (the `[n]` prefix always equals the true length), the tables
+(markup shown literally, subtotals), the dry run (no LLM, the zero-tool note, the three empty
+selections, `--thread`, `--threads`), the real run on the `skill_evolver_signals.jsonl` fixture
+with a scripted LLM (one proposal written with its provenance, `nothing` verdict, a failing thread
+reported while the loop continues) and `/skill-review` (list, accept, category, hand-broken
+SKILL.md, occupied destination, update refusal, ambiguity, qualified names, reject with and
+without confirmation).

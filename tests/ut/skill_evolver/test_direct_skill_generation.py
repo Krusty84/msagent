@@ -352,7 +352,8 @@ async def test_handle_stops_below_evidence_threshold(pipeline: _Pipeline, tmp_pa
     await pipeline.handler.handle([])
 
     assert pipeline.llm.payloads == []
-    (info,) = pipeline.spy.info
+    hint, info = pipeline.spy.info
+    assert hint == module._DEPRECATION_HINT
     assert info.startswith("Nothing to save: evidence score ")
     assert "< min_evidence_score 100.00" in info
     assert not (tmp_path / "skills").exists()
@@ -364,7 +365,10 @@ async def test_handle_nothing_verdict(pipeline: _Pipeline, tmp_path: Path) -> No
 
     await pipeline.handler.handle([])
 
-    assert pipeline.spy.info == [f"Nothing to save: no durable learning found in thread {THREAD_ID}"]
+    assert pipeline.spy.info == [
+        module._DEPRECATION_HINT,
+        f"Nothing to save: no durable learning found in thread {THREAD_ID}",
+    ]
     assert len(pipeline.llm.payloads) == 1
     assert not (tmp_path / "skills").exists()
 
@@ -375,7 +379,10 @@ async def test_handle_fabricated_refs_dropped(pipeline: _Pipeline, tmp_path: Pat
 
     await pipeline.handler.handle([])
 
-    assert pipeline.spy.info == [f"Nothing to save: no durable learning found in thread {THREAD_ID}"]
+    assert pipeline.spy.info == [
+        module._DEPRECATION_HINT,
+        f"Nothing to save: no durable learning found in thread {THREAD_ID}",
+    ]
     assert len(pipeline.llm.payloads) == 1
     assert not (tmp_path / "skills").exists()
 
@@ -405,6 +412,7 @@ async def test_handle_reference_only(pipeline: _Pipeline, tmp_path: Path) -> Non
 
     assert len(pipeline.llm.payloads) == 1
     assert pipeline.spy.info == [
+        module._DEPRECATION_HINT,
         "already covered by real: Generated source debugging",
         "Nothing to save: no candidate left to render",
     ]
@@ -422,7 +430,10 @@ async def test_handle_unknown_update_target_dropped(pipeline: _Pipeline, tmp_pat
     assert pipeline.spy.warning == [
         "Dropped 'Generated source debugging': existing_skill 'ghost' is not in the skill library"
     ]
-    assert pipeline.spy.info == ["Nothing to save: no candidate left to render"]
+    assert pipeline.spy.info == [
+        module._DEPRECATION_HINT,
+        "Nothing to save: no candidate left to render",
+    ]
     assert not (tmp_path / "skills").exists()
 
 

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from langchain_core.messages import AnyMessage
+from typing import Literal
+
+from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 
 from msagent.cli.bootstrap.initializer import initializer
@@ -67,16 +69,79 @@ def trim_history(
     context_window: int | None,
     *,
     budget_ratio: float = 0.6,
+    strategy: Literal["tail", "head_tail"] = "head_tail",
+    head_keep: int = 6,
 ) -> tuple[list[AnyMessage], int]:
-    """Drop oldest messages until history fits the token budget."""
+    """Trim history to ``budget_ratio`` of the context window; return (kept, omitted count).
+
+    ``tail`` drops the oldest messages until the rest fits. ``head_tail`` (default) keeps
+    the first ``head_keep`` messages — the task statement, the most valuable part for
+    distillation — and cuts from the middle, keeping the newest messages. In both
+    strategies the kept tail starts with a ``HumanMessage``, so the replay never opens
+    with an orphaned tool result or model reply.
+    """
+    kept = list(messages)
     if not context_window or context_window <= 0:
-        return list(messages), 0
+        return kept, 0
 
     budget = int(context_window * budget_ratio)
+    if calculate_message_tokens(kept, llm) <= budget:
+        return kept, 0
+
+    if strategy == "tail":
+        return _drop_oldest(kept, llm, budget)
+
+    # The head must not end inside a tool exchange: an AIMessage whose tool_calls lost
+    # their ToolMessage to the cut is rejected by OpenAI-compatible APIs. Messages popped
+    # here are not lost — they become the start of the tail.
+    head = kept[:head_keep]
+    while head and _has_unanswered_tool_calls(head):
+        head.pop()
+    tail = kept[len(head) :]
+
+    omitted = 0
+    while tail and calculate_message_tokens(head + tail, llm) > budget:
+        drop = max(1, len(tail) // 10)
+        tail = tail[drop:]
+        omitted += drop
+        tail, realigned = _align_to_human(tail)
+        omitted += realigned
+
+    if tail:
+        return head + tail, omitted
+
+    # Even the head alone exceeds the budget: fall back to the tail strategy on the full
+    # history, so at least the newest messages survive.
+    return _drop_oldest(kept, llm, budget)
+
+
+def _drop_oldest(messages: list[AnyMessage], llm, budget: int) -> tuple[list[AnyMessage], int]:
+    """Drop messages from the start until the list fits ``budget``; keep a HumanMessage first."""
     kept = list(messages)
     omitted = 0
     while len(kept) > 1 and calculate_message_tokens(kept, llm) > budget:
         drop = max(1, len(kept) // 10)
         kept = kept[drop:]
         omitted += drop
+        kept, realigned = _align_to_human(kept)
+        omitted += realigned
     return kept, omitted
+
+
+def _align_to_human(messages: list[AnyMessage]) -> tuple[list[AnyMessage], int]:
+    """Drop leading messages until the list starts with a HumanMessage."""
+    index = 0
+    while index < len(messages) and not isinstance(messages[index], HumanMessage):
+        index += 1
+    return messages[index:], index
+
+
+def _has_unanswered_tool_calls(messages: list[AnyMessage]) -> bool:
+    """True when some AIMessage.tool_calls in the slice lacks its ToolMessage."""
+    answered = {m.tool_call_id for m in messages if isinstance(m, ToolMessage)}
+    return any(
+        call.get("id") not in answered
+        for m in messages
+        if isinstance(m, AIMessage)
+        for call in (m.tool_calls or [])
+    )

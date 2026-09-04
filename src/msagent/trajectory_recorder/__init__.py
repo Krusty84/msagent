@@ -19,10 +19,10 @@
 """Full-fidelity trajectory recording for msAgent sessions.
 
 The package is self-contained on purpose: integration with the rest of the
-codebase happens exclusively through :mod:`msagent.trajectory.hooks`, and every
+codebase happens exclusively through :mod:`msagent.trajectory_recorder.hooks`, and every
 public hook is exception-safe (recording problems never break the agent).
 
 This ``__init__`` intentionally imports nothing so that lightweight consumers
-(e.g. ``python -m msagent.trajectory.export``) do not pull langchain into the
-process. Import ``msagent.trajectory.hooks`` directly from integration points.
+(e.g. ``python -m msagent.trajectory_recorder.export``) do not pull langchain into the
+process. Import ``msagent.trajectory_recorder.hooks`` directly from integration points.
 """

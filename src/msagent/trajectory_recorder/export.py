@@ -21,9 +21,9 @@
 Standalone by design (stdlib + msagent.core.paths only, no langchain), usable
 both as a library and as a CLI:
 
-    python -m msagent.trajectory.export list [--working-dir DIR]
-    python -m msagent.trajectory.export show --thread <id> [--max-chars N]
-    python -m msagent.trajectory.export export --thread <id> --format json|jsonl|md [--output FILE]
+    python -m msagent.trajectory_recorder.export list [--working-dir DIR]
+    python -m msagent.trajectory_recorder.export show --thread <id> [--max-chars N]
+    python -m msagent.trajectory_recorder.export export --thread <id> --format json|jsonl|md [--output FILE]
 """
 
 from __future__ import annotations
@@ -222,7 +222,7 @@ def _write_output(text: str, output: str | None) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="msagent.trajectory.export", description="Inspect recorded trajectories")
+    parser = argparse.ArgumentParser(prog="msagent.trajectory_recorder.export", description="Inspect recorded trajectories")
     parser.add_argument("command", choices=["list", "show", "export"])
     parser.add_argument("-w", "--working-dir", default=None, help="Project working directory (default: cwd)")
     parser.add_argument("--state-dir", default=None, help="Explicit project state dir (overrides --working-dir)")

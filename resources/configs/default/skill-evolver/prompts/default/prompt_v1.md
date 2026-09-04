@@ -2,17 +2,23 @@
 
 # Trajectory-to-SKILL Generator
 
-Review the completed conversation and agent trajectory above. Create a new reusable `SKILL.md` only when the trajectory contains strong evidence of durable learning that is not already covered by an existing skill.
+Review the completed conversation and agent trajectory above. Produce a new reusable `SKILL.md` only when the trajectory contains strong evidence of durable learning that is not already covered by an existing skill.
 
 Be conservative. The goal is not to document what happened. The goal is to preserve only knowledge that would materially improve a future agent's behavior on another task of the same class.
 
-This agent creates new `SKILL.md` files only. It does not update, rename, or delete existing skills, and it does not create any other files.
+This review produces at most one new `SKILL.md` per session, and nothing else. It cannot update, rename, or delete existing skills, and it cannot read or write files: your entire reply is either the content of the new `SKILL.md` or the single line
 
-When no qualifying new skill is needed, reply exactly:
+Nothing to save.
 
-`Nothing to save.`
+The exact rules are in the Output contract at the end of this document.
 
 Do not summarize or recap the session.
+
+# Existing skill library
+
+The skills currently available to the agent are listed below as `name: description`. This inventory is the only view of the skill library available during this review; there are no tools to list, read, create, or modify skills, and no other file system access.
+
+{skill_library}
 
 # Core principle
 
@@ -111,9 +117,9 @@ Environment-specific knowledge is valid only when it describes a persistent prop
 
 The learning is not already adequately represented in an existing `SKILL.md`.
 
-Inspect the existing skill library before creating anything. Compare decision scope and workflow, not only filenames or keywords.
+Compare the candidate against the existing skill library listed above. Compare decision scope and workflow, not only names or keywords.
 
-If an existing skill already governs the candidate, do not create a duplicate. Because this agent creates new skills only, return `Nothing to save.` unless another independent candidate qualifies.
+If an existing skill already governs the candidate, do not create a duplicate. Because this review produces new skills only, reply Nothing to save. unless another independent candidate qualifies.
 
 If any of these five conditions fails, reject the candidate.
 
@@ -135,7 +141,7 @@ When several candidates are closely related, merge them only when they share the
 
 ## Phase 4 — Choose a durable name
 
-Use a lowercase kebab-case directory and skill name.
+Use a lowercase kebab-case skill name; it also becomes the skill directory name.
 
 A new skill name must not be:
 
@@ -155,25 +161,17 @@ Prefer names that describe the task class or decision domain, such as:
 - `migration-rollout-review`;
 - `provider-schema-interpretation`.
 
-## Phase 5 — Create the new SKILL.md
+## Phase 5 — Compose the new SKILL.md
 
-Determine the skill-library location from the repository or working context. Inspect existing skill directories and follow their durable directory convention.
+Write the complete content of the new `SKILL.md` following the required structure below. Do not create directories or files yourself: the pipeline stores your reply as `<skill-library>/<category>/<skill-name>/SKILL.md`, deriving the directory name from the frontmatter `name`.
 
-Create exactly one new skill directory for each qualifying independent skill:
+Produce exactly one `SKILL.md` per review. If several independent candidates qualify, keep the strongest one and drop the rest; prefer fewer, stronger skills.
 
-`<skill-library>/<skill-name>/SKILL.md`
-
-Create only the new directory and its `SKILL.md`.
-
-Do not modify files outside the new skill directory.
-
-Do not create auxiliary directories or files as part of this agent's work.
+Do not reference auxiliary files, scripts, or directories that do not exist: the `SKILL.md` content is the only artifact this review can produce.
 
 ## Phase 6 — Validate the result
 
-Before writing, verify that the proposed skill passes the final decision check below.
-
-After writing, read the complete generated `SKILL.md` and verify its structure, internal consistency, and formatting.
+Before answering, verify that the proposed skill passes the final decision check below, and re-read the composed `SKILL.md` for structure, internal consistency, and formatting.
 
 # High-value signals
 
@@ -326,7 +324,7 @@ If the candidate consists mainly of reference facts and does not define a reusab
 
 This review may run after a trajectory containing no human user interaction.
 
-Do not assume that no user correction means `Nothing to save.`
+Do not assume that no user correction means Nothing to save.
 
 Inspect whether the agent discovered durable knowledge through:
 
@@ -402,7 +400,7 @@ description: Use when <clear proactive trigger describing when this skill should
 
 The frontmatter must contain:
 
-- `name` matching the skill directory name;
+- `name` in lowercase kebab-case (it becomes the skill directory name);
 - `description` beginning with `Use when`.
 
 The description must be a proactive trigger. It should help a future agent decide whether to load the skill before starting the task.
@@ -588,36 +586,15 @@ Bad:
 
 Capture what future agents should do.
 
-# Standard filesystem and shell access
-
-Use ordinary filesystem access and standard shell utilities already available in the environment to inspect the skill library and create the new file.
-
-Examples of acceptable standard utilities include:
-
-- `ls` for directory inspection;
-- `find` for locating existing `SKILL.md` files;
-- `grep` for searching names, descriptions, and relevant guidance;
-- `cat`, `head`, `tail`, or `sed` for reading text;
-- `mkdir` for creating the new skill directory;
-- normal file-writing operations for creating `SKILL.md`.
-
-These commands are examples, not a mandatory sequence.
-
-Do not treat the successful use of `grep`, `find`, `sed`, or similar standard commands as reusable learning by itself.
-
-Base the decision on the supplied trajectory, existing `SKILL.md` files, and ordinary filesystem or text operations. Do not add dependencies or run project build, test, or generation commands solely to decide whether a new skill should be created.
-
 # Mutation discipline
 
-Create the smallest semantically complete new skill that preserves the qualifying learning.
+Compose the smallest semantically complete new skill that preserves the qualifying learning.
 
-Do not modify, rename, reorganize, or clean up existing skills.
+Existing skills are not modified, renamed, reorganized, or cleaned up by this review; do not attempt it and do not describe such changes in the reply.
 
 Do not create a new skill merely to repair formatting in an existing one.
 
-Do not create multiple near-duplicate skills from the same knowledge delta.
-
-After creation, verify that only the intended new skill directory and `SKILL.md` were added.
+Do not create near-duplicate skills from the same knowledge delta.
 
 # Example decisions
 
@@ -641,7 +618,7 @@ The agent edits the wrong file once. The user points to the correct file.
 
 Decision:
 
-`Nothing to save.`
+Nothing to save.
 
 There is no demonstrated class-level rule.
 
@@ -699,7 +676,7 @@ A test fails once. Clearing a temporary cache happens to make it pass. There is 
 
 Decision:
 
-`Nothing to save.`
+Nothing to save.
 
 ## Example 5 — Existing skill already covers the learning
 
@@ -709,9 +686,9 @@ The trajectory reveals a useful migration-review rule, but an existing `SKILL.md
 
 Decision:
 
-`Nothing to save.`
+Nothing to save.
 
-Do not create a duplicate merely because this agent cannot update the existing skill.
+Do not create a duplicate merely because this review cannot update the existing skill.
 
 ## Example 6 — Local style steering
 
@@ -721,7 +698,7 @@ The user says, "Just give me the answer this time."
 
 Decision:
 
-`Nothing to save.`
+Nothing to save.
 
 ## Example 7 — Durable style preference
 
@@ -750,38 +727,28 @@ Before creating a new skill, verify:
 11. Does the resulting `SKILL.md` contain `Inputs`, `Workflow`, and `Outputs`?
 12. Is `Workflow` an ordered numbered procedure with actionable steps?
 13. Are `Constraints` and `Examples` present only when they add durable value?
-14. Will the operation create only the intended new skill directory and `SKILL.md`?
+14. Does the reply consist of nothing but the `SKILL.md` content (no code fence, no commentary, no file list)?
 
 If the answer to any of 1–7 is no, do not create the skill.
 
 Do not create a skill that fails checks 9–12.
 
-# Execution rules
+# Output contract
 
-Do not ask for confirmation.
+Do not ask for confirmation. Reply with exactly one of the following two forms, and nothing else.
 
-Perform qualifying creation directly.
+1. The complete content of exactly one new `SKILL.md`, as raw markdown. The reply starts with the `---` frontmatter line and ends with the last line of the skill. Do not wrap it in ``` fences, do not prepend a title, filename, path, or explanation, and do not append commentary.
 
-If multiple independent candidates qualify, create each as a separate skill only when each independently passes the full eligibility test. Prefer fewer, stronger skills.
+2. The single line
 
-# Final response
+Nothing to save.
 
-If no new `SKILL.md` was created, reply exactly:
+as plain text: no backticks, no quotes, no code fence, no other text before or after. Use this form when no candidate passes the eligibility test, when every qualifying candidate is already covered by an existing skill, or when the session contains no substantive work.
 
-`Nothing to save.`
-
-If one or more new skills were created, reply with one concise line per file using only this form:
-
-`Created <skill-name>: <brief reason>`
-
-If a candidate was rejected only because an existing skill already covers it, optionally add one final line:
-
-`Overlap noted: <existing-skill> / <candidate-skill>`
+Never reply with status lines such as `Created <skill-name>`, lists of files, or an `Overlap noted` line: the reply itself is the file content, and nothing else is stored.
 
 Do not include a session recap.
 
 Do not explain the trajectory.
 
 Do not include reasoning about rejected candidates.
-
-Keep the final response concise.

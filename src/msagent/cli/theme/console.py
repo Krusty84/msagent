@@ -43,6 +43,10 @@ class ThemedConsole:
         """Print success message."""
         self.console.print(f"[success]\u2705[/success] {content}")
 
+    def print_info(self, content: str):
+        """Print neutral informational message."""
+        self.console.print(f"[info]\u2139\ufe0f[/info] {content}")
+
     def clear(self):
         """Clear the console."""
         self.console.clear()

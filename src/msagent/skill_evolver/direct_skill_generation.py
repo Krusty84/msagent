@@ -10,9 +10,8 @@ from pathlib import Path
 
 import yaml
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, SystemMessage
-from msagent.utils.compression import calculate_message_tokens
 from msagent.cli.bootstrap.initializer import initializer
-from msagent.cli.handlers.session_history import load_history
+from msagent.cli.handlers.session_history import load_history, trim_history
 from msagent.cli.theme import console, theme
 from msagent.core.logging import get_logger
 from msagent.skills.factory import SkillFactory
@@ -30,6 +29,9 @@ _VARIANT_NAME_PATTERN = re.compile(r"[A-Za-z0-9._-]+")
 _HISTORY_BUDGET_RATIO = 0.6  # part of context window for session reply
 
 _THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+# Output-contract sentinel: the model found nothing worth saving. A stray pair of
+# backticks is tolerated because models tend to copy the phrase as inline code.
+_NOTHING_TO_SAVE = re.compile(r"^\s*`?\s*Nothing to save\.?\s*`?\s*$", re.IGNORECASE)
 
 _REPLAY_SYSTEM_PROMPT = (
     "You are reviewing a COMPLETED agent session. The conversation that follows is a "
@@ -80,8 +82,13 @@ class DirectSkillGenerationHandler:
                 f"({len(messages)} messages)...[/{theme.spinner_color}]"
             ):
                 skill_md = await self._generate_skill_md(messages, template, thread_id)
-                skill_path = await self._write_skill(skill_md, cfg, thread_id)
 
+            if _NOTHING_TO_SAVE.match(skill_md):
+                console.print_info(f"Nothing to save: no durable learning found in thread {thread_id}")
+                console.print("")
+                return
+
+            skill_path = await self._write_skill(skill_md, cfg, thread_id)
             console.print_success(f"Skill draft saved to {skill_path}")
             console.print(f"[muted]Prompt source: {prompt_source}[/muted]")
             console.print("")
@@ -150,22 +157,8 @@ class DirectSkillGenerationHandler:
         """Normalize and trim session messages so they replay as a valid conversation."""
         normalized = [cls._normalize_replay_message(m) for m in messages]
         normalized = cls._drop_trailing_orphan_tool_calls(normalized)
-        if not context_window or context_window <= 0:
-            return normalized, 0
-
-        budget = int(context_window * _HISTORY_BUDGET_RATIO)
-        kept = list(normalized)
-        omitted = 0
-        while len(kept) > 1 and calculate_message_tokens(kept, llm) > budget:
-            drop = max(1, len(kept) // 10)
-            kept = kept[drop:]
-            omitted += drop
-            # Реплей обязан начинаться с реплики пользователя, а не с осиротевшего
-            # результата инструмента или ответа модели.
-            while kept and not isinstance(kept[0], HumanMessage):
-                kept.pop(0)
-                omitted += 1
-        return kept, omitted
+        # head_tail: keep the task statement, cut the middle, keep the newest tail.
+        return trim_history(normalized, llm, context_window, budget_ratio=_HISTORY_BUDGET_RATIO)
 
     @staticmethod
     def _normalize_replay_message(message: AnyMessage) -> AnyMessage:
@@ -238,7 +231,7 @@ class DirectSkillGenerationHandler:
         messages: list[AnyMessage],
         template: str,
         thread_id: str,
-    ) -> str | None:
+    ) -> str:
         """Replay the real session messages to the LLM, then send the instruction."""
         ctx = self.session.context
         llm_config = await initializer.load_llm_config(ctx.model, ctx.working_dir)
@@ -257,7 +250,7 @@ class DirectSkillGenerationHandler:
             instruction = instruction.replace(placeholder, value)
         if omitted:
             instruction = (
-                f"[Note: the {omitted} oldest messages were omitted from the replay "
+                f"[Note: {omitted} messages from the middle of the session were omitted "
                 f"due to context limits.]\n\n{instruction}"
             )
 

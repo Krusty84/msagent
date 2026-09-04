@@ -1,7 +1,7 @@
 # Skill Evolver — Architecture
 
 Component: session-to-skill distillation (`/direct-skill-generation`)
-Status: working draft; reflects branch `extract-session-history-generate-skill-md-and-other` as of 2026-09-02.
+Status: working draft; reflects branch `extract-session-history-generate-skill-md-and-other` as of 2026-09-04.
 
 ## 1. Purpose
 
@@ -129,15 +129,18 @@ of the currently loaded skills), `{agent}`, `{thread_id}`, `{working_dir}`; a le
  _load_config() ── _load_prompt_template()      config + prompt variant
         │
         ▼
- _prepare_replay_messages()     normalize + trim the real message list
-        │
+ _prepare_replay_messages()     normalize the real message list, then
+        │                       trim_history() (session_history.py, head_tail)
         ▼
  llm.ainvoke([SystemMessage(replay guard), *session_messages, HumanMessage(instruction)])
         │                       one direct call via LLMFactory — no graph,
         │                       no tools, no checkpointer, no middleware
         ▼
- post-processing                sanitize → strip code fence → ensure frontmatter
-        │                       → extract/slugify name
+ sanitize → strip code fence    answer matches the "Nothing to save." sentinel
+        │                       → info message, nothing is written, stop
+        ▼
+ post-processing                ensure frontmatter → extract/slugify name
+        │
         ▼
  _write_skill()                 <output>/<category>/<name>/SKILL.md (+ footer),
                                 collision-safe, written by the handler itself
@@ -159,11 +162,19 @@ Normalization (`_prepare_replay_messages` and helpers):
 - **Orphan tool calls** — a trailing `AIMessage` with `tool_calls` that never received
   its `ToolMessage` (interrupted session) is dropped to satisfy the strict
   assistant/tool pairing rules of OpenAI-compatible APIs.
-- **Budget trimming** — the replay is trimmed to `_HISTORY_BUDGET_RATIO` (0.6) of the
-  model's `context_window` (token counting via `utils.compression.
-  calculate_message_tokens`), dropping the oldest messages and re-aligning the head to
-  a `HumanMessage` boundary so the replay always starts with a user turn; the omission
-  count is reported to the model inside the instruction.
+- **Budget trimming** — `trim_history()` (`cli/handlers/session_history.py`) trims the
+  replay to `_HISTORY_BUDGET_RATIO` (0.6) of the model's `context_window` (token
+  counting via `utils.compression.calculate_message_tokens`). The default `head_tail`
+  strategy keeps the first 6 messages (the task statement — the most valuable part for
+  distillation) and cuts from the **middle**, keeping the newest tail; the tail is
+  re-aligned to a `HumanMessage` boundary, and the head is shortened to end on a
+  complete tool exchange so no `tool_call` is left without its `ToolMessage`. Only if
+  the head alone exceeds the budget does the function fall back to the `tail` strategy
+  on the full history (oldest dropped, newest kept; `tail` is also selectable
+  explicitly). The omission count is reported to the model inside the instruction
+  (`[Note: N messages from the middle of the session were omitted due to context
+  limits.]`; in the degenerate fallback case the omitted messages are in fact the
+  oldest ones).
 
 What the analyst model sees natively: user turns, assistant turns with structured
 `tool_calls` (name + arguments), tool results including error payloads, folded past
@@ -221,20 +232,26 @@ platform through an existing, unmodified mechanism.
 
 ## 12. Limitations and future work
 
-- The model cannot inspect or modify the skill library; the current pipeline always
-  creates a **new** skill file. Updating existing skills (the full "evolver" per the
-  review prompt) requires an agentic execution path; the planned mechanism is a
-  **thread fork**: copy the session state into a scratch thread via
+- **Agentic mode is not implemented, and the prompt no longer requires it.** The model
+  cannot inspect or modify the skill library: no skill tools are exposed in this
+  pipeline (the runtime's `fetch_skills` / `get_skill` are read-only anyway), and the
+  prompt's output contract asks for exactly one new `SKILL.md` or the literal
+  `Nothing to save.`. Earlier prompt revisions that demanded `skills_list` /
+  `skill_view` / `skill_manage` calls and in-place updates, renames, or support files
+  were unfulfillable and have been removed; the programmatic `{skill_library}`
+  snapshot is the model's only view of the library. Updating existing skills (the
+  full "evolver") would require an agentic execution path; the candidate mechanism is
+  a **thread fork**: copy the session state into a scratch thread via
   `graph.aupdate_state`, run the instruction through the graph with filesystem tools,
   keep the original thread clean.
-- Output-contract enforcement ("Nothing to save." short-circuit, frontmatter/markup
-  validation with a single corrective retry) is specified but not yet wired into
-  `_generate_skill_md`; today a malformed answer is repaired by the fallback
-  frontmatter instead of being rejected.
+- Output-contract enforcement is partial: the "Nothing to save." short-circuit is
+  wired into `handle()` (sentinel matched case-insensitively, nothing is written), but
+  frontmatter/markup validation with a corrective retry is not — today a malformed
+  answer is repaired by the fallback frontmatter instead of being rejected.
 - Replay excludes the session system prompt and provider-withheld reasoning; image
   content requires a vision model.
 - Replay is token-expensive relative to a text dump; the 0.6 budget ratio and
-  head-trimming are the only mitigations.
+  `head_tail` trimming are the only mitigations.
 - The component config is outside `VersionedConfig`; schema changes will need ad-hoc
   handling until it is migrated into the framework.
 

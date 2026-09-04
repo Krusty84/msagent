@@ -41,7 +41,7 @@ New files:
 | `src/msagent/skill_evolver/direct_skill_generation.py` | `DirectSkillGenerationHandler`: config/prompt resolution, session replay, LLM call, SKILL.md post-processing and write |
 | `src/msagent/cli/handlers/session_history.py` | Shared **read-only** access to persisted thread history: `load_history`, `latest_other_thread`, `trim_history` (reusable by other report-style commands) |
 | `resources/configs/default/config.skill.evolver.yml` | Packaged default component config |
-| `resources/configs/default/skill-evolver/prompts/<variant>/*.md` | Packaged prompt variants (e.g. `default/default_v1.md`) |
+| `resources/configs/default/skill-evolver/prompts/<variant>/*.md` | Packaged prompt variants (e.g. `default/prompt_v1.md`) |
 
 Modified files (integration points):
 
@@ -61,7 +61,7 @@ Modified files (integration points):
 └── skill-evolver/                       # isolated component folder
     └── prompts/
         ├── default/
-        │   └── default_v1.md            # active prompt variant
+        │   └── prompt_v1.md            # active prompt variant
         └── <variant>/…                  # user-defined variants
 ```
 

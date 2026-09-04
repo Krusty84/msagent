@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from msagent.trajectory_recorder.config import load_trajectory_config
+from msagent.trajectory_recorder.reader import extract_message_text, iter_events
 
 
 def resolve_trajectories_dir(*, working_dir: Path | None = None, state_dir: Path | None = None) -> Path:
@@ -50,21 +51,6 @@ def resolve_trajectories_dir(*, working_dir: Path | None = None, state_dir: Path
 
         state_dir = AppPaths.resolve().for_project(working_dir or Path.cwd()).root
     return Path(state_dir) / directory
-
-
-def iter_events(path: Path) -> Iterator[dict[str, Any]]:
-    """Yield events from a trajectory JSONL file, skipping broken lines."""
-    with path.open("r", encoding="utf-8") as handle:
-        for line in handle:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                payload = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(payload, dict):
-                yield payload
 
 
 def find_trajectory_file(trajectories_dir: Path, thread_id: str) -> Path | None:
@@ -132,28 +118,6 @@ def _clip(text: str, limit: int) -> str:
     return f"{text[:limit]}\n... [{len(text) - limit} chars clipped]"
 
 
-def _message_text(serialized_message: dict[str, Any]) -> str:
-    """Extract readable text from a serialized langchain message."""
-    data = serialized_message.get("data", {}) if isinstance(serialized_message, dict) else {}
-    content = data.get("content", "")
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts: list[str] = []
-        for block in content:
-            if isinstance(block, dict):
-                if isinstance(block.get("text"), str):
-                    parts.append(block["text"])
-                elif isinstance(block.get("thinking"), str):
-                    parts.append(f"[thinking] {block['thinking']}")
-                else:
-                    parts.append(f"[{block.get('type', 'block')}]")
-            else:
-                parts.append(str(block))
-        return "\n".join(parts)
-    return str(content)
-
-
 def render_markdown(events: Iterator[dict[str, Any]], *, max_chars: int = 2000) -> str:
     """Render a trajectory as human-readable markdown."""
     lines: list[str] = []
@@ -173,7 +137,7 @@ def render_markdown(events: Iterator[dict[str, Any]], *, max_chars: int = 2000) 
             if user_message:
                 lines.append(f"**User:**\n\n{_clip(str(user_message), max_chars)}\n")
         elif kind == "message.ai":
-            text = _message_text(event.get("message", {}))
+            text = extract_message_text(event.get("message", {}))
             usage = event.get("usage") or {}
             meta: list[str] = []
             if event.get("duration_ms") is not None:
@@ -188,7 +152,10 @@ def render_markdown(events: Iterator[dict[str, Any]], *, max_chars: int = 2000) 
                 args = json.dumps(tool_call.get("args", {}), ensure_ascii=False)
                 lines.append(f"- tool call `{tool_call.get('name')}` → {_clip(args, max_chars)}")
         elif kind == "tool.result":
-            text = _message_text(event.get("message", {})) if event.get("message") else str(event.get("output", ""))
+            if event.get("message"):
+                text = extract_message_text(event["message"])
+            else:
+                text = str(event.get("output", ""))
             duration = f", {event['duration_ms']} ms" if event.get("duration_ms") is not None else ""
             lines.append(
                 f"**Tool `{event.get('name')}`** ({event.get('status', 'ok')}{duration}):\n\n"

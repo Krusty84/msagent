@@ -68,7 +68,10 @@ class TrajectoryCallbackHandler(BaseCallbackHandler):
     # Chain events are one per langgraph node and add little signal; turn
     # boundaries are recorded explicitly by the hooks module instead.
     ignore_chain = True
-    ignore_agent = True
+    # langchain_core dispatches on_tool_start/on_tool_end/on_tool_error under the
+    # ``ignore_agent`` gate (callbacks/manager.py), so agent events must stay
+    # enabled or no tool event is ever recorded.
+    ignore_agent = False
     ignore_retriever = True
     ignore_custom_event = True
 

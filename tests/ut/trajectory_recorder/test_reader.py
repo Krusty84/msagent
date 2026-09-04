@@ -43,7 +43,6 @@ from msagent.trajectory_recorder.reader import (
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SRC_DIR = REPO_ROOT / "src"
 FIXTURES = REPO_ROOT / "tests" / "fixtures" / "trajectories"
-ENVELOPE_KEYS = {"v", "event", "ts", "seq", "rec", "thread_id", "agent"}
 
 
 def _load(name: str) -> Trajectory:
@@ -105,9 +104,13 @@ def test_normal_session_turns() -> None:
         2,
     )
     assert (first.retries, first.compressions) == (0, 0)
-    assert [approval["interrupt_id"] for approval in first.approvals] == ["int-1"]
-    assert not ENVELOPE_KEYS & first.approvals[0].keys()
-    assert first.approvals[0]["decision"] == {"action": "approve"}
+    assert [approval.interrupt_id for approval in first.approvals] == ["int-1"]
+    assert (first.approvals[0].seq, first.approvals[0].run_id) == (16, None)
+    assert first.approvals[0].decision == {"action": "approve"}
+    assert first.approvals[0].request == {
+        "tool": "bash",
+        "args": {"cmd": "rm -rf build"},
+    }
 
     messages = first.ai_messages
     assert [message.span_id for message in messages] == ["s1", "s3", "s5", "s7", "s8"]
@@ -252,7 +255,8 @@ def test_malformed_lines_and_prelude() -> None:
     )
     assert prelude.user_message is None
     assert (prelude.compressions, len(prelude.approvals)) == (1, 1)
-    assert prelude.approvals[0]["interrupt_id"] == "int-0"
+    approval = prelude.approvals[0]
+    assert (approval.interrupt_id, approval.seq, approval.run_id) == ("int-0", 3, None)
     assert (prelude.ai_messages, prelude.tool_calls) == ([], [])
 
     _, run_1, run_2, run_3 = trajectory.turns

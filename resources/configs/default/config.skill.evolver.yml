@@ -2,3 +2,4 @@ active: default                  # prompt variant: a folder under skill-evolver/
 prompt_file: prompt_v1.md        # the prompt for generating a new SKILL.md, if not set will combined all *.md files
 # category: default             # the category (folder in fact) of the created SKILL.md files
 # output_dir: ~/.msagent/skills # output folder for generated SKILL.md files, by default: <working_dir>/skills
+# min_evidence_score: 1.0      # code-computed evidence (features.evidence_score) a session needs before the LLM is called

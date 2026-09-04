@@ -193,3 +193,34 @@ def test_packaged_prompt_matches_single_call_pipeline() -> None:
         "# Final response",
     ):
         assert agentic_marker not in text
+
+
+def test_load_config_default_min_evidence_score() -> None:
+    assert DirectSkillGenerationHandler._load_config().min_evidence_score == 1.0
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected", "warns"),
+    [("2.5", 2.5, False), ("0", 0.0, False), ("abc", 1.0, True), ("-1", 1.0, True)],
+)
+def test_load_config_parses_min_evidence_score(
+    raw: str, expected: float, warns: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    warnings: list[tuple] = []
+
+    def record(*args, **_kwargs) -> None:
+        warnings.append(args)
+
+    monkeypatch.setattr(module.logger, "warning", record)
+    config_dir = module.initializer.app_paths.config_dir
+    config_dir.mkdir(parents=True, exist_ok=True)
+    (config_dir / module.CONFIG_SKILL_EVOLVER_FILE_NAME.name).write_text(
+        f"active: default\nmin_evidence_score: {raw}\n", encoding="utf-8"
+    )
+
+    cfg = DirectSkillGenerationHandler._load_config()
+
+    assert cfg.min_evidence_score == expected
+    assert bool(warnings) is warns
+    if warns:
+        assert "min_evidence_score" in warnings[0][0]

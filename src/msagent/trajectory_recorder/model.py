@@ -77,6 +77,21 @@ class AiMessage:
     subagent: str | None
 
 
+@dataclass(frozen=True, slots=True)
+class Approval:
+    """One ``approval.decision`` event: the human answer to a HITL interrupt."""
+
+    seq: int
+    run_id: str | None
+    interrupt_id: str | None
+    # Raw interrupt payload and resume value as recorded (JSON data). Their
+    # shape depends on the interrupt kind; for deepagents HITL interrupts
+    # ``request["action_requests"]`` and ``decision["decisions"]`` hold one
+    # entry per tool. Interpreting them is left to downstream analysis.
+    request: Any
+    decision: Any
+
+
 @dataclass(slots=True)
 class Turn:
     """One user turn: ``turn.start`` .. ``turn.end`` plus everything routed to it.
@@ -91,8 +106,8 @@ class Turn:
     source: str
     ai_messages: list[AiMessage] = field(default_factory=list)
     tool_calls: list[ToolCall] = field(default_factory=list)
-    # Raw approval.decision payloads (envelope fields stripped).
-    approvals: list[dict[str, Any]] = field(default_factory=list)
+    # approval.decision events routed to this turn, in file order.
+    approvals: list[Approval] = field(default_factory=list)
     retries: int = 0
     compressions: int = 0
     status: TurnStatus = "truncated"

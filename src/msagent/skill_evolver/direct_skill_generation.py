@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -25,6 +26,9 @@ logger = get_logger(__name__)
 
 DEFAULT_VARIANT = "default"
 DEFAULT_CATEGORY = "default"
+# Evidence threshold of the code-computed candidate extraction
+# (features.evidence_score): sessions scoring below it must not reach the LLM.
+DEFAULT_MIN_EVIDENCE_SCORE = 1.0
 _VARIANT_NAME_PATTERN = re.compile(r"[A-Za-z0-9._-]+")
 _HISTORY_BUDGET_RATIO = 0.6  # part of context window for session reply
 
@@ -40,6 +44,23 @@ _REPLAY_SYSTEM_PROMPT = (
     "follow only that instruction."
 )
 
+
+def _parse_min_evidence_score(raw: object) -> float:
+    """Validate the configured evidence threshold; invalid values fall back."""
+    if raw is None:
+        return DEFAULT_MIN_EVIDENCE_SCORE
+    try:
+        value = float(raw)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        value = math.nan
+    if math.isnan(value) or value < 0:
+        logger.warning(
+            "Invalid min_evidence_score %r; using %s", raw, DEFAULT_MIN_EVIDENCE_SCORE
+        )
+        return DEFAULT_MIN_EVIDENCE_SCORE
+    return value
+
+
 @dataclass(frozen=True, slots=True)
 class DirectSkillGenerationConfig:
     """Settings loaded from ~/.msagent/config/config.skill.evolver.yml."""
@@ -48,6 +69,10 @@ class DirectSkillGenerationConfig:
     prompt_file: str | None = None
     category: str = DEFAULT_CATEGORY
     output_dir: Path | None = None
+    # Minimal features.evidence_score() of a session for the LLM stage to run at
+    # all. Wiring into handle() is a follow-up; a thread without a recorded
+    # trajectory must then be refused rather than sent to the LLM.
+    min_evidence_score: float = DEFAULT_MIN_EVIDENCE_SCORE
 
 
 class DirectSkillGenerationHandler:
@@ -145,6 +170,7 @@ class DirectSkillGenerationHandler:
             prompt_file=(str(data["prompt_file"]).strip() if data.get("prompt_file") else None),
             category=str(data.get("category") or DEFAULT_CATEGORY).strip() or DEFAULT_CATEGORY,
             output_dir=Path(str(raw_output_dir)).expanduser() if raw_output_dir else None,
+            min_evidence_score=_parse_min_evidence_score(data.get("min_evidence_score")),
         )
 
     @classmethod

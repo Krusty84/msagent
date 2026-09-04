@@ -1,7 +1,8 @@
 # Trajectory Recorder — Architecture
 
 Status: implemented (`src/msagent/trajectory_recorder/`), schema version 1. Typed reader (`model.py`,
-`reader.py`) and the `ignore_agent` fix landed on 2026-09-04.
+`reader.py`) and the `ignore_agent` fix landed on 2026-09-04; `Turn.approvals` became typed `Approval`
+records (keeping the event `seq`) the same day for the skill-evolver feature extraction.
 
 ## 1. Purpose
 
@@ -83,10 +84,11 @@ tests/ut/trajectory_recorder/
     test_callback.py   tool events delivered through langchain's CallbackManager
                        (the ignore_agent gate) and a recorder -> reader round-trip.
 tests/fixtures/trajectories/*.jsonl
-    Six hand-written schema-v1 files (31-32 lines each): normal session with a subagent,
+    Seven hand-written schema-v1 files (31-35 lines each): normal session with a subagent,
     orphan tool.start, missing turn.end, malformed lines, recorder.limit, tool.result
-    without tool.start. Deterministic by construction — never regenerate them by running
-    an agent.
+    without tool.start, and a skill-evolver "signals" session (error → recovery, retry
+    loop, user correction, denied approval in the real HITL shape). Deterministic by
+    construction — never regenerate them by running an agent.
 ```
 
 ## 4. Runtime data flow
@@ -295,6 +297,7 @@ Model (`msagent.trajectory_recorder.model`, slots dataclasses):
 | `Turn` | `run_id`, `seq_start`, `user_message`, `source`, `ai_messages`, `tool_calls`, `approvals`, `retries`, `compressions`, `status` (`completed` \| `error` \| `truncated`), `error_type`, `duration_ms` |
 | `AiMessage` (frozen) | `seq`, `span_id`, `text`, `tool_call_names`, `usage`, `duration_ms`, `subagent` |
 | `ToolCall` (frozen) | `span_id`, `parent_span_id`, `name`, `args`, `status` (`ok` \| `error` \| `orphan`), `output_text`, `error_type`, `error`, `duration_ms`, `seq_start`, `seq_end`, `subagent` |
+| `Approval` (frozen) | `seq`, `run_id`, `interrupt_id`, `request`, `decision` — the raw interrupt payload and resume value as recorded (deepagents HITL: `request["action_requests"]`, `decision["decisions"]`, one entry per tool) |
 
 Assembly rules:
 
@@ -303,6 +306,7 @@ Assembly rules:
 | Tool spans | `tool.start` and `tool.result` / `tool.error` are joined by `span_id`. A start with no result before EOF is `status="orphan"` (`seq_end=None`) — the signature of an interrupted session, deliberately kept. A result with no start (`capture.tool_starts=false`) yields `args={}` and `seq_start == seq_end`. A `tool.result` whose ToolMessage status is `error` maps to `status="error"` with the message text in `output_text`. |
 | Turns | Opened by `turn.start`, closed by `turn.end` with the same `run_id`; without `turn.end` (Ctrl+C, `recorder.limit`) the turn stays `status="truncated"`. Callback events are routed by their `run_id`, so events written after a `turn.end` still join their turn; events with a null `run_id` go to the most recently started turn, or to a synthetic `__prelude__` turn when none exists; a `run_id` never announced by `turn.start` yields a turn with `source="unknown"`. |
 | Subagents | `subagent` = `graph.checkpoint_ns` without its last segment (`tools:<id>` for everything inside one `task` invocation), `None` for the root agent. |
+| Approvals | `approval.decision` becomes an `Approval` in the turn it is routed to. Its `run_id` is normally null — the turn has already ended when the human answers — so it lands in the most recently started turn while the agent's reaction starts the next (`resume`) turn; `seq` is kept so analysis can cite the event. |
 | Header | `thread_id` / `agent` from the first event's envelope, `started_at` = its `ts`; `model` = `model_display`, else `model`, else the first `turn.start.model`; a second `recorder.attach` (process restart) is ignored. |
 | Skills | `skills_consulted` = `args["name"]` of every `get_skill` call, taken from `tool.start` and from `message.ai` tool calls, first-seen order, deduplicated. |
 | Robustness | Broken JSON lines, non-object lines and objects that are not schema-v1 events are skipped silently and counted in `malformed_lines`. A line with `v != 1`, a `turn.end` with an unknown status, or a file without a single valid event raises `TrajectoryReadError` — the analyzer fails loudly instead of masking bad data. Files are streamed line by line; `llm.request` payloads are never retained. |
@@ -314,7 +318,10 @@ Mapping to the target use cases:
   `approval.decision`).
 - **SKILL.md mining** — iterate `Trajectory.turns` with `status == "completed"`, replay `Turn.ai_messages`
   and `Turn.tool_calls` in `seq` order (subagent steps carry `subagent`), use `skills_consulted` to see
-  which skills the agent already leaned on; successful chains carry exact tool names and `args`.
+  which skills the agent already leaned on; successful chains carry exact tool names and `args`. The
+  code-only detectors of `msagent.skill_evolver.features` (`ARCHITECTURE_skill_evolve.md`, section 14)
+  consume this model. Mind that `seq` restarts under a new `rec` after a process restart, so order
+  across turns by model order (turns in file order, spans in order), not by `seq`.
 - **Knowledge Graph** — nodes from events (turn, LLM call, tool call, subagent invocation, error, approval),
   identities from `(rec, seq)`, `run_id`, `span_id`, `message_id`, `tool_call_id` (inside serialized
   messages); edges from `parent_span_id`, `run_id` and `graph.checkpoint_ns`. Serialized messages are
@@ -362,7 +369,7 @@ Mapping to the target use cases:
 
 Unit tests (`tests/ut/trajectory_recorder/`, run with `pytest tests/ut/trajectory_recorder -q`):
 
-- `test_reader.py` — 18 test functions (26 cases) over the six hand-written fixtures in
+- `test_reader.py` — 18 test functions (26 cases) over the hand-written fixtures in
   `tests/fixtures/trajectories/` plus inline files: header fields, both turn outcomes, all three
   `tool.result` shapes, `tool.error`, string / list / null tool inputs, subagent attribution, retries /
   approvals / compressions, late events after `turn.end`, orphan spans, missing `turn.end` (closed by the

@@ -49,6 +49,7 @@ from typing import Any
 from msagent.trajectory_recorder.model import (
     PRELUDE_RUN_ID,
     AiMessage,
+    Approval,
     ToolCall,
     ToolStatus,
     Trajectory,
@@ -57,7 +58,6 @@ from msagent.trajectory_recorder.model import (
 )
 
 _SUPPORTED_SCHEMA_VERSION = 1
-_ENVELOPE_KEYS = frozenset({"v", "event", "ts", "seq", "rec", "thread_id", "agent"})
 _TURN_END_STATUSES = frozenset({"completed", "error"})
 _SKILL_TOOL = "get_skill"
 
@@ -182,11 +182,6 @@ def _skill_name(tool_name: Any, args: Any) -> str | None:
         return None
     name = args.get("name")
     return name if isinstance(name, str) and name else None
-
-
-def _payload(event: dict[str, Any]) -> dict[str, Any]:
-    """Return the event without its envelope fields."""
-    return {key: value for key, value in event.items() if key not in _ENVELOPE_KEYS}
 
 
 def _optional_str(value: Any) -> str | None:
@@ -467,7 +462,15 @@ class _TrajectoryBuilder:
         self._route(event).turn.retries += 1
 
     def _on_approval(self, event: dict[str, Any]) -> None:
-        self._route(event).turn.approvals.append(_payload(event))
+        self._route(event).turn.approvals.append(
+            Approval(
+                seq=event["seq"],
+                run_id=_optional_str(event.get("run_id")),
+                interrupt_id=_optional_str(event.get("interrupt_id")),
+                request=event.get("request"),
+                decision=event.get("decision"),
+            ),
+        )
 
     def _on_compression(self, event: dict[str, Any]) -> None:
         self._route(event).turn.compressions += 1

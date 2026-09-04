@@ -259,8 +259,9 @@ platform through an existing, unmodified mechanism.
   `head_tail` trimming are the only mitigations.
 - The component config is outside `VersionedConfig`; schema changes will need ad-hoc
   handling until it is migrated into the framework.
-- The evidence gate (`min_evidence_score`, section 14) exists as a library and a config field
-  but is not wired into `handle()`: today every invocation reaches the LLM.
+- The evidence gate (`min_evidence_score`, section 14) and the bundle → classify stage (section 15)
+  exist as libraries but are not wired into `handle()`: today every invocation replays the session
+  to the LLM and asks for a `SKILL.md`.
 
 ## 13. Operational notes
 
@@ -327,7 +328,8 @@ calling the LLM** (a thread without a recorded trajectory is refused, not passed
 `extract_episodes(load_trajectory(path), skill_index=...)` plus
 `mine_cross_session(load_trajectories(dir, agent=ctx.agent, limit=N))` filtered to patterns the
 current thread supports; `evidence_score(...) < cfg.min_evidence_score` → info message and
-return. Feeding the episodes into the prompt (an `{episodes}` placeholder) is a separate step.
+return. Feeding the episodes to the LLM is the bundle → classify stage (section 15); rendering its
+candidates into `SKILL.md` and wiring both stages into `handle()` remain to be done.
 
 Known gaps: files recorded before the `ignore_agent` fix have no `tool.*` events, so the
 detectors see empty `tool_calls` there (no fallback to `AiMessage.tool_call_names` by design);
@@ -340,3 +342,65 @@ is not a procedure), the `skill_evolver_signals.jsonl` fixture end to end, per-f
 counts, the evidence property test, the no-langchain/no-network subprocess probe;
 `features.py` line coverage 99% (`uv run --with pytest-cov pytest tests/ut/skill_evolver
 --cov=msagent.skill_evolver.features`).
+## 15. Evidence bundle and JSON classification (LLM stage, library only)
+
+The replay of the whole session (section 7) is being replaced by two stages that give the model
+only evidence and get a structured answer back. Both are libraries for now: `handle()` still runs
+the replay path.
+
+**`bundle.py`** — `build_evidence_bundle(episodes, trajectories, *, max_chars=30000) -> (text,
+seqs)`. One markdown block per episode, heaviest first (stable for equal weights):
+
+```
+### Episode E1 — approval_denied (weight 1.00, thread thread-si)
+Evidence: seq 12, 14, 16
+Tools: bash, read_file
+Facts:
+- decision: {"decisions": [{"type": "reject"}]}
+Excerpts:
+- seq 12 approval.decision: request={...} decision={...}
+- seq 14 tool.start bash: {"cmd": "..."}
+```
+
+No transcript and no chronology: facts come from the episode, excerpts are whitespace-collapsed
+cuts (300 chars) of the cited events, resolved through a per-thread `seq` index built from the
+typed model (turn starts, tool starts and results, AI messages, approvals). Facts are re-clipped to
+800 chars because `approval_denied.decision` and list-valued facts are unbounded; an episode citing
+many events shows the first six and the last two excerpts, while the `Evidence:` line always lists
+every seq. Over budget, the lightest episodes are dropped whole. The returned set holds every seq
+of a kept block. Loud failures: an episode whose thread is not among the trajectories or whose seq
+does not resolve (episodes and trajectories must be the same data), a non-positive budget, a
+heaviest block that does not fit. Data conditions are tolerated and documented: a thread recorded
+twice keeps its first copy (as `mine_cross_session` does), the reader's synthetic `unknown` and
+prelude turns never shadow the real record at the same seq, and a seq shared by several records
+(recorder restart) renders as `(ambiguous: N records share this seq)` with a warning.
+
+**`classify.py`** — `classify(bundle, valid_seq, llm, template) -> ClassifyResult`, with pydantic
+models `ClassifyResult(verdict: "save" | "nothing", candidates)` and `Candidate(title, rule,
+evidence_refs: list[StrictInt], future_applicability, target{action: create | update | reference,
+existing_skill})`. The prompt is `skill-evolver/prompts/classify/prompt_v1.md`: input
+`{evidence_bundle}` (filled by `classify`) plus `{skill_library}` (filled by the caller), strict
+JSON output, the five-condition eligibility test of the generator prompt without any SKILL.md
+structure or storage rules. The module is stdlib + pydantic: the LLM is duck-typed (`ainvoke`
+over `(role, text)` pairs, the reply read through `.text` / `.content`), so the import-isolation
+probe covers it. Post-processing is code, not prompt:
+
+- the reply is stripped of `<think>` blocks and of a whole-reply fence, parsed with `json.loads`
+  and validated; on failure one corrective retry replays the bad reply as an assistant turn with
+  the error text, and a second failure raises `ValueError`;
+- `StrictInt` refs, because lax validation turns `true` / `"7"` / `4.0` into ints that could pass;
+- a candidate with empty `evidence_refs`, or citing a seq outside `valid_seq`, is dropped with a
+  WARNING naming the title and the offending seqs — the model cannot reference what it has not
+  seen, and this is the only working defence against invented evidence;
+- no candidates left → verdict `nothing`; a model verdict of `nothing` with grounded candidates
+  passes through unchanged (downstream keys on `verdict`).
+
+Guards raise before any LLM call: blank bundle, empty `valid_seq`, template without the
+placeholder. Limitations: refs are flat ints, unique per thread only, so a multi-thread bundle
+cannot tell the same number apart across threads (`(thread, seq)` refs are a follow-up); the
+classify prompt is not reachable through `active` / `prompt_file`, because `_load_prompt_template`
+treats every folder under `prompts/` as a variant, until the wiring adds a stage-aware loader.
+
+Verification: `tests/ut/skill_evolver/test_bundle.py` (ordering, whole-block budget, excerpt
+resolution and clipping, collisions, fixtures end to end) and `test_classify.py` (scripted fake
+LLM: fences, retry, schema violations, dropped candidates, guards, prompt contract, isolation).

@@ -15,6 +15,7 @@ from msagent.cli.bootstrap.initializer import initializer
 from msagent.cli.handlers.session_history import load_history, trim_history
 from msagent.cli.theme import console, theme
 from msagent.core.logging import get_logger
+from msagent.skill_evolver.classify import strip_code_fence, strip_think_blocks
 from msagent.skills.factory import SkillFactory
 
 from msagent.core.constants import (
@@ -32,7 +33,6 @@ DEFAULT_MIN_EVIDENCE_SCORE = 1.0
 _VARIANT_NAME_PATTERN = re.compile(r"[A-Za-z0-9._-]+")
 _HISTORY_BUDGET_RATIO = 0.6  # part of context window for session reply
 
-_THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 # Output-contract sentinel: the model found nothing worth saving. A stray pair of
 # backticks is tolerated because models tend to copy the phrase as inline code.
 _NOTHING_TO_SAVE = re.compile(r"^\s*`?\s*Nothing to save\.?\s*`?\s*$", re.IGNORECASE)
@@ -136,7 +136,7 @@ class DirectSkillGenerationHandler:
     @classmethod
     def _sanitize_model_output(cls, text: str) -> str:
         """Remove reasoning blocks the model may emit around the payload."""
-        return _THINK_BLOCK.sub("", text).strip()
+        return strip_think_blocks(text).strip()
 
     @staticmethod
     def _load_config() -> DirectSkillGenerationConfig:
@@ -322,12 +322,7 @@ class DirectSkillGenerationHandler:
     @staticmethod
     def _strip_code_fence(text: str) -> str:
         """Unwrap the whole answer if the model fenced it despite instructions."""
-        stripped = text.strip()
-        if stripped.startswith("```") and stripped.endswith("```"):
-            first_newline = stripped.find("\n")
-            if first_newline != -1:
-                return stripped[first_newline + 1 : -3].strip()
-        return stripped
+        return strip_code_fence(text)
 
     @staticmethod
     def _ensure_frontmatter(content: str, thread_id: str) -> str:

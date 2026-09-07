@@ -1,4 +1,4 @@
-# Experience graph (P0): cases + execution tree from recorded trajectories.
+# Experience graph (P0–P1.1). Kill switch: MSAGENT_EXGRAPH_DISABLED=1
 version: "1.0"
 enabled: true
 outcome:

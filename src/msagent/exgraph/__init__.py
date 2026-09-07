@@ -18,9 +18,9 @@
 
 """Experience graph built from recorded msAgent trajectories.
 
-P0 materializes the execution layer only: one TaskAnchor per thread, one Case
-per user turn, Steps for tools and LLM calls, optional SkillDoc nodes when a
-skill proposal was generated from that thread.
+P0–P1.1: one TaskAnchor per thread, Cases/Steps from the recorder, SkillDoc
+pointers, evolver Episodes + FIXED_BY + workspace Recipes. The classify
+appendix emits relations only — not a second copy of episodes.
 
 This ``__init__`` imports nothing so ``python -m msagent.exgraph.export`` stays
 free of langchain. Import :mod:`msagent.exgraph.cases` or ``export`` directly.

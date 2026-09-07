@@ -466,7 +466,22 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("-o", "--output", default=None)
     parser.add_argument("--working-dir", default=None)
     parser.add_argument("--state-dir", default=None)
+    parser.add_argument(
+        "--demo",
+        action="store_true",
+        help="Use schema-faithful demo_snapshots (also EXGRAPH_VIZ_DEMO=1)",
+    )
     args = parser.parse_args(argv)
+
+    demo = args.demo or os.environ.get("EXGRAPH_VIZ_DEMO", "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+    dest_early = Path(args.output) if args.output else default_html_path()
+    if demo:
+        snapshots = demo_snapshots()
+        write_growth_html(snapshots, dest_early)
+        print(f"Wrote {dest_early} ({len(snapshots)} demo steps)")
+        return 0
 
     from msagent.trajectory_recorder.reader import load_trajectory
 

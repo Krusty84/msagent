@@ -26,7 +26,7 @@ from pathlib import Path
 from msagent.exgraph.cases import build_from_path
 from msagent.exgraph.enrich import enrich_graph
 from msagent.exgraph.schema import case_id, recipe_id
-from msagent.exgraph.workspace import rebuild_overlay
+from msagent.exgraph.workspace import load_overlay, rebuild_overlay
 from msagent.skill_evolver.features import extract_episodes
 from msagent.trajectory_recorder.reader import load_trajectory
 
@@ -59,6 +59,24 @@ def test_fixed_by_user_correction_and_recovery() -> None:
         for edge in fixes
         if edge.attrs.get("via") == "user_correction"
     )
+
+
+def test_overlay_does_not_instantiate_other_agents(tmp_path: Path) -> None:
+    """Accuracy ``read_file>grep`` must not attach to a Profiler recipe."""
+    signals = load_trajectory(SIGNALS)
+    reuse = load_trajectory(FIXTURES / "exgraph_reuse.jsonl")
+    accuracy = load_trajectory(FIXTURES / "exgraph_accuracy.jsonl")
+    graphs = [
+        build_from_path(SIGNALS),
+        build_from_path(FIXTURES / "exgraph_reuse.jsonl"),
+        build_from_path(FIXTURES / "exgraph_accuracy.jsonl"),
+    ]
+    for graph, traj in zip(graphs, (signals, reuse, accuracy)):
+        enrich_graph(graph, traj)
+    rebuild_overlay([signals, reuse, accuracy], graphs, tmp_path)
+    _nodes, edges = load_overlay(tmp_path)
+    owners = {row.get("src") for row in edges if row.get("type") == "INSTANTIATES"}
+    assert "case:run-a1" not in owners
 
 
 def test_overlay_uses_mine_cross_session(tmp_path: Path) -> None:

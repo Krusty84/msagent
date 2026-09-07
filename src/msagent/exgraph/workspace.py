@@ -60,31 +60,58 @@ def rebuild_overlay(
     graphs: Iterable[ExperienceGraph],
     root: Path,
 ) -> Path:
-    """Replace the overlay from ``mine_cross_session(pool)``. Pool is caller-owned."""
+    """Replace the overlay from ``mine_cross_session``.
+
+    Mining is **per agent**. A Profiler n-gram must not become an Accuracy
+    recipe even when the tool names coincide (``read_file>grep``).
+    The pool itself stays caller-owned; we only partition it.
+    """
     directory = workspace_dir(root)
     directory.mkdir(parents=True, exist_ok=True)
-    recipes = mine_cross_session(pool) if len(pool) >= 2 else []
     nodes: dict[str, dict] = {}
     edges: dict[str, dict] = {}
     by_id = {graph.thread_id: graph for graph in graphs}
+    by_agent: dict[str, list[Trajectory]] = {}
+    for traj in pool:
+        by_agent.setdefault(traj.agent or "", []).append(traj)
+    recipes: list = []
+    for agent_pool in by_agent.values():
+        if len(agent_pool) < 2:
+            continue
+        recipes.extend(mine_cross_session(agent_pool))
     for episode in recipes:
         ngram = list(episode.facts.get("ngram") or episode.tool_sequence)
         nid = recipe_id(ngram)
-        nodes[nid] = Node(
-            id=nid,
-            type="Recipe",
-            attrs={
-                "ngram": ngram,
-                "support": episode.facts.get("support"),
-                "thread_ids": list(episode.facts.get("thread_ids") or []),
-                "features_version": FEATURES_VERSION,
-            },
-        ).to_dict()
-        for thread in episode.facts.get("thread_ids") or []:
+        thread_ids = list(episode.facts.get("thread_ids") or [])
+        existing = nodes.get(nid)
+        if existing is not None:
+            merged = list(dict.fromkeys(list(existing.get("thread_ids") or []) + thread_ids))
+            existing["thread_ids"] = merged
+            existing["support"] = max(int(existing.get("support") or 0), int(episode.facts.get("support") or 0))
+            thread_ids = merged
+        else:
+            nodes[nid] = Node(
+                id=nid,
+                type="Recipe",
+                attrs={
+                    "ngram": ngram,
+                    "support": episode.facts.get("support"),
+                    "thread_ids": thread_ids,
+                    "features_version": FEATURES_VERSION,
+                },
+            ).to_dict()
+        allowed_agents = {
+            by_id[thread].agent
+            for thread in thread_ids
+            if thread in by_id
+        }
+        for thread in thread_ids:
             graph = by_id.get(thread)
             if graph is None:
                 continue
             for record in graph.cases.values():
+                if allowed_agents and record.agent not in allowed_agents:
+                    continue
                 path = [str(name) for name in (record.sigma.get("tool_path") or [])]
                 if _contains_ngram(path, [str(part) for part in ngram]):
                     ident = edge_id("INSTANTIATES", record.id, nid)

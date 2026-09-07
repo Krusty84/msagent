@@ -17,10 +17,11 @@
 # -------------------------------------------------------------------------
 
 
-"""Read-only view of a stored experience graph for Skill Evolver.
+"""Read-only classify appendix: relations Skill Evolver does not already emit.
 
 Does not load trajectories, does not change CROSS_SESSION_LIMIT, and does
-not invent evidence seqs. Missing shards yield an empty string.
+not invent evidence seqs. Episode kinds are omitted on purpose — they
+already appear as evolver bullets. Missing shards yield an empty string.
 """
 
 from __future__ import annotations
@@ -30,6 +31,41 @@ from pathlib import Path
 from msagent.exgraph.sources import resolve_graph_dir
 from msagent.exgraph.store import find_saved_graph, load_graph
 from msagent.exgraph.workspace import load_overlay
+
+APPENDIX_CHAR_CAP = 1000
+
+
+def _clip(text: str, limit: int) -> str:
+    flat = " ".join(str(text).split())
+    if len(flat) <= limit:
+        return flat
+    return flat[: limit - 1] + "…"
+
+
+def _first_error(sigma: dict) -> str:
+    errors = sigma.get("errors") or []
+    if not errors or not isinstance(errors, list):
+        return ""
+    err = errors[0] if isinstance(errors[0], dict) else {}
+    tool = str(err.get("tool") or "")
+    detail = _clip(str(err.get("error") or err.get("type") or ""), 80)
+    if tool and detail:
+        return f" err={tool}: {detail}"
+    if detail:
+        return f" err={detail}"
+    return ""
+
+
+def _cap_lines(lines: list[str], limit: int = APPENDIX_CHAR_CAP) -> str:
+    kept: list[str] = []
+    total = 0
+    for line in lines:
+        extra = len(line) + (1 if kept else 0)
+        if total + extra > limit:
+            break
+        kept.append(line)
+        total += extra
+    return "\n".join(kept)
 
 
 def render_thread_context(
@@ -51,24 +87,32 @@ def render_thread_context(
         graph = load_graph(saved)
     except Exception:
         return ""
+
     lines = ["## Experience graph (stored)", ""]
     lines.append(f"Thread `{graph.thread_id}` agent `{graph.agent}`.")
+
     for record in graph.cases.values():
         tools = " → ".join(str(name) for name in (record.sigma.get("tool_path") or [])[:8])
         extra = f" tools={tools}" if tools else ""
+        extra += _first_error(record.sigma)
         lines.append(f"- Case `{record.run_id}` outcome={record.r}{extra}")
-    episodes = [node for node in graph.nodes.values() if node.type == "Episode"]
-    if episodes:
-        lines.append("Episodes:")
-        for node in episodes:
-            kind = node.attrs.get("kind")
-            weight = node.attrs.get("weight")
-            lines.append(f"- {kind} weight={weight}")
+
     fixes = [edge for edge in graph.edges.values() if edge.type == "FIXED_BY"]
     if fixes:
         lines.append("Corrections:")
         for edge in fixes:
             lines.append(f"- {edge.src} fixed_by {edge.dst} via {edge.attrs.get('via')}")
+
+    skills = [node for node in graph.nodes.values() if node.type == "SkillDoc"]
+    if skills:
+        lines.append("Skills:")
+        for node in skills:
+            name = node.attrs.get("name") or node.id
+            status = node.attrs.get("status") or ""
+            path = node.attrs.get("path") or ""
+            suffix = f" `{path}`" if path else ""
+            lines.append(f"- SkillDoc {status} {name}{suffix}")
+
     try:
         recipe_nodes, recipe_edges = load_overlay(root)
     except Exception:
@@ -84,9 +128,17 @@ def render_thread_context(
             if not node:
                 continue
             ngram = ">".join(str(part) for part in (node.get("ngram") or []))
-            if ngram and ngram not in seen:
-                seen.add(ngram)
-                lines.append(f"- {ngram} support={node.get('support')}")
+            if not ngram or ngram in seen:
+                continue
+            seen.add(ngram)
+            others = [
+                tid
+                for tid in (node.get("thread_ids") or [])
+                if tid and tid != graph.thread_id
+            ]
+            also = f" also={','.join(others)}" if others else ""
+            lines.append(f"- {ngram} support={node.get('support')}{also}")
+
     if len(lines) <= 3:
         return ""
-    return "\n".join(lines)
+    return _cap_lines(lines)

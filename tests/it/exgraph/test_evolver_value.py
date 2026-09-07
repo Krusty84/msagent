@@ -41,7 +41,27 @@ FIXTURES = REPO / "tests" / "fixtures" / "trajectories"
 SIGNALS = FIXTURES / "skill_evolver_signals.jsonl"
 REUSE = FIXTURES / "exgraph_reuse.jsonl"
 ACCURACY = FIXTURES / "exgraph_accuracy.jsonl"
-REPORT = Path("/home/workdir/artifacts/exgraph_evolver_value_report.md")
+
+
+def _writable_output(filename: str, tmp_path: Path, env_name: str) -> Path:
+    """Write side-effect files somewhere the current user can create.
+
+    Never hardcode an authoring-machine path such as ``/home/workdir/artifacts``.
+    Order: env override → repo ``artifacts/`` if that directory already exists
+    and is writable → ``tmp_path``.
+    """
+    override = os.environ.get(env_name)
+    if override:
+        path = Path(override)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return path
+    artifacts = REPO / "artifacts"
+    try:
+        if artifacts.is_dir() and os.access(artifacts, os.W_OK):
+            return artifacts / filename
+    except OSError:
+        pass
+    return tmp_path / filename
 
 
 def _plant_proposal(work: Path, thread_id: str) -> None:
@@ -67,6 +87,8 @@ def _facts(text: str) -> set[str]:
         "outcome=",
         "Recipes instantiated",
         "Experience graph",
+        "SkillDoc",
+        "Episodes:",
         "user_correction",
         "error_recovery",
         "approval_denied",
@@ -139,11 +161,12 @@ def test_graph_appendix_adds_relations_not_new_evidence_seqs(corpus, tmp_path, m
     assert "Experience graph" in enriched
     assert "fixed_by" in enriched
     assert "outcome=" in enriched
-    # Recipes may or may not attach depending on tool_path ngrams; either is
-    # acceptable, but the appendix must exist.
-    assert "Evidence:" in bundle
     extra = enriched[len(bundle) :]
     assert "Evidence:" not in extra
+    assert "Episodes:" not in extra
+    assert "### Episode" not in extra
+    assert "SkillDoc" in extra
+    assert "msprof-kernel-profile" in extra
     # valid_seq is still only evolver episodes
     from msagent.skill_evolver.bundle import build_evidence_bundle as rebuild
 
@@ -247,7 +270,7 @@ def test_write_value_report(corpus, tmp_path, monkeypatch) -> None:
         "- which *case* was corrected by which later case (`FIXED_BY`);",
         "- per-turn outcome and tool path (the recipe grain);",
         "- recipes that only exist when two threads share an n-gram;",
-        "- a SkillDoc link when a proposal cites the thread.",
+        "- a SkillDoc line when a proposal cites the thread (not episode bullets).",
         "",
         "The appendix must not list `Evidence:` seqs, so classify `valid_seq`",
         "stays the evolver set. `CROSS_SESSION_LIMIT` stays 20.",
@@ -262,31 +285,19 @@ def test_write_value_report(corpus, tmp_path, monkeypatch) -> None:
         "```",
         "",
     ]
-    REPORT.parent.mkdir(parents=True, exist_ok=True)
-    REPORT.write_text("\n".join(lines), encoding="utf-8")
+    dest = _writable_output("exgraph_evolver_value_report.md", tmp_path, "EXGRAPH_VALUE_REPORT")
+    dest.write_text("\n".join(lines), encoding="utf-8")
     assert "Experience graph" in enriched
-    assert REPORT.is_file()
+    assert dest.is_file()
     assert len(fixes) >= 1
     assert score >= 0.6 + 0.9  # error_recovery + user_correction at least
-
-
-def _growth_html_path() -> Path:
-    override = os.environ.get("EXGRAPH_GROWTH_HTML")
-    if override:
-        return Path(override)
-    root = Path(__file__).resolve().parents[3]
-    candidate = root / "artifacts" / "exgraph_growth_demo.html"
-    if candidate.parent.is_dir():
-        return candidate
-    return Path(__file__).resolve().parent / "exgraph_growth_demo.html"
 
 
 def test_growth_html_highlights_new_over_trajectories(corpus, tmp_path, monkeypatch) -> None:
     """Boss-demo picture: graph after each trajectory, new nodes/edges marked.
 
-    Prefers live ingest via remember_thread. If the recorder stack is not
-    importable in this tree, falls back to schema-faithful demo_snapshots
-    so the HTML contract is still asserted.
+    Live ingest is the merge gate. ``demo_snapshots`` runs only when
+    ``EXGRAPH_VIZ_DEMO=1``.
     """
     monkeypatch.delenv("MSAGENT_EXGRAPH_DISABLED", raising=False)
     work = tmp_path / "proj"
@@ -302,12 +313,12 @@ def test_growth_html_highlights_new_over_trajectories(corpus, tmp_path, monkeypa
     )
 
     order = [corpus["signals"], corpus["reuse"], corpus["accuracy"]]
-    try:
-        snapshots = snapshots_after_each_trajectory(order, working_dir=work, state_dir=state)
-        live = True
-    except Exception:
+    if os.environ.get("EXGRAPH_VIZ_DEMO", "").strip() in {"1", "true", "yes", "on"}:
         snapshots = demo_snapshots()
         live = False
+    else:
+        snapshots = snapshots_after_each_trajectory(order, working_dir=work, state_dir=state)
+        live = True
 
     assert len(snapshots) == 3
     assert snapshots[0]["counts"]["new_nodes"] >= 1
@@ -320,6 +331,8 @@ def test_growth_html_highlights_new_over_trajectories(corpus, tmp_path, monkeypa
         node.get("thread") == "thread-reuse" for node in snapshots[1]["nodes"]
     )
     assert any(node["type"] == "Recipe" for node in snapshots[1]["nodes"] + snapshots[2]["nodes"])
+    # Accuracy may share generic n-grams (read_file>grep). It must not
+    # instantiate a Profiler bash recipe.
     recipe_owners = {
         edge["src"]
         for snap in snapshots
@@ -327,9 +340,16 @@ def test_growth_html_highlights_new_over_trajectories(corpus, tmp_path, monkeypa
         if edge["type"] == "INSTANTIATES"
     }
     assert "case:run-a1" not in recipe_owners
+    bash_hits = {
+        edge["src"]
+        for snap in snapshots
+        for edge in snap["edges"]
+        if edge["type"] == "INSTANTIATES" and "bash" in str(edge.get("dst") or "")
+    }
+    assert "case:run-a1" not in bash_hits
     assert any(edge["type"] == "FIXED_BY" for edge in snapshots[0]["edges"])
 
-    dest = _growth_html_path()
+    dest = _writable_output("exgraph_growth_demo.html", tmp_path, "EXGRAPH_GROWTH_HTML")
     write_growth_html(snapshots, dest, title="Experience graph growth over trajectories")
     text = dest.read_text(encoding="utf-8")
     assert dest.is_file()

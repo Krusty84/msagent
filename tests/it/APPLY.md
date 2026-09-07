@@ -1,21 +1,7 @@
 # Apply growth-visualization bundle
 
 This zip is the **picture layer**: HTML/JS renderer, CLI `viz` hook, the
-8th intensive test, and the testing procedures doc. Product graph logic
-stays in `exgraph-p1.zip`. Fixtures stay in `exgraph-intensive-tests.zip`.
-
-From the msAgent repository root, on `feature/experience-graph`, after P1
-and the intensive fixtures:
-
-```
-unzip -o /path/to/exgraph-growth-viz.zip
-cp -a exgraph-growth-viz/src/msagent/exgraph/visualize.py src/msagent/exgraph/visualize.py
-cp -a exgraph-growth-viz/src/msagent/exgraph/export.py src/msagent/exgraph/export.py
-cp -a exgraph-growth-viz/tests/it/exgraph/test_evolver_value.py tests/it/exgraph/test_evolver_value.py
-cp exgraph-growth-viz/exgraph_intensive_testing_procedures.md .
-```
-
-`export.py` only adds the `viz` command; build / show / export are unchanged.
+8th intensive test, and the testing procedures doc. 
 
 ## Run
 

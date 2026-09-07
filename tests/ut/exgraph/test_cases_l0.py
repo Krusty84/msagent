@@ -163,6 +163,7 @@ def test_reader_fixture_still_loads() -> None:
     trajectory = load_trajectory(FIXTURES / "normal_subagent.jsonl")
     assert [turn.run_id for turn in trajectory.turns] == ["run-1", "run-2"]
 
+
 def test_skill_doc_from_skills_proposals(tmp_path: Path) -> None:
     work = tmp_path / "proj"
     proposal = work / "skills" / ".proposals" / "thread-normal" / "cluster-tune"
@@ -225,4 +226,3 @@ def test_skill_doc_from_explicit_output_dir(tmp_path: Path) -> None:
     graph = build_from_path(FIXTURES / "normal_subagent.jsonl")
     attach_skill_docs(graph, working_dir=work, output_dir=extra)
     assert skill_proposal_id("thread-normal", "other-skill") in graph.nodes
-

@@ -1,6 +1,6 @@
 # Experience Graph — Architecture
 
-Status: P0 implemented (`src/msagent/exgraph/`), schema version 1.
+Status: P0 + P0.5 SkillDoc alignment (`src/msagent/exgraph/`), schema version 1.
 Branch: `feature/experience-graph`.
 
 ## 1. Purpose
@@ -85,16 +85,32 @@ Storage (derived, never overwrites source JSONL):
 
 Rebuild is upsert-by-id.
 
-## 6. Skills from this trajectory
+## 6. Skills from this trajectory (P0.5)
 
-When `skills.enabled` is true, ingest looks at:
+Skill Evolver owns detectors, classify/render, and `SKILL.md` writing.
+Exgraph only **points** at files that already exist. It does not import
+`skill_evolver` in P0.5 (YAML + path scan only).
 
-- `<working_dir>/.proposals/<thread>/**/SKILL.md` (Skill Evolver drafts)
-- `<working_dir>/skills/**/SKILL.md` whose footer or `provenance.json`
-  lists this `thread_id`
+When `skills.enabled` is true, ingest looks at, fail-open:
 
-Those files become `SkillDoc` nodes linked with `DERIVED_SKILL`. Missing
-folders are normal and silent.
+- `<working_dir>/skills/.proposals/<thread>/**/SKILL.md` — current writer root
+- `<output_dir>/.proposals/<thread>/**/SKILL.md` if `config.skill.evolver.yml`
+  sets `output_dir` (read as YAML from `~/.msagent/config/`)
+- `<working_dir>/.proposals/<thread>/**/SKILL.md` — legacy P0 location
+- `<working_dir>/skills/**/SKILL.md` outside `.proposals` whose
+  `provenance.json.thread_ids` or footer cites this thread (accepted)
+
+Identities (path is an attribute, not the id):
+
+- proposal: `skill:proposal:{thread}:{name}`
+- accepted: `skill:{name}`
+
+A `/skill-review accept` move therefore does not reuse the draft id.
+Both may exist at once; each gets `DERIVED_SKILL` from the Thread and
+TaskAnchor. Missing folders are normal and silent.
+
+P1 will import `skill_evolver.features` / `writer.batch_dir_name` and
+store Recipes in `<state>/exgraph/_workspace/` (overlay). That is not P0.5.
 
 ## 7. What P0 does not do
 

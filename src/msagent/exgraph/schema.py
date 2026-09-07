@@ -70,7 +70,16 @@ def subagent_id(namespace: str) -> str:
 
 
 def skill_doc_id(path: str) -> str:
+    """Legacy path-keyed id. P0.5 prefer skill_proposal_id / skill_accepted_id."""
     return f"skill:{path}"
+
+
+def skill_proposal_id(thread: str, name: str) -> str:
+    return f"skill:proposal:{thread}:{name}"
+
+
+def skill_accepted_id(name: str) -> str:
+    return f"skill:{name}"
 
 
 @dataclass(slots=True)

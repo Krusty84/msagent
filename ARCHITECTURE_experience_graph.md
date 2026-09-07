@@ -151,7 +151,13 @@ python -m msagent.exgraph.export build --all
 python -m msagent.exgraph.export build --path /path/to/thread.jsonl
 python -m msagent.exgraph.export show --thread <id>
 python -m msagent.exgraph.export export --thread <id> --format json
+python -m msagent.exgraph.export viz -o artifacts/exgraph_growth_demo.html
+python -m msagent.exgraph.visualize --fixtures tests/fixtures/trajectories -o artifacts/exgraph_growth_demo.html
 ```
+
+Testing procedures (unit + intensive A/B + growth HTML):
+`exgraph_intensive_testing_procedures.md`.
+Intensive file: `tests/it/exgraph/test_evolver_value.py` (8 tests, no LLM).
 
 Kill switch: `MSAGENT_EXGRAPH_DISABLED=1` (also `true`/`yes`/`on`).
 

@@ -228,7 +228,7 @@ def main(argv: list[str] | None = None) -> int:
         prog="msagent.exgraph.export",
         description="Build and inspect experience graphs from recorded trajectories",
     )
-    parser.add_argument("command", choices=["build", "show", "export"])
+    parser.add_argument("command", choices=["build", "show", "export", "viz"])
     parser.add_argument("-w", "--working-dir", default=None)
     parser.add_argument("--state-dir", default=None)
     parser.add_argument("-t", "--thread", default=None, help="Thread id or unique prefix")
@@ -240,7 +240,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("-f", "--format", choices=["json"], default="json")
     args = parser.parse_args(argv)
 
-    if args.command != "show" and not args.thread and not args.path and not getattr(args, "all", False):
+    if args.command not in {"show", "viz"} and not args.thread and not args.path and not getattr(args, "all", False):
         parser.error("--thread, --path or --all is required")
 
     if args.command == "build":
@@ -249,6 +249,19 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_build(args)
     if args.command == "show":
         return cmd_show(args)
+    if args.command == "viz":
+        from msagent.exgraph.visualize import main as viz_main
+
+        viz_argv: list[str] = []
+        if args.path:
+            viz_argv.extend(["--fixtures", str(Path(args.path))])
+        if args.output:
+            viz_argv.extend(["-o", args.output])
+        if args.working_dir:
+            viz_argv.extend(["--working-dir", args.working_dir])
+        if args.state_dir:
+            viz_argv.extend(["--state-dir", args.state_dir])
+        return viz_main(viz_argv)
     return cmd_export(args)
 
 

@@ -64,11 +64,22 @@ class ExgraphConfig(BaseModel):
 
     @property
     def is_active(self) -> bool:
-        return self.enabled
+        return self.enabled and is_exgraph_enabled()
 
 
 _cache_lock = threading.Lock()
 _cached_config: ExgraphConfig | None = None
+
+
+def _env_disabled() -> bool:
+    return os.environ.get(ENV_DISABLED, "").strip().lower() in _TRUTHY
+
+
+def is_exgraph_enabled(*, force_reload: bool = False) -> bool:
+    """Live kill switch. ``MSAGENT_EXGRAPH_DISABLED=1`` always wins over YAML."""
+    if _env_disabled():
+        return False
+    return load_exgraph_config(force_reload=force_reload).enabled
 
 
 def _candidate_paths() -> list[Path]:
@@ -106,15 +117,19 @@ def _load_from_disk() -> ExgraphConfig:
 
 
 def load_exgraph_config(*, force_reload: bool = False) -> ExgraphConfig:
-    """Load the experience-graph configuration (cached per process)."""
+    """Load the experience-graph configuration (cached per process).
+
+    The env kill switch is applied on every call so flipping
+    ``MSAGENT_EXGRAPH_DISABLED`` does not require a process restart.
+    """
     global _cached_config
     with _cache_lock:
         if _cached_config is None or force_reload:
-            config = _load_from_disk()
-            if os.environ.get(ENV_DISABLED, "").strip().lower() in _TRUTHY:
-                config = config.model_copy(update={"enabled": False})
-            _cached_config = config
-        return _cached_config
+            _cached_config = _load_from_disk()
+        config = _cached_config
+        if _env_disabled():
+            return config.model_copy(update={"enabled": False})
+        return config
 
 
 def reset_config_cache() -> None:

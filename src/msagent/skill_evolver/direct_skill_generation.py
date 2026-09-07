@@ -46,6 +46,7 @@ from msagent.core.constants import (
 )
 from msagent.core.logging import get_logger
 from msagent.skill_evolver.bundle import build_evidence_bundle
+from msagent.skill_evolver.exgraph_context import attach_stored_graph
 from msagent.skill_evolver.classify import (
     classify,
     strip_code_fence,
@@ -252,6 +253,11 @@ class DirectSkillGenerationHandler:
             return
 
         bundle_text, valid_seq = build_evidence_bundle(episodes, [current])
+        work = Path(ctx.working_dir)
+        state = initializer.get_project_paths(work).root
+        bundle_text = attach_stored_graph(
+            bundle_text, current, working_dir=work, state_dir=state,
+        )
         llm_config = await initializer.load_llm_config(ctx.model, ctx.working_dir)
         llm = initializer.llm_factory.create(llm_config)
         library = self._skill_library_snapshot(skills)

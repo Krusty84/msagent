@@ -23,7 +23,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 NodeType = Literal[
     "Thread",
@@ -32,6 +32,8 @@ NodeType = Literal[
     "Step",
     "SubagentRun",
     "SkillDoc",
+    "Episode",
+    "Recipe",
 ]
 EdgeType = Literal[
     "HAS_TASK",
@@ -42,6 +44,9 @@ EdgeType = Literal[
     "DELEGATES",
     "IN_SUBAGENT",
     "DERIVED_SKILL",
+    "HAS_EPISODE",
+    "FIXED_BY",
+    "INSTANTIATES",
 ]
 StepKind = Literal["tool", "llm"]
 Outcome = Literal["golden", "warning", "unknown"]
@@ -80,6 +85,14 @@ def skill_proposal_id(thread: str, name: str) -> str:
 
 def skill_accepted_id(name: str) -> str:
     return f"skill:{name}"
+
+
+def episode_id(thread: str, kind: str, first_seq: int) -> str:
+    return f"episode:{thread}:{kind}:{first_seq}"
+
+
+def recipe_id(ngram: list[str] | tuple[str, ...]) -> str:
+    return "recipe:" + ">".join(ngram)
 
 
 @dataclass(slots=True)

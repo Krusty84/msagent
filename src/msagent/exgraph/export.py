@@ -31,7 +31,8 @@ import sys
 from pathlib import Path
 
 from msagent.exgraph.cases import build_graph
-from msagent.exgraph.config import load_exgraph_config
+from msagent.exgraph.enrich import enrich_graph
+from msagent.exgraph.config import is_exgraph_enabled, load_exgraph_config
 from msagent.exgraph.schema import ExperienceGraph, OutcomeOverride
 from msagent.exgraph.skills import attach_skill_docs
 from msagent.exgraph.sources import load_source_trajectory, resolve_graph_dir
@@ -103,7 +104,7 @@ def _find_saved(root: Path, thread_id: str) -> Path | None:
 
 def cmd_build(args: argparse.Namespace) -> int:
     config = load_exgraph_config()
-    if not config.is_active:
+    if not is_exgraph_enabled():
         print("Experience graph is disabled (config or MSAGENT_EXGRAPH_DISABLED)", file=sys.stderr)
         return 1
     outcome: OutcomeOverride | None = args.outcome
@@ -119,6 +120,7 @@ def cmd_build(args: argparse.Namespace) -> int:
         if args.working_dir:
             working = Path(args.working_dir)
         attach_skill_docs(graph, working_dir=working)
+    enrich_graph(graph, trajectory)
     directory = save_graph(graph, _graph_root(args))
     print(
         f"Built {graph.thread_id}: {len(graph.cases)} cases, "
@@ -126,6 +128,44 @@ def cmd_build(args: argparse.Namespace) -> int:
     )
     return 0
 
+
+
+def cmd_build_all(args: argparse.Namespace) -> int:
+    """Rebuild shards for the evolver's newest-N pool and the recipe overlay.
+
+    Uses ``CROSS_SESSION_LIMIT`` from skill_evolver as the pool size. Does not
+    call ``select_trajectories`` and does not change that function.
+    """
+    from msagent.skill_evolver.direct_skill_generation import CROSS_SESSION_LIMIT
+    from msagent.trajectory_recorder.export import resolve_trajectories_dir
+    from msagent.trajectory_recorder.reader import load_trajectories
+    from msagent.exgraph.workspace import rebuild_overlay
+
+    config = load_exgraph_config()
+    if not is_exgraph_enabled():
+        print("Experience graph is disabled (config or MSAGENT_EXGRAPH_DISABLED)", file=sys.stderr)
+        return 1
+    working = Path(args.working_dir) if args.working_dir else None
+    state = Path(args.state_dir) if args.state_dir else None
+    trajectories_dir = resolve_trajectories_dir(working_dir=working, state_dir=state)
+    pool = load_trajectories(trajectories_dir, limit=CROSS_SESSION_LIMIT)
+    if not pool:
+        print(f"No trajectories in {trajectories_dir}", file=sys.stderr)
+        return 1
+    root = _graph_root(args)
+    graphs = []
+    for trajectory in pool:
+        graph = build_graph(trajectory, outcome=args.outcome, outcome_policy=config.outcome.policy)
+        if config.skills.enabled:
+            work = working or (Path(trajectory.working_dir) if trajectory.working_dir else None)
+            attach_skill_docs(graph, working_dir=work)
+        enrich_graph(graph, trajectory)
+        save_graph(graph, root)
+        graphs.append(graph)
+        print(f"Built {graph.thread_id}: {len(graph.cases)} cases")
+    overlay = rebuild_overlay(pool, graphs, root)
+    print(f"Overlay {overlay} from {len(pool)} trajectories (CROSS_SESSION_LIMIT={CROSS_SESSION_LIMIT})")
+    return 0
 
 def cmd_show(args: argparse.Namespace) -> int:
     if args.path:
@@ -193,15 +233,19 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--state-dir", default=None)
     parser.add_argument("-t", "--thread", default=None, help="Thread id or unique prefix")
     parser.add_argument("--path", default=None, help="Trajectory JSONL path (skips thread lookup)")
+    parser.add_argument("--all", action="store_true", help="Build newest CROSS_SESSION_LIMIT threads + overlay")
+    parser.add_argument("--since", default=None, help="Unused by shard build; reserved")
     parser.add_argument("--outcome", choices=["success", "fail"], default=None)
     parser.add_argument("-o", "--output", default=None)
     parser.add_argument("-f", "--format", choices=["json"], default="json")
     args = parser.parse_args(argv)
 
-    if args.command != "show" and not args.thread and not args.path:
-        parser.error("--thread or --path is required")
+    if args.command != "show" and not args.thread and not args.path and not getattr(args, "all", False):
+        parser.error("--thread, --path or --all is required")
 
     if args.command == "build":
+        if args.all:
+            return cmd_build_all(args)
         return cmd_build(args)
     if args.command == "show":
         return cmd_show(args)

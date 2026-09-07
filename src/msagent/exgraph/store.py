@@ -35,6 +35,8 @@ from msagent.exgraph.schema import (
 )
 
 _UNSAFE_RE = re.compile(r"[^A-Za-z0-9._-]+")
+WORKSPACE_NAME = "_workspace"
+
 
 
 def graph_dirname(agent: str, thread_id: str) -> str:
@@ -168,3 +170,21 @@ def load_graph(directory: Path) -> ExperienceGraph:
         except TypeError:
             continue
     return graph
+
+
+def find_saved_graph(root: Path, thread_id: str) -> Path | None:
+    """Locate ``<agent>_<thread>`` under the graph root; unique prefix allowed."""
+    root = Path(root)
+    if not root.is_dir():
+        return None
+    exact = sorted(
+        path for path in root.iterdir()
+        if path.is_dir() and path.name != WORKSPACE_NAME and path.name.endswith(f"_{thread_id}")
+    )
+    if exact:
+        return exact[0]
+    prefixed = sorted(
+        path for path in root.iterdir()
+        if path.is_dir() and path.name != WORKSPACE_NAME and f"_{thread_id}" in path.name
+    )
+    return prefixed[0] if len(prefixed) == 1 else None

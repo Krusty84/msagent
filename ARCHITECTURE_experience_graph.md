@@ -1,6 +1,6 @@
 # Experience Graph — Architecture
 
-Status: P0 + P0.5 SkillDoc alignment (`src/msagent/exgraph/`), schema version 1.
+Status: P0 + P0.5 + P1 (`src/msagent/exgraph/`), schema version 2.
 Branch: `feature/experience-graph`.
 
 ## 1. Purpose
@@ -33,10 +33,11 @@ A `Thread` node sits above the anchor for provenance (`working_dir`, model).
 ## 3. P0 schema
 
 Nodes: `Thread`, `TaskAnchor`, `Case`, `Step` (`kind=tool|llm`),
-`SubagentRun`, optional `SkillDoc`.
+`SubagentRun`, optional `SkillDoc`, P1 `Episode`, workspace `Recipe`.
 
 Edges: `HAS_TASK`, `CONTAINS`, `NEXT_CASE`, `HAS_STEP`, `PARENT_OF`,
-`DELEGATES`, `IN_SUBAGENT`, `DERIVED_SKILL`.
+`DELEGATES`, `IN_SUBAGENT`, `DERIVED_SKILL`, P1 `HAS_EPISODE`,
+`FIXED_BY`, `INSTANTIATES`.
 
 Case payload (EXG tuple on recorder events):
 
@@ -69,6 +70,9 @@ src/msagent/exgraph/
     sources.py      the only import of trajectory_recorder
     cases.py        deterministic ingest from the typed Trajectory model
     skills.py       optional SkillDoc scan
+    enrich.py       P1: features.extract_episodes + FIXED_BY
+    workspace.py    P1 overlay: features.mine_cross_session
+    consumer.py     read-only markdown for Skill Evolver
     store.py        upsert JSONL under <state>/exgraph/
     export.py       CLI build | show | export
 ```
@@ -76,11 +80,15 @@ src/msagent/exgraph/
 Storage (derived, never overwrites source JSONL):
 
 ```
-<project-state>/exgraph/<agent>_<thread_id>/
+<project-state>/exgraph/<agent>_<thread_id>/     # thread shard
     manifest.json
     nodes.jsonl
     edges.jsonl
     cases.jsonl
+<project-state>/exgraph/_workspace/              # recipes only
+    manifest.json
+    nodes.jsonl
+    edges.jsonl
 ```
 
 Rebuild is upsert-by-id.
@@ -112,21 +120,43 @@ TaskAnchor. Missing folders are normal and silent.
 P1 will import `skill_evolver.features` / `writer.batch_dir_name` and
 store Recipes in `<state>/exgraph/_workspace/` (overlay). That is not P0.5.
 
-## 7. What P0 does not do
+## 7. P1 and Skill Evolver
 
-Recipes, `SIMILAR_TO`, `FIXED_BY`, LLM insights, slash command `/exgraph`,
+Detectors are not copied. `enrich.py` calls `features.extract_episodes`;
+`workspace.py` calls `features.mine_cross_session` on a **caller-supplied**
+pool. The CLI `--all` pool size is the evolver constant
+`CROSS_SESSION_LIMIT` (20). `select_trajectories` / `_gather_evidence` are
+not modified.
+
+After the evolver builds its own episode bundle it calls
+`skill_evolver.exgraph_context.attach_stored_graph`: persist this thread's
+shard (no extra JSONL loads) and append a stored-graph section to the
+classify prompt. Fail-open: any error leaves the bundle unchanged.
+`valid_seq` is still only the evolver episodes, so classify cannot cite
+invented seqs.
+
+## 8. What is still later
+
+`SIMILAR_TO`, Insight-from-candidates, slash command `/exgraph`,
 live retrieval, embeddings, external graph databases.
 
 Documented future hook for online growth: `trajectory_hooks.finish_turn` may
 enqueue `exgraph` ingest behind `online: false`. It must not block the agent.
 
-## 8. CLI
+## 9. CLI
 
 ```
 python -m msagent.exgraph.export build --thread <id> [--outcome success|fail]
+python -m msagent.exgraph.export build --all
 python -m msagent.exgraph.export build --path /path/to/thread.jsonl
 python -m msagent.exgraph.export show --thread <id>
 python -m msagent.exgraph.export export --thread <id> --format json
 ```
 
-Kill switch: `MSAGENT_EXGRAPH_DISABLED=1`.
+Kill switch: `MSAGENT_EXGRAPH_DISABLED=1` (also `true`/`yes`/`on`).
+
+Checked live on every entry — CLI `build`/`build --all`, `remember_thread`,
+the evolver `attach_stored_graph` hook, and the classify appendix. When set,
+no shards or overlay are written and Skill Evolver sees the original bundle.
+YAML `enabled: false` has the same effect. Inspection `show`/`export` of an
+already-saved shard still works.

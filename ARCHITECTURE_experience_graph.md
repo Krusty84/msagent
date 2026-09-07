@@ -21,10 +21,11 @@ Primary consumers:
 ## 2. Task grain (P0 decision)
 
 Interactive msAgent work is a multi-turn investigation. Hashing every user
-message into its own task would split follow-up turns and break `FIXED_BY` in P1.
+message into its own task would split “try this next” follow-ups and break
+`FIXED_BY` in P1.
 
 P0 therefore uses **one `TaskAnchor` per thread** (`task:thread:{thread_id}`).
-Each `Case` still stores that turn's user text as `x`, so a later pass can
+Each `Case` still stores that turn’s user text as `x`, so a later pass can
 split anchors without rebuilding identities of cases or steps.
 
 A `Thread` node sits above the anchor for provenance (`working_dir`, model).

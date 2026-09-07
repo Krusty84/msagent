@@ -24,7 +24,7 @@ from pathlib import Path
 
 from msagent.exgraph.cases import build_from_path, label_outcome
 from msagent.exgraph.export import render_markdown
-from msagent.exgraph.schema import case_id, step_id, task_anchor_id, thread_id
+from msagent.exgraph.schema import case_id, skill_accepted_id, skill_proposal_id, step_id, task_anchor_id, thread_id
 from msagent.exgraph.skills import attach_skill_docs
 from msagent.exgraph.store import load_graph, save_graph
 from msagent.trajectory_recorder.model import Turn
@@ -135,6 +135,8 @@ def test_skill_doc_from_proposals(tmp_path: Path) -> None:
     skills = [node for node in graph.nodes.values() if node.type == "SkillDoc"]
     assert len(skills) == 1
     assert skills[0].attrs["name"] == "cluster-tune"
+    assert skills[0].id == skill_proposal_id("thread-normal", "cluster-tune")
+    assert skills[0].attrs["status"] == "proposal"
     assert any(edge.type == "DERIVED_SKILL" for edge in graph.edges.values())
 
 
@@ -160,3 +162,67 @@ def test_reader_fixture_still_loads() -> None:
     # Guard against accidental coupling: ingest must keep using the public model.
     trajectory = load_trajectory(FIXTURES / "normal_subagent.jsonl")
     assert [turn.run_id for turn in trajectory.turns] == ["run-1", "run-2"]
+
+
+def test_skill_doc_from_skills_proposals(tmp_path: Path) -> None:
+    work = tmp_path / "proj"
+    proposal = work / "skills" / ".proposals" / "thread-normal" / "cluster-tune"
+    proposal.mkdir(parents=True)
+    (proposal / "SKILL.md").write_text("# cluster-tune\n", encoding="utf-8")
+    (proposal / "provenance.json").write_text(
+        '{"thread_ids": ["thread-normal"], "candidates": ["x"]}',
+        encoding="utf-8",
+    )
+    graph = build_from_path(FIXTURES / "normal_subagent.jsonl")
+    attach_skill_docs(graph, working_dir=work)
+    nid = skill_proposal_id("thread-normal", "cluster-tune")
+    assert nid in graph.nodes
+    assert graph.nodes[nid].attrs["status"] == "proposal"
+    assert graph.nodes[nid].attrs["name"] == "cluster-tune"
+
+
+def test_skill_doc_accepted_stable_id(tmp_path: Path) -> None:
+    work = tmp_path / "proj"
+    accepted = work / "skills" / "default" / "cluster-tune"
+    accepted.mkdir(parents=True)
+    (accepted / "SKILL.md").write_text("# cluster-tune\n", encoding="utf-8")
+    (accepted / "provenance.json").write_text(
+        '{"thread_ids": ["thread-normal"], "candidates": ["x"]}',
+        encoding="utf-8",
+    )
+    graph = build_from_path(FIXTURES / "normal_subagent.jsonl")
+    attach_skill_docs(graph, working_dir=work)
+    nid = skill_accepted_id("cluster-tune")
+    assert nid in graph.nodes
+    assert graph.nodes[nid].attrs["status"] == "accepted"
+    assert graph.nodes[nid].attrs["category"] == "default"
+
+
+def test_proposal_and_accepted_are_distinct_nodes(tmp_path: Path) -> None:
+    work = tmp_path / "proj"
+    draft = work / "skills" / ".proposals" / "thread-normal" / "cluster-tune"
+    library = work / "skills" / "default" / "cluster-tune"
+    draft.mkdir(parents=True)
+    library.mkdir(parents=True)
+    for folder in (draft, library):
+        (folder / "SKILL.md").write_text("# cluster-tune\n", encoding="utf-8")
+        (folder / "provenance.json").write_text(
+            '{"thread_ids": ["thread-normal"], "candidates": ["x"]}',
+            encoding="utf-8",
+        )
+    graph = build_from_path(FIXTURES / "normal_subagent.jsonl")
+    attach_skill_docs(graph, working_dir=work)
+    assert skill_proposal_id("thread-normal", "cluster-tune") in graph.nodes
+    assert skill_accepted_id("cluster-tune") in graph.nodes
+
+
+def test_skill_doc_from_explicit_output_dir(tmp_path: Path) -> None:
+    work = tmp_path / "proj"
+    work.mkdir()
+    extra = tmp_path / "alt-skills"
+    proposal = extra / ".proposals" / "thread-normal" / "other-skill"
+    proposal.mkdir(parents=True)
+    (proposal / "SKILL.md").write_text("# other-skill\n", encoding="utf-8")
+    graph = build_from_path(FIXTURES / "normal_subagent.jsonl")
+    attach_skill_docs(graph, working_dir=work, output_dir=extra)
+    assert skill_proposal_id("thread-normal", "other-skill") in graph.nodes

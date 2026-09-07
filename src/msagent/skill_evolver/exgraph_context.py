@@ -16,6 +16,7 @@
 # See the Mulan PSL v2 for more details.
 # -------------------------------------------------------------------------
 
+
 """Fail-open bridge: stored experience graph → classify bundle appendix.
 
 The last-N trajectory pool (``CROSS_SESSION_LIMIT`` / ``select_trajectories``)
@@ -41,8 +42,16 @@ def attach_stored_graph(
     working_dir: Path | None = None,
     state_dir: Path | None = None,
 ) -> str:
-    """Persist this thread's graph (no pool) and append a stored-graph section."""
+    """Persist this thread's graph (no pool) and append a stored-graph section.
+
+    ``MSAGENT_EXGRAPH_DISABLED=1`` (or ``enabled: false`` in config) returns
+    ``bundle_text`` unchanged and writes nothing.
+    """
     try:
+        from msagent.exgraph.config import is_exgraph_enabled
+
+        if not is_exgraph_enabled():
+            return bundle_text
         from msagent.exgraph.enrich import remember_thread
 
         remember_thread(trajectory, working_dir=working_dir, state_dir=state_dir)

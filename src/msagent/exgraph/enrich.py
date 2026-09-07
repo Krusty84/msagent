@@ -158,6 +158,10 @@ def remember_thread(
 
     Does not load other trajectories and does not rebuild the recipe overlay.
     """
+    from msagent.exgraph.config import is_exgraph_enabled
+
+    if not is_exgraph_enabled():
+        raise RuntimeError("experience graph is disabled (MSAGENT_EXGRAPH_DISABLED)")
     from msagent.exgraph.cases import build_graph
     from msagent.exgraph.skills import attach_skill_docs
     from msagent.exgraph.sources import resolve_graph_dir

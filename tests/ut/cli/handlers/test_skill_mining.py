@@ -135,6 +135,26 @@ def _boom(*_args, **_kwargs):
     raise AssertionError("the LLM must not be created")
 
 
+def _episode(kind: str, seqs: list[int], **overrides):
+    """A hand-built episode of thread-x citing ``seqs`` of its file (line == seq)."""
+    from msagent.skill_evolver.features import Episode, EvidenceItem
+    from msagent.trajectory_recorder.model import EvidenceRef
+
+    fields = {
+        "kind": kind,
+        "thread_id": "thread-x",
+        "source": "thread-x.jsonl",
+        "evidence": [
+            EvidenceItem(EvidenceRef(source="thread-x.jsonl", line=seq, seq=seq), "event", True) for seq in seqs
+        ],
+        "tool_sequence": [],
+        "facts": {},
+        "weight": 0.7,
+    }
+    fields.update(overrides)
+    return Episode(**fields)
+
+
 @pytest.fixture
 def mine(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """A mining handler over a tmp project, with the LLM wired to explode."""
@@ -290,16 +310,7 @@ def test_format_evidence_seq_keeps_the_true_count() -> None:
 
 
 def test_episodes_table_shows_markup_literally() -> None:
-    from msagent.skill_evolver.features import Episode
-
-    episode = Episode(
-        kind="retry_loop",
-        thread_id="thread-x",
-        evidence_seq=[1, 2],
-        tool_sequence=["[bold]evil", "read_file"],
-        facts={},
-        weight=0.7,
-    )
+    episode = _episode("retry_loop", [1, 2], tool_sequence=["[bold]evil", "read_file"], weight=0.7)
     stats = module.ThreadStats(
         trajectory=SimpleNamespace(thread_id="thread-x"),
         turns=1,
@@ -317,14 +328,11 @@ def test_episodes_table_shows_markup_literally() -> None:
 
 
 def test_threads_table_explains_a_strong_correction() -> None:
-    from msagent.skill_evolver.features import Episode
-
     # One strong correction scores 0.9, below the default 1.0: the gate
     # admits it by its own rule and the table has to say so.
-    episode = Episode(
-        kind="user_correction",
-        thread_id="thread-x",
-        evidence_seq=[2, 10],
+    episode = _episode(
+        "user_correction",
+        [2, 10],
         tool_sequence=["grep"],
         facts={"strength": "strong"},
         weight=0.9,
@@ -459,6 +467,27 @@ async def test_real_run_below_threshold_creates_no_llm(mine) -> None:
 
     assert mine.spy.error == []
     assert any("Nothing to mine" in line for line in mine.spy.info)
+
+
+@pytest.mark.asyncio
+async def test_real_run_bundle_exclusion_creates_no_llm(mine, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The thread passes the gate, but no episode's required evidence fits the
+    # bundle budget: everything is excluded and the LLM (wired to explode)
+    # is never created.
+    from functools import partial
+
+    from msagent.skill_evolver.bundle import build_evidence_bundle
+
+    _copy(mine.trajectories, SIGNALS, SIGNALS_THREAD)
+    monkeypatch.setattr(module, "build_evidence_bundle", partial(build_evidence_bundle, max_chars=1))
+
+    await mine.handler.handle([])
+
+    assert mine.spy.error == []
+    assert any(line.startswith("Excluded ") for line in mine.spy.warning)
+    assert any("episodes excluded from the bundle; remaining evidence score 0.00" in line for line in mine.spy.info)
+    assert any("1 nothing to save" in line for line in mine.spy.info)
+    assert not (mine.root / "skills").exists()
 
 
 # -------------------------------------------------------------- skill review
@@ -703,7 +732,7 @@ GENERATED_SKILL = "\n".join(
 )
 
 
-def _classify_reply(*, refs: list[int], verdict: str = "save") -> str:
+def _classify_reply(*, refs: list[str], verdict: str = "save") -> str:
     candidate = {
         "title": "Generated source debugging",
         "rule": "Regenerate sources before type checking.",
@@ -760,7 +789,7 @@ def scripted(mine, monkeypatch: pytest.MonkeyPatch):
 @pytest.mark.asyncio
 async def test_real_run_writes_one_proposal_per_thread(scripted) -> None:
     _copy(scripted.trajectories, SIGNALS, SIGNALS_THREAD)
-    scripted.script(_classify_reply(refs=[4, 5]), GENERATED_SKILL)
+    scripted.script(_classify_reply(refs=["ev1", "ev2"]), GENERATED_SKILL)
 
     await scripted.handler.handle([])
 
@@ -779,6 +808,9 @@ async def test_real_run_writes_one_proposal_per_thread(scripted) -> None:
     )
     assert provenance["model"] == "fake-model"
     assert provenance["thread_ids"][0] == SIGNALS_THREAD
+    assert provenance["provenance_version"] == 2
+    assert set(provenance["candidates"][0]["evidence_refs"]) <= set(provenance["evidence_shown"])
+    assert provenance["render_evidence"] == {"c1": ["ev1", "ev2"]}
     assert any("1 proposals" in line for line in scripted.spy.success)
     # The per-thread header names the gate decision that let it through.
     assert any("incidents" in line for line in scripted.spy.info)
@@ -789,7 +821,7 @@ async def test_real_run_writes_one_proposal_per_thread(scripted) -> None:
 @pytest.mark.asyncio
 async def test_real_run_writes_nothing_on_a_nothing_verdict(scripted) -> None:
     _copy(scripted.trajectories, SIGNALS, SIGNALS_THREAD)
-    scripted.script(_classify_reply(refs=[4, 5], verdict="nothing"))
+    scripted.script(_classify_reply(refs=["ev1", "ev2"], verdict="nothing"))
 
     await scripted.handler.handle([])
 
@@ -801,7 +833,7 @@ async def test_real_run_writes_nothing_on_a_nothing_verdict(scripted) -> None:
 async def test_real_run_reports_a_failing_thread_and_continues(scripted) -> None:
     _copy(scripted.trajectories, SIGNALS, SIGNALS_THREAD)
     # One scripted reply, but the pipeline needs two: the render call fails.
-    scripted.script(_classify_reply(refs=[4, 5]))
+    scripted.script(_classify_reply(refs=["ev1", "ev2"]))
 
     await scripted.handler.handle([])
 

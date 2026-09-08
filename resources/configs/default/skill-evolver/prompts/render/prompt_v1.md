@@ -2,14 +2,16 @@
 
 # SKILL.md renderer
 
-You write exactly one `SKILL.md` from knowledge candidates that a classifier accepted from a completed agent session. Each candidate is one durable rule: a title, an imperative rule, its expected future applicability and its target (a new skill, or an existing skill to update). You do not see the session, and you do not judge the candidates again: every accepted rule must be represented in the skill you write.
+You write exactly one `SKILL.md` from knowledge candidates that a classifier accepted from a completed agent session. Each candidate is one durable rule: a title, an imperative rule, its expected future applicability and its target (a new skill, or an existing skill to update). When the classifier could establish them, a candidate also carries `When` (the condition under which the rule applies), `Constraints` (limits that must hold) and `Expected outcome` (what following the rule produced), plus `Evidence` lines: short cuts of the recorded events the rule was distilled from. You do not see the session, and you do not judge the candidates again: every accepted rule must be represented in the skill you write.
 
 # Task
 
 - If the "Existing skill" section below contains a skill, reply with the **full revised text** of that skill: keep its `name`, integrate every rule, keep the durable content that still holds, and migrate the text to the required structure below.
 - Otherwise create a new skill. Choose a durable kebab-case name that describes the task class or decision domain: lowercase letters, digits and hyphens only; never a ticket, PR or issue number, and never a name such as `fix-...`, `debug-...` or `audit-...` that only makes sense for one task.
 - Place every rule where a future agent will act on it: a `## Workflow` step, a `## Constraints` entry, or the `## Inputs` / `## Outputs` sections. Phrase rules positively (what to do), never as folklore about what is broken or must never be used.
-- Do not narrate the session. Do not include seq numbers, thread ids, tickets, file names of one session, or any other one-time detail.
+- Use `When` as the trigger of the step or constraint, `Constraints` as `## Constraints` entries or conditions inside the step, and `Expected outcome` as the completion criterion of the step or in `## Outputs`. A candidate without these fields gets no invented condition: state the rule as given.
+- Use the `Evidence` lines only to make the rule precise — the exact argument, flag or error class involved. Never copy one-time values from them (paths, ids, timestamps, hostnames, outputs of that run).
+- Do not narrate the session. Do not include seq numbers, evidence ids such as `ev3`, thread ids, tickets, file names of one session, or any other one-time detail.
 
 # Accepted candidates
 

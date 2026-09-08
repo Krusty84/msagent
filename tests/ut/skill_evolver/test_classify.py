@@ -36,7 +36,6 @@ from msagent.skill_evolver.classify import (
     BUNDLE_PLACEHOLDER,
     EMPTY_REPLY,
     ClassifyParseError,
-    ClassifyResult,
     classify,
     parse_classify_reply,
     strip_code_fence,
@@ -53,11 +52,12 @@ LOGGER = "msagent.skill_evolver.classify"
 TEMPLATE = "Classify the evidence.\n\n{evidence_bundle}\n\nReply with JSON only."
 BUNDLE = (
     "### Episode E1 — error_recovery (weight 0.60, thread thread-t)\n"
-    "Evidence: seq 4, 5, 8\n"
     "Excerpts:\n"
-    '- seq 4 tool.start bash: {"cmd": "make"}'
+    '- [ev1] tool.start bash: {"cmd": "make"}\n'
+    "- [ev2] tool.error bash (error): exit 2\n"
+    '- [ev3] tool.start bash: {"cmd": "make deps && make"}'
 )
-VALID_SEQ = {4, 5, 8}
+VALID_REFS = {"ev1", "ev2", "ev3"}
 
 
 class _FakeLLM:
@@ -88,7 +88,7 @@ def _candidate(**overrides: Any) -> dict[str, Any]:
     candidate: dict[str, Any] = {
         "title": "Build before test",
         "rule": "Run make before invoking the test suite.",
-        "evidence_refs": [4, 5],
+        "evidence_refs": ["ev1", "ev2"],
         "future_applicability": "high",
         "target": {"action": "create", "existing_skill": None},
     }
@@ -105,19 +105,55 @@ def _reply(*candidates: dict[str, Any], verdict: str = "save") -> str:
 
 @pytest.mark.asyncio
 async def test_valid_json_single_call() -> None:
-    llm = _FakeLLM(_reply(_candidate(evidence_refs=[8, 4, 4])))
+    llm = _FakeLLM(_reply(_candidate(evidence_refs=["ev3", "ev1", "ev1"])))
 
-    result = await classify(BUNDLE, VALID_SEQ, llm, TEMPLATE)
+    result = await classify(BUNDLE, VALID_REFS, llm, TEMPLATE)
 
     assert llm.payloads == [[("human", TEMPLATE.replace(BUNDLE_PLACEHOLDER, BUNDLE))]]
     assert result.verdict == "save"
+    assert result.rejected == []
     (candidate,) = result.candidates
     assert candidate.title == "Build before test"
     assert candidate.rule == "Run make before invoking the test suite."
-    assert candidate.evidence_refs == [4, 8]  # deduplicated and sorted
+    assert candidate.evidence_refs == ["ev3", "ev1"]  # deduplicated, order kept
     assert candidate.future_applicability == "high"
     assert candidate.target.action == "create"
     assert candidate.target.existing_skill is None
+    assert candidate.candidate_id == "c1"
+    # Conditions the model did not state stay empty, never invented.
+    assert (candidate.applies_when, candidate.constraints, candidate.expected_outcome) == (None, [], None)
+
+
+@pytest.mark.asyncio
+async def test_conditions_are_kept_when_the_model_states_them() -> None:
+    stated = _candidate(
+        applies_when="the test suite depends on generated code",
+        constraints=["keep generated files out of version control"],
+        expected_outcome="a green test run without manual generation",
+    )
+    llm = _FakeLLM(_reply(stated))
+
+    (candidate,) = (await classify(BUNDLE, VALID_REFS, llm, TEMPLATE)).candidates
+
+    assert candidate.applies_when == "the test suite depends on generated code"
+    assert candidate.constraints == ["keep generated files out of version control"]
+    assert candidate.expected_outcome == "a green test run without manual generation"
+
+
+@pytest.mark.asyncio
+async def test_candidate_ids_number_kept_candidates_only() -> None:
+    llm = _FakeLLM(
+        _reply(
+            _candidate(title="First", candidate_id="ignored"),
+            _candidate(title="Fabricated", evidence_refs=["ev9"]),
+            _candidate(title="Second"),
+        )
+    )
+
+    result = await classify(BUNDLE, VALID_REFS, llm, TEMPLATE)
+
+    assert [(c.title, c.candidate_id) for c in result.candidates] == [("First", "c1"), ("Second", "c2")]
+    assert [c.title for c, _ in result.rejected] == ["Fabricated"]
 
 
 @pytest.mark.asyncio
@@ -125,7 +161,7 @@ async def test_update_target_keeps_existing_skill() -> None:
     target = {"action": "update", "existing_skill": "profiling-bottleneck"}
     llm = _FakeLLM(_reply(_candidate(target=target)))
 
-    result = await classify(BUNDLE, VALID_SEQ, llm, TEMPLATE)
+    result = await classify(BUNDLE, VALID_REFS, llm, TEMPLATE)
 
     (candidate,) = result.candidates
     assert candidate.target.action == "update"
@@ -145,20 +181,20 @@ async def test_update_target_keeps_existing_skill() -> None:
 async def test_fences_and_think_blocks_are_stripped(wrap: str) -> None:
     llm = _FakeLLM(wrap.replace("{body}", _reply(_candidate())))
 
-    result = await classify(BUNDLE, VALID_SEQ, llm, TEMPLATE)
+    result = await classify(BUNDLE, VALID_REFS, llm, TEMPLATE)
 
     assert len(llm.payloads) == 1
     assert result.verdict == "save"
-    assert [c.evidence_refs for c in result.candidates] == [[4, 5]]
+    assert [c.evidence_refs for c in result.candidates] == [["ev1", "ev2"]]
 
 
 @pytest.mark.asyncio
 async def test_nothing_verdict_without_candidates() -> None:
     llm = _FakeLLM('{"verdict": "nothing", "candidates": []}')
 
-    result = await classify(BUNDLE, VALID_SEQ, llm, TEMPLATE)
+    result = await classify(BUNDLE, VALID_REFS, llm, TEMPLATE)
 
-    assert result == ClassifyResult(verdict="nothing", candidates=[])
+    assert (result.verdict, result.candidates, result.rejected) == ("nothing", [], [])
 
 
 @pytest.mark.asyncio
@@ -175,7 +211,7 @@ async def test_nothing_verdict_without_candidates() -> None:
 async def test_reply_shapes_without_text_property(response: Any) -> None:
     llm = _FakeLLM(response, raw=True)
 
-    result = await classify(BUNDLE, VALID_SEQ, llm, TEMPLATE)
+    result = await classify(BUNDLE, VALID_REFS, llm, TEMPLATE)
 
     assert result.verdict == "save"
     assert len(result.candidates) == 1
@@ -188,7 +224,7 @@ async def test_reply_shapes_without_text_property(response: Any) -> None:
 async def test_invalid_json_then_valid_retries_once_with_error_text() -> None:
     llm = _FakeLLM("not json at all", _reply(_candidate()))
 
-    result = await classify(BUNDLE, VALID_SEQ, llm, TEMPLATE)
+    result = await classify(BUNDLE, VALID_REFS, llm, TEMPLATE)
 
     assert result.verdict == "save"
     assert len(llm.payloads) == 2
@@ -207,7 +243,7 @@ async def test_invalid_twice_raises_after_exactly_two_calls() -> None:
     llm = _FakeLLM("garbage", "still garbage")
 
     with pytest.raises(ValueError, match="after one retry"):
-        await classify(BUNDLE, VALID_SEQ, llm, TEMPLATE)
+        await classify(BUNDLE, VALID_REFS, llm, TEMPLATE)
 
     assert len(llm.payloads) == 2
 
@@ -218,9 +254,9 @@ async def test_invalid_twice_raises_after_exactly_two_calls() -> None:
     [
         ("[]", "must be an object"),
         ('"save"', "must be an object"),
-        (_reply(_candidate(evidence_refs=[True, 4])), "int_type"),
-        (_reply(_candidate(evidence_refs=["7"])), "int_type"),
-        (_reply(_candidate(evidence_refs=[4.0])), "int_type"),
+        (_reply(_candidate(evidence_refs=[True, "ev1"])), "string_type"),
+        (_reply(_candidate(evidence_refs=[4])), "string_type"),
+        (_reply(_candidate(evidence_refs=[4.0])), "string_type"),
         (_reply(_candidate(future_applicability="certain")), "literal_error"),
         (_reply(_candidate(target={"action": "update"})), "requires existing_skill"),
         (
@@ -234,7 +270,7 @@ async def test_invalid_twice_raises_after_exactly_two_calls() -> None:
         "list",
         "string",
         "bool-ref",
-        "str-ref",
+        "int-ref",
         "float-ref",
         "bad-applicability",
         "update-without-skill",
@@ -246,7 +282,7 @@ async def test_invalid_twice_raises_after_exactly_two_calls() -> None:
 async def test_schema_violations_go_through_the_retry(bad_reply: str, fragment: str) -> None:
     llm = _FakeLLM(bad_reply, _reply(_candidate()))
 
-    result = await classify(BUNDLE, VALID_SEQ, llm, TEMPLATE)
+    result = await classify(BUNDLE, VALID_REFS, llm, TEMPLATE)
 
     assert result.verdict == "save"
     assert len(llm.payloads) == 2
@@ -257,7 +293,7 @@ async def test_schema_violations_go_through_the_retry(bad_reply: str, fragment: 
 async def test_blank_first_reply_is_replayed_as_placeholder_turn() -> None:
     llm = _FakeLLM("  \n", _reply(_candidate()))
 
-    result = await classify(BUNDLE, VALID_SEQ, llm, TEMPLATE)
+    result = await classify(BUNDLE, VALID_REFS, llm, TEMPLATE)
 
     assert result.verdict == "save"
     assert llm.payloads[1][1] == ("ai", EMPTY_REPLY)
@@ -267,23 +303,28 @@ async def test_blank_first_reply_is_replayed_as_placeholder_turn() -> None:
 
 
 @pytest.mark.asyncio
-async def test_invented_seq_drops_candidate_with_warning(
+async def test_ref_not_shown_is_rejected_with_reason(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    # "ev41" was never shown (excluded or invented) and "4" is a seq number,
+    # which is not something the model has seen either.
     llm = _FakeLLM(
         _reply(
-            _candidate(title="Grounded", evidence_refs=[4]),
-            _candidate(title="Fabricated", evidence_refs=[4, 41, 99]),
+            _candidate(title="Grounded", evidence_refs=["ev1"]),
+            _candidate(title="Fabricated", evidence_refs=["ev1", "ev41", "4"]),
         )
     )
 
     with caplog.at_level(logging.WARNING, logger=LOGGER):
-        result = await classify(BUNDLE, VALID_SEQ, llm, TEMPLATE)
+        result = await classify(BUNDLE, VALID_REFS, llm, TEMPLATE)
 
     assert result.verdict == "save"
     assert [c.title for c in result.candidates] == ["Grounded"]
-    assert "dropped candidate 'Fabricated': evidence seq not in bundle: [41, 99]" in caplog.text
-    assert "dropped candidate 'Grounded'" not in caplog.text
+    ((rejected, reason),) = result.rejected
+    assert rejected.title == "Fabricated"
+    assert reason == "evidence not shown in the bundle: ['ev41', '4']"
+    assert "rejected candidate 'Fabricated': evidence not shown in the bundle: ['ev41', '4']" in caplog.text
+    assert "rejected candidate 'Grounded'" not in caplog.text
 
 
 @pytest.mark.asyncio
@@ -293,21 +334,23 @@ async def test_empty_evidence_refs_drops_candidate_with_warning(
     llm = _FakeLLM(_reply(_candidate(title="Hollow", evidence_refs=[]), _candidate(title="Solid")))
 
     with caplog.at_level(logging.WARNING, logger=LOGGER):
-        result = await classify(BUNDLE, VALID_SEQ, llm, TEMPLATE)
+        result = await classify(BUNDLE, VALID_REFS, llm, TEMPLATE)
 
     assert [c.title for c in result.candidates] == ["Solid"]
-    assert "dropped candidate 'Hollow': empty evidence_refs" in caplog.text
+    assert [(c.title, reason) for c, reason in result.rejected] == [("Hollow", "empty evidence_refs")]
+    assert "rejected candidate 'Hollow': empty evidence_refs" in caplog.text
 
 
 @pytest.mark.asyncio
 async def test_all_candidates_dropped_forces_nothing(caplog: pytest.LogCaptureFixture) -> None:
-    llm = _FakeLLM(_reply(_candidate(evidence_refs=[]), _candidate(evidence_refs=[123])))
+    llm = _FakeLLM(_reply(_candidate(evidence_refs=[]), _candidate(evidence_refs=["ev123"])))
 
     with caplog.at_level(logging.WARNING, logger=LOGGER):
-        result = await classify(BUNDLE, VALID_SEQ, llm, TEMPLATE)
+        result = await classify(BUNDLE, VALID_REFS, llm, TEMPLATE)
 
-    assert result == ClassifyResult(verdict="nothing", candidates=[])
-    assert caplog.text.count("dropped candidate") == 2
+    assert (result.verdict, result.candidates) == ("nothing", [])
+    assert len(result.rejected) == 2
+    assert caplog.text.count("rejected candidate") == 2
 
 
 @pytest.mark.asyncio
@@ -317,7 +360,7 @@ async def test_nothing_verdict_with_grounded_candidate_passes_through(
     llm = _FakeLLM(_reply(_candidate(), verdict="nothing"))
 
     with caplog.at_level(logging.INFO, logger=LOGGER):
-        result = await classify(BUNDLE, VALID_SEQ, llm, TEMPLATE)
+        result = await classify(BUNDLE, VALID_REFS, llm, TEMPLATE)
 
     assert result.verdict == "nothing"
     assert len(result.candidates) == 1
@@ -329,22 +372,22 @@ async def test_nothing_verdict_with_grounded_candidate_passes_through(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("bundle", "valid_seq", "template", "fragment"),
+    ("bundle", "valid_refs", "template", "fragment"),
     [
-        ("", VALID_SEQ, TEMPLATE, "bundle is empty"),
-        ("  \n", VALID_SEQ, TEMPLATE, "bundle is empty"),
-        (BUNDLE, set(), TEMPLATE, "valid_seq is empty"),
-        (BUNDLE, VALID_SEQ, "no placeholder here", "placeholder"),
+        ("", VALID_REFS, TEMPLATE, "bundle is empty"),
+        ("  \n", VALID_REFS, TEMPLATE, "bundle is empty"),
+        (BUNDLE, set(), TEMPLATE, "valid_refs is empty"),
+        (BUNDLE, VALID_REFS, "no placeholder here", "placeholder"),
     ],
-    ids=["empty-bundle", "blank-bundle", "empty-valid-seq", "no-placeholder"],
+    ids=["empty-bundle", "blank-bundle", "empty-valid-refs", "no-placeholder"],
 )
 async def test_guards_raise_before_calling_the_llm(
-    bundle: str, valid_seq: set[int], template: str, fragment: str
+    bundle: str, valid_refs: set[str], template: str, fragment: str
 ) -> None:
     llm = _FakeLLM(_reply(_candidate()))
 
     with pytest.raises(ValueError, match=fragment):
-        await classify(bundle, valid_seq, llm, template)
+        await classify(bundle, valid_refs, llm, template)
 
     assert llm.payloads == []
 
@@ -386,15 +429,21 @@ def test_parse_classify_reply_errors() -> None:
 def test_packaged_classify_prompt_contract() -> None:
     text = PROMPT_PATH.read_text(encoding="utf-8")
 
-    assert len(text.splitlines()) <= 120
+    assert len(text.splitlines()) <= 140
     assert BUNDLE_PLACEHOLDER in text
     assert "{skill_library}" in text
+    # The model cites fragment ids, never bare event numbers.
+    assert "[ev" in text
+    assert "Evidence: seq" not in text
     for key in (
         '"verdict"',
         '"candidates"',
         '"title"',
         '"rule"',
         '"evidence_refs"',
+        '"applies_when"',
+        '"constraints"',
+        '"expected_outcome"',
         '"future_applicability"',
         '"target"',
         '"action"',

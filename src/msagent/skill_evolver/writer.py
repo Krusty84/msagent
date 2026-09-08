@@ -20,11 +20,22 @@
 
 A rendered and validated skill is written to
 ``<root>/.proposals/<thread>/<name>/SKILL.md`` next to a mandatory
-``provenance.json`` (threads, episodes, candidates, model, prompt variants,
-detector version, timestamp). :meth:`SkillFactory.load_skills` skips
+``provenance.json``. :meth:`SkillFactory.load_skills` skips
 dot-directories, and the extra ``<thread>`` level keeps the files below the
 depth at which the agent's skill sources are enumerated, so a proposal
 reaches the library only when a human moves it. Stdlib only.
+
+Provenance contract (``provenance_version`` PROVENANCE_VERSION) tells three
+things apart for every proposal: the episodes the detectors extracted (with
+their bundle outcome: shown, trimmed, excluded), the fragments the classify
+model was actually shown (``evidence_shown``, id -> file, line, seq, text),
+and what reached the render stage (``render_evidence``, candidate id -> the
+fragment ids quoted to it). Every kept candidate joins its events through
+``evidence_refs`` -> ``evidence_shown``; rejected candidates are listed with
+their reason. Proposals written before this contract carry no
+``provenance_version`` (v1): their ``candidates[].evidence_refs`` are seqs
+and they have no registry; ``/skill-review`` reads only ``category``,
+``thread_ids``, ``generated_at`` and ``target``, which both versions share.
 """
 
 from __future__ import annotations
@@ -36,17 +47,24 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from msagent.skill_evolver.classify import Candidate
-from msagent.skill_evolver.features import FEATURES_VERSION, Episode
+from msagent.skill_evolver.bundle import EvidenceBundle
+from msagent.skill_evolver.classify import Candidate, Classification
+from msagent.skill_evolver.features import FEATURES_VERSION
+from msagent.skill_evolver.render import select_render_evidence
 from msagent.skill_evolver.validator import NAME_RE
 
 PROPOSALS_DIR = ".proposals"
 SKILL_FILE = "SKILL.md"
 PROVENANCE_FILE = "provenance.json"
+# Version of the provenance.json contract; 1 (unversioned) predates the
+# evidence registry, see the module docstring.
+PROVENANCE_VERSION = 2
 REQUIRED_PROVENANCE_KEYS: frozenset[str] = frozenset(
     {
+        "provenance_version",
         "thread_ids",
         "episodes",
+        "evidence_shown",
         "candidates",
         "model",
         "prompt_variants",
@@ -68,8 +86,10 @@ def _utc_now() -> str:
 def build_provenance(
     *,
     thread_ids: Sequence[str],
-    episodes: Sequence[Episode],
-    candidates: Sequence[Candidate],
+    bundle: EvidenceBundle,
+    classification: Classification,
+    rendered: Sequence[Candidate],
+    sources: Mapping[str, str],
     model: str,
     prompt_variants: Mapping[str, str],
     category: str,
@@ -79,28 +99,66 @@ def build_provenance(
     """The JSON record that says where a proposal came from.
 
     ``thread_ids`` keep their order (the analysed thread first) minus
-    duplicates; ``category`` is the library folder a new skill is meant for
-    and ``target`` names the skill an update revises. ``generated_at``
-    defaults to now (UTC, ISO 8601).
+    duplicates; ``sources`` maps every cited file name to its path;
+    ``rendered`` are the kept candidates that reached the render stage;
+    ``category`` is the library folder a new skill is meant for and
+    ``target`` names the skill an update revises. ``generated_at`` defaults
+    to now (UTC, ISO 8601).
     """
     ordered: list[str] = []
     for thread_id in thread_ids:
         if thread_id not in ordered:
             ordered.append(thread_id)
+    shown_ids = {fragment.ref: fragment.id for fragment in bundle.shown.values()}
     episode_rows: list[dict[str, Any]] = []
-    for episode in episodes:
+    for outcome in bundle.episodes:
+        episode = outcome.episode
         episode_rows.append(
             {
                 "kind": episode.kind,
                 "weight": episode.weight,
-                "evidence_seq": list(episode.evidence_seq),
                 "thread_id": episode.thread_id,
+                "source": episode.source,
+                "bundle_status": outcome.status,
+                "evidence": [
+                    {
+                        "id": shown_ids.get(item.ref),
+                        "source": item.ref.source,
+                        "line": item.ref.line,
+                        "seq": item.ref.seq,
+                        "role": item.role,
+                        "required": item.required,
+                    }
+                    for item in episode.evidence
+                ],
             },
         )
+    evidence_shown = {
+        fragment.id: {
+            "source": fragment.ref.source,
+            "line": fragment.ref.line,
+            "seq": fragment.ref.seq,
+            "role": fragment.role,
+            "required": fragment.required,
+            "text": fragment.text,
+        }
+        for fragment in bundle.shown.values()
+    }
     return {
+        "provenance_version": PROVENANCE_VERSION,
         "thread_ids": ordered,
+        "sources": dict(sources),
         "episodes": episode_rows,
-        "candidates": [candidate.model_dump() for candidate in candidates],
+        "evidence_shown": evidence_shown,
+        "candidates": [candidate.model_dump() for candidate in classification.candidates],
+        "candidates_rejected": [
+            {"title": candidate.title, "reason": reason, "evidence_refs": list(candidate.evidence_refs)}
+            for candidate, reason in classification.rejected
+        ],
+        "render_evidence": {
+            candidate.candidate_id: [fragment.id for fragment in select_render_evidence(candidate, bundle.shown)]
+            for candidate in rendered
+        },
         "model": model,
         "prompt_variants": dict(prompt_variants),
         "features_version": FEATURES_VERSION,

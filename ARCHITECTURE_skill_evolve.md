@@ -136,6 +136,14 @@ command fails with a descriptive error naming the folder; there is **no prompt t
 embedded in Python** — the packaged templates are the single source of truth. The
 resolved source path of each stage prompt is recorded in `provenance.json`.
 
+The stage prompts were rewritten **in place** (still `prompt_v1.md`) when the evidence bundle
+switched from seq numbers to `[evN]` fragment ids and the candidate contract gained conditions
+(section 15). Seeding is copy-if-missing (section 4), so a home that already holds
+`~/.msagent/skill-evolver/prompts/{classify,render}/prompt_v1.md` keeps the old text and must be
+refreshed by hand (delete the two files or copy the packaged ones over them). The symptom of a
+stale copy is unmistakable: the model cites seq numbers, `evidence_refs` fails the `StrictStr`
+schema, and after the corrective retry every candidate is rejected as `evidence not shown`.
+
 Placeholders are substituted by code, never with `str.format`, so braces inside the
 data are inert: the classify prompt gets `{skill_library}` (programmatic inventory of
 the loaded skills, filled by the handler) and `{evidence_bundle}` (filled by
@@ -163,25 +171,33 @@ the loaded skills, filled by the handler) and `{evidence_bundle}` (filled by
  _gather_evidence()             load_trajectory(current) + load_trajectories(agent,
         │                       newest CROSS_SESSION_LIMIT=20); extract_episodes over
         │                       the current trajectory (BM25 index of the catalogue)
-        │                       + the mine_cross_session patterns it supports (§14)
+        │                       + the mine_cross_session patterns it supports (§14);
+        │                       returns the supporting trajectories the episodes cite
         ▼
  gate_decision() not passing → print_info with the reason, stop (no LLM call)
         │
         ▼
- build_evidence_bundle(episodes, [current]) → classify(bundle, valid_seq, llm, prompt)
+ build_evidence_bundle(episodes, [current, *supporting]) → EvidenceBundle (§15)
+        │                       excluded episodes (insufficient context) → warning,
+        │                       gate_decision(bundle.kept) again; failing → stop
+        ▼
+ classify(bundle.text, bundle.shown, llm, prompt)
         │                       one direct LLM call (+ one corrective retry inside
-        │                       classify); verdict "nothing" → print_info, stop
+        │                       classify); rejected candidates → warning with the
+        │                       reason; verdict "nothing" → print_info, stop
         ▼
  plan_render()                  reference candidates noted; update targets resolved
         │                       against the catalogue (unknown → dropped, warning);
         │                       one existing skill when every update points at it
         ▼
- render_skill_md()              one LLM call → validate_skill_md(); errors → one
+ render_skill_md(evidence=bundle.shown)
+        │                       one LLM call → validate_skill_md(); errors → one
         │                       corrective call with the error list → validate again;
         │                       still invalid → print_error(list), nothing is written
         ▼
  write_proposal()               <root>/.proposals/<thread>/<name>/{provenance.json,
-                                SKILL.md}; success message + activation hint
+                                SKILL.md} (provenance v2, §16); success message +
+                                activation hint
 ```
 
 The `llm` is `LLMFactory.create(load_llm_config(ctx.model))`, one client for both
@@ -325,6 +341,10 @@ revises); from then on the standard discovery path applies (`SkillFactory` scan 
   as working dir) is not git-ignored; adding it to `.gitignore` is the user's call.
 - The component config is outside `VersionedConfig`; schema changes will need ad-hoc
   handling until it is migrated into the framework.
+- **One fragment per event.** When two episodes cite the same event, the bundle shows it
+  once, with the cut chosen by the heavier episode; the lighter episode's block repeats that
+  line. Its own structured facts (the argument diff, the correction window) are still in its
+  block, so nothing is lost, but a second cut of the same event is not shown.
 
 ## 13. Operational notes
 
@@ -345,20 +365,30 @@ Candidate discovery is code, not prompt. `src/msagent/skill_evolver/features.py`
 the incidents up and `gate_decision()` says whether — and why — a thread reaches the LLM stage.
 The module is stdlib only — importing it must not load langchain, which
 `tests/ut/skill_evolver/test_features.py` enforces in a subprocess — so it runs in tests and CI
-without an LLM, and every detection is reproducible. The rules below are `FEATURES_VERSION` 2.
+without an LLM, and every detection is reproducible. The rules below are `FEATURES_VERSION` 3.
 
 ```python
+@dataclass(frozen=True, slots=True)
+class EvidenceItem:
+    ref: EvidenceRef          # file name + physical line (+ seq for display), see the recorder doc
+    role: str                 # what the event is to the episode: error, fixed_call, correction, ...
+    required: bool            # part of the minimum without which the episode cannot be shown
+    snippet: str | None = None   # content-bearing cut chosen by the detector ("…"-marked);
+                              # None = the bundle shows the head of the recorded event
+
 @dataclass(frozen=True, slots=True)
 class Episode:
     kind: Literal["error_recovery", "user_correction", "retry_loop",
                   "approval_denied", "repeated_procedure", "skill_gap"]
     thread_id: str
-    evidence_seq: list[int]   # seq of the source events; never empty, strictly increasing
+    source: str               # file name of the episode's own thread
+    evidence: list[EvidenceItem]   # never empty, refs unique, >= 1 required, >= 1 of `source`
     tool_sequence: list[str]
-    facts: dict[str, Any]     # JSON-safe, kind-specific details; values clipped to 200 chars
+    facts: dict[str, Any]     # JSON-safe, kind-specific details; text cut to 200 chars, cuts marked
     weight: float             # 0.0..1.0
     anchors: list[str] = field(default_factory=list)   # "<run_id>#<seq>" of the events the
                               # episode is about, never of context events; [] for skill_gap
+    evidence_seq -> list[int] # property: sorted seqs of the own-source items (tables, exgraph)
 
 @dataclass(frozen=True, slots=True)
 class ApprovalVerdict:
@@ -374,7 +404,7 @@ class GateDecision:
     reason: str                    # GATE_NO_EPISODES | GATE_SCORE_REACHED |
                                    # GATE_STRONG_CORRECTION | GATE_SCORE_BELOW
 
-FEATURES_VERSION = 2              # recorded in provenance.json; bumped with any rule or weight
+FEATURES_VERSION = 3              # recorded in provenance.json; bumped with any rule or weight
 DEFAULT_MIN_EVIDENCE_SCORE = 1.0  # gate threshold when the config sets none
 
 extract_episodes(traj, *, skill_index=None) -> list[Episode]    # five per-trajectory detectors
@@ -385,22 +415,34 @@ evidence_score(episodes) -> float                              # sum over incide
 gate_decision(episodes, *, min_score) -> GateDecision          # passes + reason for the LLM gate
 ```
 
-| Kind | Weight | Rule (v2, one private `_detect_<kind>` each) | Facts | Anchors |
+| Kind | Weight | Rule (v3, one private `_detect_<kind>` each) | Facts | Anchors · Evidence (**required** / context) |
 |---|---|---|---|---|
-| `error_recovery` | 0.6 | inside one stream (turn group × subagent, see *Context streams*): a `status == "error"` call followed within `RECOVERY_WINDOW` (5) calls of the same stream by an `ok` call of the same tool; the first such `ok` call decides — a non-empty raw argument diff is the recovery, identical arguments (transient failure, or calls recorded without `tool.start`) are nothing; same-tool `error` / `orphan` calls in between are skipped. A following `dispatch` turn, another subagent and an orphan never recover; two failures sharing one recovery give two episodes (two diffs) | `tool`, `error_type`, `error`, `args_diff` (`added` / `removed` / `changed{old,new}`), `calls_between`, `subagent` | the failed call and the recovery |
-| `user_correction` | 0.9 strong / 0.5 weak | adjacent turn groups: the head of the later group has a `user_message` containing a `STRONG_CORRECTION_MARKERS` or `WEAK_CORRECTION_MARKERS` phrase (ru + en, case-insensitive, at a word start; the negations `нет,` / `no,` only when they open the message) **and** the group's actions differ from the previous group's — a tool added or removed (name sets over all calls of each group, any subagent) or a tool used in both groups whose last call before and first call after differ in normalized arguments. A marker without an observed change is nothing; a head without a user message (`resume`) cannot correct, and the prelude turn is never the corrected group. `strength` is `strong` when a strong marker is present, else `weak` with `WEAK_CORRECTION_WEIGHT` | `correction_text` (≤ 500 chars), `strength`, `markers`, `tools_before`, `tools_after`, `changes{tools_added, tools_removed, args_changed{tool: diff}}`, `run_id_before`, `run_id_after` | the correcting turn (`turn.start` of the head) |
-| `retry_loop` | 0.7 | inside one stream: calls chained by `(tool name, work object)` — a call recorded without arguments has no object and never chains; ≥ `RETRY_MIN_ATTEMPTS` (3) attempts (orphans count) with ≥ 2 distinct normalized argument sets **and** either a failed attempt (`status == "error"`) or variants differing in a `SEARCH_KEYS` key (`pattern` / `query` / `regex`). Reading three files is a fan-out and a parameter sweep that never failed is not a loop | `tool_name`, `work_object`, `attempts`, `reason` (`failed attempt` / `search key varies`), `args_variants` (normalized), `statuses`, `run_id` (turn of the first attempt) | every attempt |
-| `approval_denied` | 1.0 | every `Approval` of a turn is read by `classify_approval(request, decision)`: `denied` is an episode naming the rejected actions only, `approved` is skipped, `unknown` is logged at debug level with its reason and skipped. Context: the calls of the approval's turn with `seq_start > approval.seq` plus the calls of the following turns of the **same group** (the `resume` continuation of an interrupted turn, never the next `dispatch` turn), capped at `DENIAL_CONTEXT_CALLS` (3), any subagent — `Approval` has no subagent field | `interrupt_id`, `run_id`, `tools` (names of the rejected actions), `denied_actions` (`verdict.denied`), `request`, `decision`, `next_tools` | the approval |
-| `skill_gap` | 0.4 | unchanged in v2: domain tools (anything but `get_skill` / `fetch_skills` / `get_tool` / `fetch_tools` / `run_tool`) were used, `skills_consulted` is empty, and the BM25 top hit of *user messages + tool names* against the library scores ≥ `SKILL_GAP_MIN_SCORE` (1.0). A description-fix candidate, not a new skill. Needs a `BM25Index` from `retrieval.py` (stdlib BM25 over `name + description`; the caller builds `SkillDoc(skill.display_name, skill.description)` — `features.py` never imports `msagent.skills`) | `candidate_skill`, `score`, `matched_terms`, `domain_tools` | none — a trajectory-level observation |
-| `repeated_procedure` | 1.0 | `mine_cross_session` only: steps are *segments* of one stream — catalog calls are dropped and a call with `status != "ok"` closes the segment, so a repeated failure is never a procedure; tool-name n-grams (n = 2..5) inside segments present in ≥ `min_support` **distinct** `thread_id`s (`min_support < 2` raises). Only closed patterns are reported — a sub-n-gram with the same support as a longer one is dropped, so a shared five-step procedure is one episode, not ten. The episode cites the first supporting segment. It says that several sessions issued these calls in this order and each returned `ok`, never that the task succeeded | `ngram`, `support`, `thread_ids` | the cited steps |
+| `error_recovery` | 0.6 | inside one stream (turn group × subagent, see *Context streams*): a `status == "error"` call followed within `RECOVERY_WINDOW` (5) calls of the same stream by an `ok` call of the same tool; the first such `ok` call decides — a non-empty raw argument diff is the recovery, identical arguments (transient failure, or calls recorded without `tool.start`) are nothing; same-tool `error` / `orphan` calls in between are skipped. A following `dispatch` turn, another subagent and an orphan never recover; two failures sharing one recovery give two episodes (two diffs) | `tool`, `error_type`, `error` (`error` or, for a `tool.result` with `status=error`, its `output_text`; head 100 + tail 180, the cut marked), `args_diff` (`added` / `removed` clipped; `changed{old,new}` windowed on the change: common prefix and suffix dropped, 60 chars of context each side), `calls_between`, `subagent` | anchors: the failed call and the recovery · **`error`** (end of the failed call, snippet = the error text), **`fixed_call`** (start of the ok call), **`result`** (its end) / `failed_call` (start of the failed call) |
+| `user_correction` | 0.9 strong / 0.5 weak | adjacent turn groups: the head of the later group has a `user_message` containing a `STRONG_CORRECTION_MARKERS` or `WEAK_CORRECTION_MARKERS` phrase (ru + en, case-insensitive, at a word start; the negations `нет,` / `no,` only when they open the message) **and** the group's actions differ from the previous group's — a tool added or removed (name sets over all calls of each group, any subagent) or a tool used in both groups whose last call before and first call after differ in normalized arguments. A marker without an observed change is nothing; a head without a user message (`resume`) cannot correct, and the prelude turn is never the corrected group. `strength` is `strong` when a strong marker is present, else `weak` with `WEAK_CORRECTION_WEIGHT` | `correction_text` (the window of 120 chars each side of the first marker in the whitespace-collapsed message, cuts marked — a long message keeps the phrase, not its head), `strength`, `markers`, `tools_before`, `tools_after`, `changes{tools_added, tools_removed, args_changed{tool: diff}}` (diffs windowed on the change), `run_id_before`, `run_id_after` | anchor: the correcting turn (`turn.start` of the head) · **`correction`** (that turn, snippet = the marker window) / `corrected_turn`, and per tool in `args_changed` a `before_call` and an `after_call` |
+| `retry_loop` | 0.7 | inside one stream: calls chained by `(tool name, work object)` — a call recorded without arguments has no object and never chains; ≥ `RETRY_MIN_ATTEMPTS` (3) attempts (orphans count) with ≥ 2 distinct normalized argument sets **and** either a failed attempt (`status == "error"`) or variants differing in a `SEARCH_KEYS` key (`pattern` / `query` / `regex`). Reading three files is a fan-out and a parameter sweep that never failed is not a loop | `tool_name`, `work_object`, `attempts`, `reason` (`failed attempt` / `search key varies`), `args_variants` (normalized), `statuses`, `run_id` (turn of the first attempt) | anchors: every attempt · **`attempt`** first and last / `attempt` in between |
+| `approval_denied` | 1.0 | every `Approval` of a turn is read by `classify_approval(request, decision)`: `denied` is an episode naming the rejected actions only, `approved` is skipped, `unknown` is logged at debug level with its reason and skipped. Context: the calls of the approval's turn with `seq_start > approval.seq` plus the calls of the following turns of the **same group** (the `resume` continuation of an interrupted turn, never the next `dispatch` turn), capped at `DENIAL_CONTEXT_CALLS` (3), any subagent — `Approval` has no subagent field | `interrupt_id`, `run_id`, `tools` (names of the rejected actions), `denied_actions` (`verdict.denied`), `request`, `decision`, `next_tools` | anchor: the approval · **`approval`** / `next_call` ×≤3 |
+| `skill_gap` | 0.4 | unchanged in v2: domain tools (anything but `get_skill` / `fetch_skills` / `get_tool` / `fetch_tools` / `run_tool`) were used, `skills_consulted` is empty, and the BM25 top hit of *user messages + tool names* against the library scores ≥ `SKILL_GAP_MIN_SCORE` (1.0). A description-fix candidate, not a new skill. Needs a `BM25Index` from `retrieval.py` (stdlib BM25 over `name + description`; the caller builds `SkillDoc(skill.display_name, skill.description)` — `features.py` never imports `msagent.skills`) | `candidate_skill`, `score`, `matched_terms`, `domain_tools` | no anchors — a trajectory-level observation · **`first_call`**, **`user_message`** (the first) / `user_message` (the rest) |
+| `repeated_procedure` | 1.0 | `mine_cross_session` only: steps are *segments* of one stream — catalog calls are dropped and a call with `status != "ok"` closes the segment, so a repeated failure is never a procedure; tool-name n-grams (n = 2..5) inside segments present in ≥ `min_support` **distinct** `thread_id`s (`min_support < 2` raises). Only closed patterns are reported — a sub-n-gram with the same support as a longer one is dropped, so a shared five-step procedure is one episode, not ten. The episode belongs to the first supporting trajectory in input order and cites the steps of that trajectory **and** of the lexicographically first other supporting thread — proof from two sessions — while `support` counts every supporting thread. It says that several sessions issued these calls in this order and each returned `ok`, never that the task succeeded | `ngram`, `support`, `thread_ids` | anchors: the own-thread steps · **`step`** of both threads (the bundle indexes the second trajectory too) |
 
 Design points:
 
-- **Evidence is real.** Every `evidence_seq` entry is a `seq` of the source JSONL and every anchor
-  a `<run_id>#<seq>` of one; a property test over all fixtures checks both. Ordering is model
-  order (turns in file order, spans in order), never trajectory-wide `seq` sorting, because `seq`
-  restarts under a new `rec` after a process restart — which is also why anchors carry the
-  `run_id`. `Turn.approvals` are typed `Approval` records that keep their `seq` for this reason.
+- **Evidence is real and addressable.** Every `EvidenceItem.ref` is the file name and physical
+  line of one source event (`EvidenceRef`, built by `Trajectory.event_ref`; the recorder doc,
+  section 9) and every anchor a `<run_id>#<seq>` of one; a property test over all fixtures
+  re-reads each cited line and checks it holds that very `seq`. `seq` is display only: it
+  restarts under a new `rec` after a process restart, which is why refs carry the line, anchors
+  the `run_id`, and ordering is model order (turns in file order, spans in order), never
+  trajectory-wide `seq` sorting. `Turn.approvals` are typed `Approval` records that keep their
+  `seq` and `line` for this reason.
+- **Required minimum and content-bearing cuts.** Each item has a role and a `required` flag: the
+  required items are the minimum without which the episode is not worth showing (the table
+  above); the evidence bundle trims context items under budget and excludes an episode whose
+  required items do not fit (section 15). Text copied into facts or snippets is cut around what
+  matters and every cut is marked with `…`: `_window` keeps `MARKER_CONTEXT` (120) chars around
+  the correction marker, `_diff_window` drops the common prefix and suffix of a changed argument
+  and keeps `DIFF_CONTEXT` (60) chars around the change, `_clip_edges` keeps the head (100) and
+  tail (180) of an error, `_clip` cuts fact values at `VALUE_LIMIT` (200). Nothing absent is
+  reconstructed: an empty result stays `(no output)` in the bundle, an orphan stays `orphan`.
 - **Context streams.** Calls are compared inside one execution context: a *turn group* — a turn
   plus the adjacent turns with `source == "resume"` that continue it (the `/threads` path: no
   user message, a fresh `run_id`, no link field; adjacency plus `source` is the only continuation
@@ -452,12 +494,12 @@ Design points:
   - `grep` without a `path` has the object `""`: three unrelated searches in one group are a
     `retry_loop`.
   - the denial context is not filtered by subagent (`Approval` has no such field).
-  - `evidence_seq` is still deduplicated by value across a recorder restart (the bundle renders
-    `ambiguous`); anchors are not affected.
+  - the marker window is cut around the *first* marker in table order (strong first), not the
+    earliest in the message; a message with several corrections shows one of them in full.
   - `skill_gap` fires on a single distinctive shared term in libraries of four or more skills
     (unchanged from v1).
   - the user's copy of `prompt_v1.md` under `~/.msagent` is not updated automatically
-    (copy-if-missing seeding, section 4).
+    (copy-if-missing seeding, section 4; the stage prompts changed in place, section 6).
 
 Wiring (`handle()`, section 7): the thread's JSONL is located via
 `export.resolve_trajectories_dir(state_dir=initializer.get_project_paths(ctx.working_dir).root)`
@@ -466,9 +508,11 @@ calling the LLM** (a thread without a recorded trajectory is refused, not passed
 `_collect_episodes(current, others, skill_index=...)` runs `extract_episodes` on the current
 trajectory and `mine_cross_session([current, *others])` over the agent's newest
 `CROSS_SESSION_LIMIT` trajectories; with the current trajectory first in that list, every shared
-pattern it supports cites the current thread's own events, so the kept episodes are exactly those
-with `thread_id == current.thread_id` and the evidence bundle needs only the current trajectory
-(single-thread `valid_seq`, no cross-thread seq ambiguity). `gate_decision(episodes,
+pattern it supports belongs to the current thread, so the kept episodes are exactly those with
+`thread_id == current.thread_id`. Each of them also cites one supporting session's steps;
+`_supporting(others, episodes)` picks the trajectories those refs point at and `_gather_evidence`
+returns them, so the bundle indexes `[current, *supporting]` (refs are unique per file and line,
+so several trajectories in one bundle are unambiguous). `gate_decision(episodes,
 min_score=cfg.min_evidence_score)` decides: a decision that does not pass ends the command with an
 info message naming the reason — `no episodes detected in thread <id>`, or `evidence score X <
 min_evidence_score Y (N episodes, K incidents)` — and no LLM call; otherwise the episodes go to
@@ -489,7 +533,8 @@ is not a procedure), `classify_approval` over every recorded shape, the incident
 (one chain seen by several detectors counts once, a shared turn does not merge incidents, a
 duplicate episode does not change the gate, the four reasons, the strong correction rule), the
 `skill_evolver_signals.jsonl` fixture end to end, per-fixture kind counts, the evidence property
-test (every `evidence_seq` and every anchor resolves to a source event), the no-langchain/
+test (every ref re-reads to a line holding its `seq`, every anchor resolves to a source event),
+the roles and required items of every detector, the windowed cuts, the no-langchain/
 no-network subprocess probe. The 99% line coverage of `features.py` (`uv run --with pytest-cov
 pytest tests/ut/skill_evolver --cov=msagent.skill_evolver.features`) was measured on v1.
 ## 15. Evidence bundle and JSON classification (LLM stage, library only)
@@ -497,62 +542,97 @@ pytest tests/ut/skill_evolver --cov=msagent.skill_evolver.features`) was measure
 The replay of the whole session (section 8) has been replaced by two stages that give the model
 only evidence and get a structured answer back; both are wired into `handle()` (section 7).
 
-**`bundle.py`** — `build_evidence_bundle(episodes, trajectories, *, max_chars=30000) -> (text,
-seqs)`. One markdown block per episode, heaviest first (stable for equal weights):
+**`bundle.py`** — `build_evidence_bundle(episodes, trajectories, *, max_chars=30000) ->
+EvidenceBundle(text, shown, episodes)`. One markdown block per episode, heaviest first (stable
+for equal weights):
 
 ```
-### Episode E1 — approval_denied (weight 1.00, thread thread-si)
-Evidence: seq 12, 14, 16
-Tools: bash, read_file
+### Episode E1 — error_recovery (weight 0.60, thread thread-s)
+Tools: bash, bash, bash
 Facts:
-- decision: {"decisions": [{"type": "reject"}]}
+- error: "msprof: unknown option --collect"
+- args_diff: {"changed": {"cmd": {"new": "msprof --application train.py --output ./prof", "old": "msprof --collect train.py"}}}
 Excerpts:
-- seq 12 approval.decision: request={...} decision={...}
-- seq 14 tool.start bash: {"cmd": "..."}
+- [ev10] tool.error bash (error): msprof: unknown option --collect
+- [ev11] tool.result bash (ok): profiling done
+- [ev6] tool.start bash: {"cmd": "msprof --application train.py --output ./prof"}
+- [ev8] tool.start bash: {"cmd": "msprof --collect train.py"}
 ```
 
 No transcript and no chronology: facts come from the episode, excerpts are whitespace-collapsed
-cuts (300 chars) of the cited events, resolved through a per-thread `seq` index built from the
-typed model (turn starts, tool starts and results, AI messages, approvals). Facts are re-clipped to
-800 chars because `approval_denied.decision` and list-valued facts are unbounded; an episode citing
-many events shows the first six and the last two excerpts, while the `Evidence:` line always lists
-every seq. Over budget, the lightest episodes are dropped whole. The returned set holds every seq
-of a kept block. Loud failures: an episode whose thread is not among the trajectories or whose seq
-does not resolve (episodes and trajectories must be the same data), a non-positive budget, a
-heaviest block that does not fit. Data conditions are tolerated and documented: a thread recorded
-twice keeps its first copy (as `mine_cross_session` does), the reader's synthetic `unknown` and
-prelude turns never shadow the real record at the same seq, and a seq shared by several records
-(recorder restart) renders as `(ambiguous: N records share this seq)` with a warning.
+cuts (300 chars) of the cited events — the detector's snippet when it chose one (the marker
+window of a correction, the head and tail of an error), else the head of the recorded event —
+resolved through an index keyed by `EvidenceRef` built from the typed model of every trajectory
+passed in (turn starts, tool starts and results, AI messages, approvals). A `tool.result` with
+`status=error` renders its `output_text` as the error. Facts are re-clipped to 800 chars because
+`approval_denied.decision` and list-valued facts are unbounded. A `repeated_procedure` block adds
+`Support: N threads (counted by code); excerpts from 2 of them`, and excerpts of another
+trajectory carry `(thread <id>)`.
 
-**`classify.py`** — `classify(bundle, valid_seq, llm, template) -> ClassifyResult`, with pydantic
-models `ClassifyResult(verdict: "save" | "nothing", candidates)` and `Candidate(title, rule,
-evidence_refs: list[StrictInt], future_applicability, target{action: create | update | reference,
-existing_skill})`. The prompt is `skill-evolver/prompts/classify/prompt_v1.md`: input
-`{evidence_bundle}` (filled by `classify`) plus `{skill_library}` (filled by the caller), strict
-JSON output, the five-condition eligibility test of the generator prompt without any SKILL.md
-structure or storage rules. The module is stdlib + pydantic: the LLM is duck-typed (`ainvoke`
-over `(role, text)` pairs, the reply read through `.text` / `.content`), so the import-isolation
-probe covers it. Post-processing is code, not prompt:
+Every excerpt line carries a bundle-local id `[evN]`, assigned in order of first appearance when
+its block is committed; one event has one id and one text across blocks (a later block citing an
+event already shown repeats the line). `shown` is the registry of exactly those fragments — id,
+`EvidenceRef`, role, `required`, text — and `episodes` the outcome of every input episode:
+
+- `shown` — the whole block fitted;
+- `trimmed` — only the required excerpts fitted; the context ones are replaced by
+  `- … N more events not shown`, which is not citable;
+- `excluded` — even the required excerpts did not fit (insufficient context): the block is
+  absent, the episode's weight must not carry the thread to the LLM, and scanning continues with
+  lighter episodes. `EvidenceBundle.kept` lists the shown and trimmed episodes; both handlers
+  run `gate_decision(bundle.kept)` again when anything was excluded and stop before creating an
+  LLM if it fails. A bare event number is never citable, the `Evidence: seq` line is gone, and
+  nothing raises for size — an empty bundle is a legitimate outcome.
+
+Loud failures: an episode whose source is not among the trajectories or whose ref does not
+resolve (episodes and trajectories must be the same data), a non-positive budget. Data conditions
+are tolerated and documented: a source seen twice keeps its first copy (as `mine_cross_session`
+does), the reader's synthetic `unknown` and prelude turns never shadow the real record at the
+same line, and a recorder restart that repeats a `seq` yields two refs and two fragments. The
+stored experience graph appendix (`exgraph_context.attach_stored_graph`) is appended to
+`bundle.text` after budgeting and carries no ids: context, never citable evidence, and not
+recorded in provenance.
+
+**`classify.py`** — `classify(bundle_text, valid_refs, llm, template) -> Classification`, with
+pydantic reply models `ClassifyResult(verdict: "save" | "nothing", candidates)` and
+`Candidate(title, rule, evidence_refs: list[StrictStr], applies_when: str | None, constraints:
+list[str], expected_outcome: str | None, future_applicability, target{action: create | update |
+reference, existing_skill}, candidate_id)`, and the frozen `Classification(verdict, candidates,
+rejected: list[tuple[Candidate, str]])`. The prompt is `skill-evolver/prompts/classify/prompt_v1.md`:
+input `{evidence_bundle}` (filled by `classify`) plus `{skill_library}` (filled by the caller),
+strict JSON output, the five-condition eligibility test of the generator prompt without any
+SKILL.md structure or storage rules; it tells the model that only `[evN]` lines are citable and
+that the conditions of a rule (`applies_when`, `constraints`, `expected_outcome`) are stated only
+when the evidence shows them — `null` / `[]` otherwise, never invented. The module is stdlib +
+pydantic: the LLM is duck-typed (`ainvoke` over `(role, text)` pairs, the reply read through
+`.text` / `.content`), so the import-isolation probe covers it. Post-processing is code, not
+prompt:
 
 - the reply is stripped of `<think>` blocks and of a whole-reply fence, parsed with `json.loads`
   and validated; on failure one corrective retry replays the bad reply as an assistant turn with
   the error text, and a second failure raises `ValueError`;
-- `StrictInt` refs, because lax validation turns `true` / `"7"` / `4.0` into ints that could pass;
-- a candidate with empty `evidence_refs`, or citing a seq outside `valid_seq`, is dropped with a
-  WARNING naming the title and the offending seqs — the model cannot reference what it has not
-  seen, and this is the only working defence against invented evidence;
+- `StrictStr` refs, so a seq number, a boolean or a float never passes as a citation;
+- a candidate with empty `evidence_refs` is rejected with `empty evidence_refs`; one citing any id
+  outside `valid_refs` (an excluded event, a seq, an invention) with `evidence not shown in the
+  bundle: [...]` — rejected candidates are returned in `Classification.rejected`, printed by the
+  handlers as `Rejected '<title>': <reason>` and recorded in provenance; never repaired;
+- kept candidates get `candidate_id` `c1`, `c2`, … in reply order (the join key of render and
+  provenance; titles can collide), their refs deduplicated in the model's order;
 - no candidates left → verdict `nothing`; a model verdict of `nothing` with grounded candidates
   passes through unchanged (downstream keys on `verdict`).
 
-Guards raise before any LLM call: blank bundle, empty `valid_seq`, template without the
-placeholder. Limitations: refs are flat ints, unique per thread only, so a multi-thread bundle
-cannot tell the same number apart across threads (`(thread, seq)` refs are a follow-up; the
-handler avoids the problem by bundling the current trajectory only, section 14); the classify
-prompt is resolved by the stage-aware loader (`prompts/classify/<prompt_file>`, section 6).
+Guards raise before any LLM call: blank bundle, empty `valid_refs`, template without the
+placeholder. Refs are unique per file and line, so a bundle may mix trajectories (a shared
+procedure's second session); the classify prompt is resolved by the stage-aware loader
+(`prompts/classify/<prompt_file>`, section 6).
 
-Verification: `tests/ut/skill_evolver/test_bundle.py` (ordering, whole-block budget, excerpt
-resolution and clipping, collisions, fixtures end to end) and `test_classify.py` (scripted fake
-LLM: fences, retry, schema violations, dropped candidates, guards, prompt contract, isolation).
+Verification: `tests/ut/skill_evolver/test_bundle.py` (ordering, trim-then-exclude budget,
+scanning past an excluded episode, one id per event, excerpt resolution and clipping, the
+correction window and the argument diff reaching the text, an error in `tool.result.output_text`,
+distinct refs after a recorder restart, every shown fragment re-read from its physical line across
+all fixtures including `malformed_lines.jsonl`, cross-session blocks) and `test_classify.py`
+(scripted fake LLM: fences, retry, schema violations, rejection reasons, candidate ids, optional
+conditions, guards, prompt contract, isolation).
 
 ## 16. Render, validation and proposals
 
@@ -565,16 +645,27 @@ candidates must name a catalogue skill by display name or by a bare name that is
 categories, otherwise they are dropped with a WARNING (never silently turned into `create`); the
 existing skill is passed to the model only when every kept update points at the same skill, several
 targets produce a console note and a new skill. `render_skill_md(candidates, *, llm, template,
-existing_skill, expected_name, taken_names) -> RenderResult(content, validation, calls)` fills
-`{candidates}` (title, rule, applicability, target — never evidence seqs) and `{existing_skill}`
-(formatted text or "None. Create a new skill.") in one regex pass, calls the duck-typed LLM,
+existing_skill, expected_name, taken_names, evidence) -> RenderResult(content, validation, calls)`
+fills `{candidates}` and `{existing_skill}` (formatted text or "None. Create a new skill.") in one
+regex pass, calls the duck-typed LLM,
 strips `<think>` blocks and a whole-reply fence, normalises line endings and validates. On errors
 the model gets exactly one corrective turn (`("ai", bad reply)` + the error list); the result of
 the second attempt is returned as is — the handler prints the errors and writes nothing.
 
+`format_candidates(candidates, evidence)` renders one numbered block per candidate: the title and
+applicability, `Rule`, then — only when the classifier filled them — `When` (`applies_when`),
+`Constraints` (bullets) and `Expected outcome`, the `Target`, and `Evidence:` bullets with the
+**text** of the fragments `select_render_evidence` picks for it (its cited fragments, required ones
+first, at most `RENDER_EVIDENCE_LIMIT` = 3). Fragment ids, seqs and thread ids never enter the
+payload — they belong in provenance, and the reply is the user-facing SKILL.md. A candidate
+without conditions is rendered without them: nothing is invented on the way to the file.
+
 **Prompt** `prompts/render/prompt_v1.md`: role and task (revise the existing skill and keep its
 name, or create a new one with a durable kebab-case name; every rule lands in a Workflow step, a
-Constraint or Inputs/Outputs; no session narrative or one-time details), the two placeholders, the
+Constraint or Inputs/Outputs; `When` is the trigger, `Constraints` the limits, `Expected outcome`
+the completion criterion; the `Evidence` lines make the rule precise but no one-time value from
+them is copied; no session narrative, seq numbers, evidence ids or other one-time details), the
+two placeholders, the
 `# REQUIRED SKILL.md STRUCTURE` section carried over **verbatim** from the original generator prompt
 (commit `b6938fe`, lines 369-661: canonical structure, proactive description, mandatory
 Inputs/Workflow/Outputs, optional Constraints/Examples), and the output contract (the bare
@@ -602,30 +693,58 @@ Deliberately not added: see section 12.
 exists without its provenance), refuses unsafe names and thread ids (it never writes outside
 `.proposals/`), decides collisions by directory existence with an atomic `mkdir()` (`-2`, `-3`, …;
 a half-written folder from a crash is skipped, not overwritten), and requires every key of
-`REQUIRED_PROVENANCE_KEYS` with non-empty `thread_ids` and `candidates`. `build_provenance(...)`
-produces:
+`REQUIRED_PROVENANCE_KEYS` with non-empty `thread_ids` and `candidates`.
+`build_provenance(*, thread_ids, bundle, classification, rendered, sources, model,
+prompt_variants, category, target)` produces the **provenance v2** contract
+(`PROVENANCE_VERSION = 2`):
 
 ```json
-{"thread_ids": ["<analysed thread>", "<threads a shared procedure relies on>"],
- "episodes": [{"kind": "...", "weight": 0.6, "evidence_seq": [4, 5], "thread_id": "..."}],
- "candidates": [{"title": "...", "rule": "...", "evidence_refs": [4, 5],
+{"provenance_version": 2,
+ "thread_ids": ["<analysed thread>", "<threads a shared procedure relies on>"],
+ "sources": {"<file name>": "<path of the trajectory>"},
+ "episodes": [{"kind": "...", "weight": 0.6, "thread_id": "...", "source": "<file name>",
+               "bundle_status": "shown | trimmed | excluded",
+               "evidence": [{"id": "ev1" | null, "source": "<file name>", "line": 4, "seq": 4,
+                             "role": "error", "required": true}]}],
+ "evidence_shown": {"ev1": {"source": "<file name>", "line": 4, "seq": 4, "role": "error",
+                            "required": true, "text": "<exactly the excerpt line the model saw>"}},
+ "candidates": [{"candidate_id": "c1", "title": "...", "rule": "...", "evidence_refs": ["ev1", "ev3"],
+                 "applies_when": "..." | null, "constraints": [], "expected_outcome": "..." | null,
                  "future_applicability": "high",
                  "target": {"action": "create", "existing_skill": null}}],
+ "candidates_rejected": [{"title": "...", "reason": "evidence not shown in the bundle: ['ev9']",
+                          "evidence_refs": ["ev9"]}],
+ "render_evidence": {"c1": ["ev1", "ev3"]},
  "model": "<llm_config.model>",
  "prompt_variants": {"classify": "<resolved path>", "render": "<resolved path>"},
- "features_version": 2,
+ "features_version": 3,
  "generated_at": "<ISO 8601, UTC>",
  "category": "<cfg.category>",
  "target": {"action": "create | update", "existing_skill": "...", "existing_path": "..."}}
 ```
 
-`category`, `target` and the per-episode `thread_id` go beyond the task's schema: they tell a
-reviewer where the proposal is meant to go and keep the evidence check meaningful for
-cross-session episodes. `features_version` 2 marks a proposal gated by incidents (section 14);
-v1 proposals were scored by summed weights. Property test: every `evidence_seq` in every written
-`provenance.json` is a subset of the `seq` values of the source JSONL
-(`test_writer.py::test_provenance_evidence_seq_subset_of_source`,
-`test_direct_skill_generation.py::test_handle_writes_proposal_not_library`).
+Three things are told apart: what the detectors **extracted** (`episodes`, every input episode
+with its bundle outcome and every cited event — `id: null` marks an event the model never saw),
+what the classify model was **shown** (`evidence_shown`: id → file, physical line, seq, role and
+the exact text), and what reached the **render** stage (`candidates` are the kept ones,
+`render_evidence` the fragment ids quoted to the renderer per candidate, derived by the same
+`select_render_evidence` call the renderer uses). For every written candidate,
+`evidence_refs → evidence_shown[id] → (source, line)` names the events and the fragments the
+model saw; `sources` resolves the file. Rejected candidates are listed with their reason.
+
+Compatibility: proposals written before this contract carry no `provenance_version` (**v1**):
+their `candidates[].evidence_refs` are seq numbers, their `episodes[]` rows have `evidence_seq`
+and there is no registry. `/skill-review` reads only `category`, `thread_ids`, `generated_at` and
+`target`, which both versions share, so v1 proposals still list, accept and reject. `features_version`
+3 marks the evidence-item contract of section 14 (2: incidents gate; 1: summed weights). Property
+tests: every `evidence_shown` entry of a written `provenance.json` re-reads to the physical line
+holding that `seq`, including across corrupted lines, and every candidate's refs are a subset of
+the registry (`test_writer.py::test_provenance_shown_fragments_resolve_to_source_lines`,
+`test_direct_skill_generation.py::test_handle_writes_proposal_not_library`); the correcting
+phrase of a long user message is in the registry text and in both LLM payloads
+(`test_handle_long_correction_phrase_is_in_provenance`); a budget too small for any episode's
+required evidence creates no LLM (`test_handle_bundle_exclusion_creates_no_llm`,
+`test_skill_mining.py::test_real_run_bundle_exclusion_creates_no_llm`).
 
 Verification: `pytest tests/ut/skill_evolver -q` — validator positives and one negative per rule
 (incl. `description: Instructions for debugging`), all-errors collection, writer
@@ -668,13 +787,15 @@ subcommand or flag completion for any command in this CLI.
 evidence for every selected thread in one `asyncio.to_thread` call, prints the **Threads** table
 and either stops (dry run) or enters the per-thread loop.
 
-Evidence refs are flat ints, unique per thread only (section 15), so a multi-thread bundle cannot
-tell the same seq apart across threads. `/skill-mine` therefore keeps the single-trajectory bundle
-and loops: each thread whose `gate_decision()` passes (section 14) gets its own
-classify + render pair, so a run costs at most `2 x threads` LLM calls and writes at most one
-proposal per thread. Cross-session `repeated_procedure` support is unchanged — the pool is still
-the agent's newest `CROSS_SESSION_LIMIT` (20) trajectories, and each target goes **first** into
-`_collect_episodes`, so the kept episodes cite that thread's own events.
+`/skill-mine` loops over threads: each thread whose `gate_decision()` passes (section 14) gets
+its own bundle and classify + render pair, so a run costs at most `2 x threads` LLM calls and
+writes at most one proposal per thread. The pool is the agent's newest `CROSS_SESSION_LIMIT` (20)
+trajectories and each target goes **first** into `_collect_episodes`, so the kept
+`repeated_procedure` episodes belong to that thread; `ThreadStats.supporting` holds the pool
+trajectories their evidence cites (the second session of each shared procedure) and the bundle
+indexes `[target, *supporting]`. `_generate` prints the excluded episodes and the rejected
+candidates, re-gates on `bundle.kept` before `LazyLlm.get()`, quotes `bundle.shown` to the
+renderer and writes provenance v2 (section 16).
 
 Selection (`select_trajectories`): one `load_trajectories(dir, agent=..., limit=max(N, 20))` pass
 feeds both the pool (first 20) and the targets, so no file is parsed twice. `--since` compares
@@ -712,8 +833,9 @@ Two tables, because one cannot carry both "why nothing fired" and "what fired":
   `no episodes` or a `score < min_evidence_score`. A zero `tools` count is styled `warning` — it
   is the most diagnostic number in the table, because every detector that needs tool calls is
   then dead.
-- **Episodes** (dry run only): thread, kind, incident, weight, tool sequence, evidence seq,
-  grouped per thread with a `subtotal` row (empty `incident` cell). `incident` labels the
+- **Episodes** (dry run only): thread, kind, incident, weight, tool sequence, evidence seq (the
+  own-thread seqs via `Episode.evidence_seq`, for display — refs identify events by file and
+  line), grouped per thread with a `subtotal` row (empty `incident` cell). `incident` labels the
   episodes of one thread that describe the same events — `I1`, `I2`, … in `group_incidents`
   order — so the rows sharing a label are the ones the score counts once. Rows keep **detector
   order**, not weight order: the bundle sorts by weight for the model, while a human wants to

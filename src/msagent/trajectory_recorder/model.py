@@ -25,6 +25,11 @@ without an LLM.
 
 ``ToolCall`` and ``AiMessage`` are frozen but carry ``dict``/``list`` fields,
 which makes them unhashable; nothing needs to hash them.
+
+Every event keeps its 1-based physical line in the file next to its ``seq``.
+``seq`` restarts at 1 whenever the recorder process restarts, so it is not an
+identity; :class:`EvidenceRef` (file name + line) is. Build refs through
+:meth:`Trajectory.event_ref`, the single place that knows the file name.
 """
 
 from __future__ import annotations
@@ -38,6 +43,23 @@ TurnStatus = Literal["completed", "error", "truncated"]
 
 # run_id of the synthetic turn holding events seen before any turn.start.
 PRELUDE_RUN_ID = "__prelude__"
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class EvidenceRef:
+    """Stable identity of one recorded event.
+
+    ``source`` is the trajectory file name and ``line`` its 1-based physical
+    line, so two events of one thread never share a ref even when the
+    recorder restarted and ``seq`` repeated. Blank and corrupted lines keep
+    their line number, and appending to a file never moves an earlier line,
+    so a ref stays valid across re-reads. ``seq`` is carried for display and
+    compatibility only.
+    """
+
+    source: str
+    line: int
+    seq: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,6 +82,10 @@ class ToolCall:
     seq_start: int
     # seq of tool.result / tool.error; None for orphans.
     seq_end: int | None
+    # Physical lines of the start and end events (see EvidenceRef); a
+    # start-less call has line_start == line_end.
+    line_start: int
+    line_end: int | None
     # graph.checkpoint_ns without its last segment; None for the root agent.
     subagent: str | None
 
@@ -75,6 +101,8 @@ class AiMessage:
     usage: dict[str, Any] | None
     duration_ms: int | None
     subagent: str | None
+    # Physical line of the event (see EvidenceRef).
+    line: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,6 +118,8 @@ class Approval:
     # entry per tool. Interpreting them is left to downstream analysis.
     request: Any
     decision: Any
+    # Physical line of the event (see EvidenceRef).
+    line: int
 
 
 @dataclass(slots=True)
@@ -102,6 +132,9 @@ class Turn:
 
     run_id: str
     seq_start: int
+    # Physical line of the event that opened the turn (see EvidenceRef); a
+    # synthetic turn opens at the line of the real event it was made for.
+    line_start: int
     user_message: str | None
     source: str
     ai_messages: list[AiMessage] = field(default_factory=list)
@@ -132,3 +165,12 @@ class Trajectory:
     skills_consulted: list[str] = field(default_factory=list)
     # Lines that could not be read as schema-v1 events (skipped silently).
     malformed_lines: int = 0
+
+    @property
+    def source(self) -> str:
+        """The ``EvidenceRef.source`` of this trajectory's events: its file name."""
+        return self.path.name
+
+    def event_ref(self, *, seq: int, line: int) -> EvidenceRef:
+        """The ref of the event recorded at ``line`` of this file."""
+        return EvidenceRef(source=self.source, line=line, seq=seq)

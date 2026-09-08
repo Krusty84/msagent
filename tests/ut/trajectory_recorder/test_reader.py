@@ -31,11 +31,12 @@ from typing import Any
 import pytest
 
 from msagent.trajectory_recorder import export, reader
-from msagent.trajectory_recorder.model import PRELUDE_RUN_ID, ToolCall, Trajectory, Turn
+from msagent.trajectory_recorder.model import PRELUDE_RUN_ID, EvidenceRef, ToolCall, Trajectory, Turn
 from msagent.trajectory_recorder.reader import (
     TrajectoryReadError,
     extract_message_text,
     iter_events,
+    iter_numbered_events,
     load_trajectories,
     load_trajectory,
 )
@@ -71,6 +72,20 @@ def _line(seq: int, event: str, **payload: Any) -> str:
 def _write(path: Path, *lines: str) -> Path:
     path.write_text("".join(f"{line}\n" for line in lines), encoding="utf-8")
     return path
+
+
+def _seq_at(path: Path, line: int) -> int:
+    """The ``seq`` written on physical ``line`` of the file (1-based).
+
+    Reads with ``open()`` + ``enumerate`` like the reader does, never with
+    ``splitlines()``: the recorder writes ``ensure_ascii=False``, so a
+    ``\u2028`` inside a string would split differently.
+    """
+    with path.open(encoding="utf-8") as handle:
+        for number, raw in enumerate(handle, start=1):
+            if number == line:
+                return json.loads(raw)["seq"]
+    raise AssertionError(f"{path} has no line {line}")
 
 
 # ------------------------------------------------------- normal_subagent
@@ -266,6 +281,48 @@ def test_malformed_lines_and_prelude() -> None:
     assert [(c.span_id, c.status) for c in run_3.tool_calls] == [("s9", "ok")]
 
 
+def test_lines_point_at_physical_lines_across_corrupted_ones() -> None:
+    # Lines 4-8, 12, 20-21, 28 and 31 of the fixture are blank, broken or not
+    # schema-v1 events; every model object must still carry the physical line
+    # it was read from, and that line must hold the same seq.
+    trajectory = _load("malformed_lines.jsonl")
+    assert trajectory.source == "malformed_lines.jsonl"
+    prelude, run_1, _, run_3 = trajectory.turns
+    assert (prelude.seq_start, prelude.line_start) == (2, 2)
+    approval = prelude.approvals[0]
+    assert (approval.seq, approval.line) == (3, 3)
+    assert (run_1.seq_start, run_1.line_start) == (9, 9)
+    assert (run_1.ai_messages[0].seq, run_1.ai_messages[0].line) == (10, 10)
+    s2 = _tool(run_1, "s2")
+    # Line 12 is a truncated copy of the result; the real one is line 13.
+    assert (s2.line_start, s2.seq_end, s2.line_end) == (11, 13, 13)
+    s9 = _tool(run_3, "s9")
+    assert (s9.line_start, s9.line_end) == (26, 27)
+    for line, seq in ((2, 2), (3, 3), (9, 9), (10, 10), (11, 11), (13, 13), (26, 26), (27, 27)):
+        assert _seq_at(trajectory.path, line) == seq
+    numbered = [number for number, _ in iter_numbered_events(trajectory.path)]
+    assert numbered == [1, 2, 3, 4, 9, 10, 11, *range(13, 31)]
+
+
+def test_refs_differ_after_a_recorder_restart() -> None:
+    # missing_turn_end.jsonl: writer rec-b restarts seq at 1 on line 22, so
+    # seq 4 names two different events; their refs must not collide.
+    trajectory = _load("missing_turn_end.jsonl")
+    first, _, third = trajectory.turns
+    assert (first.seq_start, first.line_start) == (2, 2)
+    assert (third.seq_start, third.line_start) == (2, 23)
+    s2, s14 = _tool(first, "s2"), _tool(third, "s14")
+    assert (s2.seq_start, s2.line_start, s2.line_end) == (4, 4, 5)
+    assert (s14.seq_start, s14.line_start, s14.line_end) == (4, 25, 26)
+    assert _tool(third, "s18").line_end is None
+    early = trajectory.event_ref(seq=s2.seq_start, line=s2.line_start)
+    late = trajectory.event_ref(seq=s14.seq_start, line=s14.line_start)
+    assert early == EvidenceRef(source="missing_turn_end.jsonl", line=4, seq=4)
+    assert early != late and early.seq == late.seq
+    for call in (s2, s14):
+        assert _seq_at(trajectory.path, call.line_start) == call.seq_start
+
+
 def test_iter_events_reports_line_numbers() -> None:
     malformed: list[int] = []
     events = list(iter_events(FIXTURES / "malformed_lines.jsonl", malformed=malformed))
@@ -297,6 +354,7 @@ def test_tool_result_without_start() -> None:
     for call in first.tool_calls + second.tool_calls:
         assert call.args == {}
         assert call.seq_start == call.seq_end
+        assert call.line_start == call.line_end
 
     assert [(call.span_id, call.status) for call in first.tool_calls] == [
         ("s2", "ok"),

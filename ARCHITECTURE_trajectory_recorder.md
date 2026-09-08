@@ -272,9 +272,11 @@ python -m msagent.trajectory_recorder.export show   --thread <id> [--max-chars N
 python -m msagent.trajectory_recorder.export export --thread <id> --format json|jsonl|md [-o FILE]
 ```
 
-Low-level library: `iter_events(path, malformed=...)` and `extract_message_text(message)` in
-`msagent.trajectory_recorder.reader` (re-exported by `export`); `list_trajectories(dir)`,
-`find_trajectory_file(dir, thread_id)`, `render_markdown(events)` in `msagent.trajectory_recorder.export`.
+Low-level library: `iter_numbered_events(path, malformed=...)` (yields `(line, event)` pairs, the
+1-based physical line being the event's `EvidenceRef.line`), `iter_events(path, malformed=...)` and
+`extract_message_text(message)` in `msagent.trajectory_recorder.reader` (the last two re-exported by
+`export`); `list_trajectories(dir)`, `find_trajectory_file(dir, thread_id)`, `render_markdown(events)`
+in `msagent.trajectory_recorder.export`.
 
 ### Typed reader (`msagent.trajectory_recorder.reader`)
 
@@ -293,11 +295,19 @@ Model (`msagent.trajectory_recorder.model`, slots dataclasses):
 
 | Type | Fields |
 |---|---|
-| `Trajectory` | `path`, `thread_id`, `agent`, `model`, `working_dir`, `started_at`, `turns`, `truncated_by_limit`, `skills_consulted`, `malformed_lines` |
-| `Turn` | `run_id`, `seq_start`, `user_message`, `source`, `ai_messages`, `tool_calls`, `approvals`, `retries`, `compressions`, `status` (`completed` \| `error` \| `truncated`), `error_type`, `duration_ms` |
-| `AiMessage` (frozen) | `seq`, `span_id`, `text`, `tool_call_names`, `usage`, `duration_ms`, `subagent` |
-| `ToolCall` (frozen) | `span_id`, `parent_span_id`, `name`, `args`, `status` (`ok` \| `error` \| `orphan`), `output_text`, `error_type`, `error`, `duration_ms`, `seq_start`, `seq_end`, `subagent` |
-| `Approval` (frozen) | `seq`, `run_id`, `interrupt_id`, `request`, `decision` — the raw interrupt payload and resume value as recorded (deepagents HITL: `request["action_requests"]`, `decision["decisions"]`, one entry per tool) |
+| `EvidenceRef` (frozen, kw-only) | `source` (the file name), `line` (1-based physical line), `seq` (display only) — the stable identity of one recorded event; built through `Trajectory.event_ref(seq=, line=)` |
+| `Trajectory` | `path`, `thread_id`, `agent`, `model`, `working_dir`, `started_at`, `turns`, `truncated_by_limit`, `skills_consulted`, `malformed_lines`; `source` property (`path.name`) and `event_ref(*, seq, line)` |
+| `Turn` | `run_id`, `seq_start`, `line_start`, `user_message`, `source`, `ai_messages`, `tool_calls`, `approvals`, `retries`, `compressions`, `status` (`completed` \| `error` \| `truncated`), `error_type`, `duration_ms` |
+| `AiMessage` (frozen) | `seq`, `span_id`, `text`, `tool_call_names`, `usage`, `duration_ms`, `subagent`, `line` |
+| `ToolCall` (frozen) | `span_id`, `parent_span_id`, `name`, `args`, `status` (`ok` \| `error` \| `orphan`), `output_text`, `error_type`, `error`, `duration_ms`, `seq_start`, `seq_end`, `line_start`, `line_end`, `subagent` |
+| `Approval` (frozen) | `seq`, `run_id`, `interrupt_id`, `request`, `decision` — the raw interrupt payload and resume value as recorded (deepagents HITL: `request["action_requests"]`, `decision["decisions"]`, one entry per tool) — and `line` |
+
+Every event keeps the physical line it was read from next to its `seq`. `seq` restarts at 1 whenever
+the recorder process restarts (a new `rec`), so it is not an identity; `EvidenceRef` — file name plus
+line — is. Blank and corrupted lines keep their line number and appending never moves an earlier line,
+so a ref is unique, repeatable on re-read and still valid after the file grew. A synthetic turn
+(`prelude` / `unknown`) opens at the line of the real event it was made for and shares its ref; a
+start-less tool call has `line_start == line_end`.
 
 Assembly rules:
 
@@ -309,7 +319,7 @@ Assembly rules:
 | Approvals | `approval.decision` becomes an `Approval` in the turn it is routed to. Its `run_id` is normally null — the turn has already ended when the human answers — so it lands in the most recently started turn while the agent's reaction starts the next (`resume`) turn; `seq` is kept so analysis can cite the event. |
 | Header | `thread_id` / `agent` from the first event's envelope, `started_at` = its `ts`; `model` = `model_display`, else `model`, else the first `turn.start.model`; a second `recorder.attach` (process restart) is ignored. |
 | Skills | `skills_consulted` = `args["name"]` of every `get_skill` call, taken from `tool.start` and from `message.ai` tool calls, first-seen order, deduplicated. |
-| Robustness | Broken JSON lines, non-object lines and objects that are not schema-v1 events are skipped silently and counted in `malformed_lines`. A line with `v != 1`, a `turn.end` with an unknown status, or a file without a single valid event raises `TrajectoryReadError` — the analyzer fails loudly instead of masking bad data. Files are streamed line by line; `llm.request` payloads are never retained. |
+| Robustness | Broken JSON lines, non-object lines and objects that are not schema-v1 events are skipped silently and counted in `malformed_lines`; they still consume their physical line number, so the refs of the events after them never shift. A line with `v != 1`, a `turn.end` with an unknown status, or a file without a single valid event raises `TrajectoryReadError` — the analyzer fails loudly instead of masking bad data. Files are streamed line by line; `llm.request` payloads are never retained. |
 
 Mapping to the target use cases:
 
@@ -320,8 +330,9 @@ Mapping to the target use cases:
   and `Turn.tool_calls` in `seq` order (subagent steps carry `subagent`), use `skills_consulted` to see
   which skills the agent already leaned on; successful chains carry exact tool names and `args`. The
   code-only detectors of `msagent.skill_evolver.features` (`ARCHITECTURE_skill_evolve.md`, section 14)
-  consume this model. Mind that `seq` restarts under a new `rec` after a process restart, so order
-  across turns by model order (turns in file order, spans in order), not by `seq`.
+  consume this model. Cite events by `EvidenceRef` (file name + physical line, `Trajectory.event_ref`);
+  `seq` is display only — it restarts under a new `rec` after a process restart — so order across
+  turns by model order (turns in file order, spans in order), not by `seq`.
 - **Knowledge Graph** — nodes from events (turn, LLM call, tool call, subagent invocation, error, approval),
   identities from `(rec, seq)`, `run_id`, `span_id`, `message_id`, `tool_call_id` (inside serialized
   messages); edges from `parent_span_id`, `run_id` and `graph.checkpoint_ns`. Serialized messages are
@@ -363,7 +374,8 @@ Mapping to the target use cases:
   the same event schema is a possible follow-up (with honest gaps: no subagent internals, no prompts).
 - One writer per process per thread file; concurrent CLI processes on the same thread would interleave
   lines (appends are atomic-ish per line, and `rec` disambiguates writers), but this is not a supported
-  scenario.
+  scenario. Analysis does not depend on `rec`: the typed reader identifies events by their physical
+  line (`EvidenceRef`), which a restart cannot repeat.
 
 ## 12. Verification
 

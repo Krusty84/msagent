@@ -21,6 +21,7 @@
 from __future__ import annotations
 
 import json
+from functools import partial
 import logging
 import shutil
 from pathlib import Path
@@ -46,7 +47,7 @@ from msagent.skill_evolver.retrieval import BM25Index
 from msagent.skills.factory import Skill, SkillFactory
 from msagent.trajectory_recorder.config import reset_config_cache
 from msagent.trajectory_recorder.model import ToolCall, Trajectory, Turn
-from msagent.trajectory_recorder.reader import iter_events, load_trajectory
+from msagent.trajectory_recorder.reader import load_trajectory
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 FIXTURE = REPO_ROOT / "tests" / "fixtures" / "trajectories" / "skill_evolver_signals.jsonl"
@@ -180,7 +181,7 @@ def _classify_reply(*candidates: dict[str, Any], verdict: str = "save") -> str:
     return json.dumps({"verdict": verdict, "candidates": list(candidates)})
 
 
-def _candidate(refs: list[int], **overrides: Any) -> dict[str, Any]:
+def _candidate(refs: list[str], **overrides: Any) -> dict[str, Any]:
     data: dict[str, Any] = {
         "title": "Generated source debugging",
         "rule": "Regenerate sources before type checking.",
@@ -192,20 +193,19 @@ def _candidate(refs: list[int], **overrides: Any) -> dict[str, Any]:
     return data
 
 
-def _valid_refs() -> list[int]:
-    """Two seqs the classify stage keeps: they are in the fixture's evidence bundle."""
-    trajectory = load_trajectory(FIXTURE)
-    _, valid = build_evidence_bundle(extract_episodes(trajectory), [trajectory])
-    return sorted(valid)[:2]
+def _valid_refs(path: Path = FIXTURE) -> list[str]:
+    """Two fragment ids the classify stage keeps: they are in the trajectory's evidence bundle."""
+    trajectory = load_trajectory(path)
+    return sorted(build_evidence_bundle(extract_episodes(trajectory), [trajectory]).shown)[:2]
 
 
-def _recorded_seqs(path: Path) -> set[int]:
-    seqs: set[int] = set()
-    for event in iter_events(path):
-        valid = event.get("v") == 1 and isinstance(event.get("event"), str)
-        if valid and isinstance(event.get("seq"), int):
-            seqs.add(event["seq"])
-    return seqs
+def _seq_at(path: Path, line: int) -> int:
+    """The ``seq`` written on physical ``line`` of ``path`` (read like the reader does)."""
+    with path.open(encoding="utf-8") as handle:
+        for number, raw in enumerate(handle, start=1):
+            if number == line:
+                return json.loads(raw)["seq"]
+    raise AssertionError(f"{path} has no line {line}")
 
 
 def _library_skill(tmp_path: Path, name: str) -> Skill:
@@ -229,6 +229,8 @@ def _call(name: str, seq: int) -> ToolCall:
         duration_ms=1,
         seq_start=seq,
         seq_end=seq + 1,
+        line_start=seq,
+        line_end=seq + 1,
         subagent=None,
     )
 
@@ -238,6 +240,7 @@ def _trajectory(thread_id: str, names: list[str]) -> Trajectory:
     turn = Turn(
         run_id="run-1",
         seq_start=1,
+        line_start=1,
         user_message="do it",
         source="dispatch",
         tool_calls=calls,
@@ -260,7 +263,8 @@ def _trajectory(thread_id: str, names: list[str]) -> Trajectory:
 @pytest.mark.asyncio
 async def test_handle_writes_proposal_not_library(pipeline: _Pipeline, tmp_path: Path) -> None:
     refs = _valid_refs()
-    pipeline.script(_classify_reply(_candidate(refs)), VALID_SKILL)
+    stated = _candidate(refs, applies_when="the generated sources are older than the schema")
+    pipeline.script(_classify_reply(stated), VALID_SKILL)
 
     await pipeline.handler.handle([])
 
@@ -272,26 +276,106 @@ async def test_handle_writes_proposal_not_library(pipeline: _Pipeline, tmp_path:
     assert pipeline.spy.error == [] and pipeline.spy.warning == []
     assert len(pipeline.llm.payloads) == 2
     classify_instruction = pipeline.llm.payloads[0][0][1]
-    assert "Evidence: seq" in classify_instruction
+    render_instruction = pipeline.llm.payloads[1][0][1]
+    assert "[ev1]" in classify_instruction and "Evidence: seq" not in classify_instruction
     assert "The skill library is currently empty." in classify_instruction
-    assert "Regenerate sources before type checking." in pipeline.llm.payloads[1][0][1]
+    assert "Regenerate sources before type checking." in render_instruction
+    assert "   When: the generated sources are older than the schema" in render_instruction
 
     provenance = json.loads((proposal.parent / "provenance.json").read_text(encoding="utf-8"))
+    assert provenance["provenance_version"] == 2
     assert provenance["thread_ids"] == [THREAD_ID]
     assert provenance["model"] == "fake-model"
     assert provenance["prompt_variants"] == {
         "classify": "packaged/classify/prompt_v1.md",
         "render": "packaged/render/prompt_v1.md",
     }
-    assert provenance["features_version"] == 2
+    assert provenance["features_version"] == 3
     assert provenance["category"] == "default"
     assert provenance["target"] == {"action": "create", "existing_skill": None, "existing_path": None}
-    recorded = _recorded_seqs(FIXTURE)
+    source = pipeline.trajectories_dir / f"{AGENT}_{THREAD_ID}.jsonl"
+    assert provenance["sources"] == {source.name: str(source)}
+    # Every fragment the classify model saw is in its payload and points at
+    # the physical line holding that very event.
+    shown = provenance["evidence_shown"]
+    assert shown
+    for fragment_id, entry in shown.items():
+        assert f"- [{fragment_id}] {entry['text']}" in classify_instruction
+        assert entry["source"] == source.name
+        assert _seq_at(source, entry["line"]) == entry["seq"]
     assert provenance["episodes"]
     for episode in provenance["episodes"]:
         assert episode["thread_id"] == THREAD_ID
-        assert set(episode["evidence_seq"]) <= recorded
-    assert [candidate["evidence_refs"] for candidate in provenance["candidates"]] == [refs]
+        assert episode["bundle_status"] == "shown"
+        assert all(item["id"] in shown for item in episode["evidence"])
+    (candidate,) = provenance["candidates"]
+    assert (candidate["candidate_id"], candidate["evidence_refs"]) == ("c1", refs)
+    assert candidate["applies_when"] == "the generated sources are older than the schema"
+    assert provenance["candidates_rejected"] == []
+    # What the renderer was quoted is recorded and was really in its payload.
+    quoted = provenance["render_evidence"]["c1"]
+    assert quoted and set(quoted) <= set(refs)
+    for fragment_id in quoted:
+        assert f"   - {shown[fragment_id]['text']}" in render_instruction
+        assert fragment_id not in render_instruction
+
+
+@pytest.mark.asyncio
+async def test_handle_long_correction_phrase_is_in_provenance(pipeline: _Pipeline, tmp_path: Path) -> None:
+    # The correcting phrase sits after the first 600 characters of the user
+    # message (line 17 of the fixture, the run-2 turn.start).
+    source = pipeline.trajectories_dir / f"{AGENT}_{THREAD_ID}.jsonl"
+    lines = source.read_text(encoding="utf-8").splitlines()
+    event = json.loads(lines[16])
+    assert event["event"] == "turn.start" and event["run_id"] == "run-2"
+    phrase = "не так: надо было сначала посмотреть kernel-level профиль"
+    event["user_message"] = "Контекст задачи и предыстория. " * 24 + phrase + ", а не summary."
+    assert event["user_message"].index(phrase) > 600
+    lines[16] = json.dumps(event, ensure_ascii=False)
+    source.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    trajectory = load_trajectory(source)
+    bundle = build_evidence_bundle(extract_episodes(trajectory), [trajectory])
+    (correction,) = [f for f in bundle.shown.values() if f.role == "correction"]
+    assert phrase in correction.text
+    pipeline.script(_classify_reply(_candidate([correction.id])), VALID_SKILL)
+
+    await pipeline.handler.handle([])
+
+    proposal = tmp_path / "skills" / ".proposals" / THREAD_ID / SKILL_NAME / "SKILL.md"
+    assert proposal.is_file(), (pipeline.spy.error, pipeline.spy.warning, pipeline.spy.info)
+    provenance = json.loads((proposal.parent / "provenance.json").read_text(encoding="utf-8"))
+    entry = provenance["evidence_shown"][correction.id]
+    assert phrase in entry["text"]
+    assert _seq_at(source, entry["line"]) == entry["seq"] == 17
+    assert phrase in pipeline.llm.payloads[0][0][1]
+    assert phrase in pipeline.llm.payloads[1][0][1]
+    assert provenance["render_evidence"]["c1"] == [correction.id]
+
+
+@pytest.mark.asyncio
+async def test_handle_bundle_exclusion_creates_no_llm(
+    pipeline: _Pipeline, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A budget too small for any episode's required evidence excludes them
+    # all; their weight must not carry the thread to the LLM.
+    monkeypatch.setattr(module, "build_evidence_bundle", partial(build_evidence_bundle, max_chars=1))
+
+    def boom(_config):
+        raise AssertionError("the LLM must not be created")
+
+    monkeypatch.setattr(module.initializer.llm_factory, "create", boom)
+    count = len(extract_episodes(load_trajectory(FIXTURE)))
+
+    await pipeline.handler.handle([])
+
+    assert pipeline.spy.error == []
+    assert len(pipeline.spy.warning) == count
+    assert all(line.startswith("Excluded ") and "insufficient context" in line for line in pipeline.spy.warning)
+    assert pipeline.spy.info[-1] == (
+        f"Nothing to save: {count} episodes excluded from the bundle; "
+        "remaining evidence score 0.00 < min_evidence_score 1.00"
+    )
+    assert not (tmp_path / "skills").exists()
 
 
 @pytest.mark.asyncio
@@ -376,10 +460,13 @@ async def test_handle_nothing_verdict(pipeline: _Pipeline, tmp_path: Path) -> No
 
 @pytest.mark.asyncio
 async def test_handle_fabricated_refs_dropped(pipeline: _Pipeline, tmp_path: Path) -> None:
-    pipeline.script(_classify_reply(_candidate([9999])))
+    pipeline.script(_classify_reply(_candidate(["ev9999"])))
 
     await pipeline.handler.handle([])
 
+    assert pipeline.spy.warning == [
+        "Rejected 'Generated source debugging': evidence not shown in the bundle: ['ev9999']",
+    ]
     assert pipeline.spy.info == [
         module._DEPRECATION_HINT,
         f"Nothing to save: no durable learning found in thread {THREAD_ID}",
@@ -464,7 +551,16 @@ def test_collect_episodes_cross_session_cites_current_thread() -> None:
     assert episode.tool_sequence == ["bash", "read_file", "grep"]
     assert episode.evidence_seq == [2, 4, 6]
     assert episode.facts["thread_ids"] == ["thread-a", "thread-b"]
+    # The supporting session's steps are required evidence, so the bundle
+    # must index that trajectory too.
+    assert [(i.ref.source, i.ref.seq, i.required) for i in episode.evidence[3:]] == [
+        ("thread-b.jsonl", 2, True),
+        ("thread-b.jsonl", 4, True),
+        ("thread-b.jsonl", 6, True),
+    ]
+    assert module._supporting([other], episodes) == [other]
     assert module._collect_episodes(current, [], skill_index=BM25Index([])) == []
+    assert module._supporting([other], []) == []
 
 
 def test_cited_threads_lists_supporting_threads_after_current() -> None:

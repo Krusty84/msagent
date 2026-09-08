@@ -45,7 +45,7 @@ from msagent.core.constants import (
     SKILL_EVOLVER_CONFIG_FOLDER_NAME,
 )
 from msagent.core.logging import get_logger
-from msagent.skill_evolver.bundle import build_evidence_bundle
+from msagent.skill_evolver.bundle import EvidenceBundle, build_evidence_bundle
 from msagent.skill_evolver.exgraph_context import attach_stored_graph
 from msagent.skill_evolver.classify import (
     classify,
@@ -183,6 +183,12 @@ def _collect_episodes(
     return episodes
 
 
+def _supporting(others: list[Trajectory], episodes: list[Episode]) -> list[Trajectory]:
+    """The trajectories among ``others`` that the episodes cite (a shared procedure's second session)."""
+    cited = {item.ref.source for episode in episodes for item in episode.evidence}
+    return [traj for traj in others if traj.source in cited]
+
+
 class DirectSkillGenerationHandler:
     """Generate a SKILL.md proposal from a recorded thread without mutating it."""
 
@@ -240,7 +246,7 @@ class DirectSkillGenerationHandler:
 
         skills = await self._load_skills()
         with self._status(f"Extracting evidence from thread {thread_id}..."):
-            current, episodes = await asyncio.to_thread(
+            current, supporting, episodes = await asyncio.to_thread(
                 self._gather_evidence,
                 trajectory_path,
                 trajectories_dir,
@@ -259,11 +265,19 @@ class DirectSkillGenerationHandler:
             console.print("")
             return
 
-        bundle_text, valid_seq = build_evidence_bundle(episodes, [current])
+        trajectories = [current, *supporting]
+        bundle = build_evidence_bundle(episodes, trajectories)
+        warnings, stop = self._report_bundle(bundle, cfg.min_evidence_score)
+        for line in warnings:
+            console.print_warning(escape(line))
+        if stop is not None:
+            console.print_info(stop)
+            console.print("")
+            return
         work = Path(ctx.working_dir)
         state = initializer.get_project_paths(work).root
         bundle_text = attach_stored_graph(
-            bundle_text, current, working_dir=work, state_dir=state,
+            bundle.text, current, working_dir=work, state_dir=state,
         )
         llm_config = await initializer.load_llm_config(ctx.model, ctx.working_dir)
         llm = initializer.llm_factory.create(llm_config)
@@ -271,10 +285,12 @@ class DirectSkillGenerationHandler:
         with self._status("Classifying evidence..."):
             result = await classify(
                 bundle_text,
-                valid_seq,
+                bundle.shown,
                 llm,
                 classify_template.replace("{skill_library}", library),
             )
+        for candidate, reason in result.rejected:
+            console.print_warning(escape(f"Rejected '{candidate.title}': {reason}"))
         if result.verdict == "nothing":
             msg = f"Nothing to save: no durable learning found in thread {thread_id}"
             console.print_info(msg)
@@ -309,6 +325,7 @@ class DirectSkillGenerationHandler:
                 existing_skill=existing_text,
                 expected_name=expected_name,
                 taken_names=taken_names,
+                evidence=bundle.shown,
             )
         if not rendered.ok:
             console.print_error(_REJECTED)
@@ -320,8 +337,10 @@ class DirectSkillGenerationHandler:
         name = skill_name(rendered.content)
         provenance = build_provenance(
             thread_ids=self._cited_threads(current, episodes),
-            episodes=episodes,
-            candidates=result.candidates,
+            bundle=bundle,
+            classification=result,
+            rendered=plan.accepted,
+            sources={traj.source: str(traj.path) for traj in trajectories},
             model=llm_config.model,
             prompt_variants={"classify": classify_source, "render": render_source},
             category=cfg.category,
@@ -350,8 +369,12 @@ class DirectSkillGenerationHandler:
         trajectories_dir: Path,
         agent: str,
         skills: list[Skill],
-    ) -> tuple[Trajectory, list[Episode]]:
-        """Load the thread's trajectory plus the agent's newest; detect episodes."""
+    ) -> tuple[Trajectory, list[Trajectory], list[Episode]]:
+        """Load the thread's trajectory plus the agent's newest; detect episodes.
+
+        Returns the trajectory, the other trajectories its episodes cite (the
+        evidence bundle must index them) and the episodes.
+        """
         current = load_trajectory(trajectory_path)
         newest = load_trajectories(
             trajectories_dir,
@@ -361,7 +384,33 @@ class DirectSkillGenerationHandler:
         others = [traj for traj in newest if traj.thread_id != current.thread_id]
         docs = [SkillDoc(skill.display_name, skill.description) for skill in skills]
         episodes = _collect_episodes(current, others, skill_index=BM25Index(docs))
-        return current, episodes
+        return current, _supporting(others, episodes), episodes
+
+    @staticmethod
+    def _report_bundle(bundle: EvidenceBundle, min_score: float) -> tuple[list[str], str | None]:
+        """One warning per excluded episode, and why nothing is saved when the kept ones fail the gate.
+
+        An episode is excluded when even its required evidence does not fit
+        the bundle budget (insufficient context). Its weight must not carry
+        the thread to the LLM, so the gate is decided again on the kept
+        episodes; a ``None`` second value means the pipeline goes on. The
+        caller prints both (each handler has its own console).
+        """
+        excluded = [item.episode for item in bundle.episodes if item.status == "excluded"]
+        warnings = [
+            f"Excluded {episode.kind} (weight {episode.weight:.2f}): insufficient context for the bundle budget"
+            for episode in excluded
+        ]
+        if not excluded:
+            return warnings, None
+        decision = gate_decision(bundle.kept, min_score=min_score)
+        if decision.passes:
+            return warnings, None
+        stop = (
+            f"Nothing to save: {len(excluded)} episodes excluded from the bundle; "
+            f"remaining evidence score {decision.score:.2f} < min_evidence_score {min_score:.2f}"
+        )
+        return warnings, stop
 
     @staticmethod
     def _cited_threads(current: Trajectory, episodes: list[Episode]) -> list[str]:

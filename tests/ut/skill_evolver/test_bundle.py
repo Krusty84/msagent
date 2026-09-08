@@ -20,9 +20,11 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -30,15 +32,15 @@ import pytest
 
 from msagent.skill_evolver.bundle import (
     ELLIPSIS,
-    EXCERPT_HEAD,
     EXCERPT_LIMIT,
-    EXCERPT_TAIL,
     FACT_LIMIT,
+    EvidenceBundle,
     build_evidence_bundle,
 )
 from msagent.skill_evolver.features import (
     EPISODE_WEIGHTS,
     Episode,
+    EvidenceItem,
     extract_episodes,
     mine_cross_session,
 )
@@ -47,6 +49,7 @@ from msagent.trajectory_recorder.model import (
     PRELUDE_RUN_ID,
     AiMessage,
     Approval,
+    EvidenceRef,
     ToolCall,
     ToolStatus,
     Trajectory,
@@ -105,6 +108,8 @@ def _call(
         duration_ms=1,
         seq_start=seq,
         seq_end=seq_end,
+        line_start=seq,
+        line_end=seq_end,
         subagent=None,
     )
 
@@ -122,6 +127,7 @@ def _turn(
     return Turn(
         run_id=run_id,
         seq_start=seq,
+        line_start=seq,
         user_message=message,
         source=source,
         ai_messages=list(ai),
@@ -152,6 +158,7 @@ def _ai(seq: int, text: str, tools: Sequence[str] = ()) -> AiMessage:
         usage=None,
         duration_ms=None,
         subagent=None,
+        line=seq,
     )
 
 
@@ -162,6 +169,7 @@ def _approval(seq: int, decision: Any, request: Any = None) -> Approval:
         interrupt_id=f"int-{seq}",
         request=request,
         decision=decision,
+        line=seq,
     )
 
 
@@ -172,11 +180,24 @@ def _episode(
     thread_id: str = "thread-t",
     tools: Sequence[str] = ("bash",),
     facts: dict[str, Any] | None = None,
+    optional: Sequence[int] = (),
+    snippets: dict[int, str] | None = None,
 ) -> Episode:
+    """An episode of ``<thread_id>.jsonl`` citing ``seqs`` (line == seq); ``optional`` seqs are context."""
+    source = f"{thread_id}.jsonl"
     return Episode(
         kind=kind,  # type: ignore[arg-type]
         thread_id=thread_id,
-        evidence_seq=list(seqs),
+        source=source,
+        evidence=[
+            EvidenceItem(
+                EvidenceRef(source=source, line=seq, seq=seq),
+                "event",
+                seq not in optional,
+                (snippets or {}).get(seq),
+            )
+            for seq in seqs
+        ],
         tool_sequence=list(tools),
         facts={"tool": "bash"} if facts is None else facts,
         weight=EPISODE_WEIGHTS[kind],
@@ -217,6 +238,27 @@ def _headers(text: str) -> list[re.Match[str]]:
     return matches  # type: ignore[return-value]
 
 
+def _excerpts(block: str) -> list[str]:
+    lines = block.splitlines()
+    return lines[lines.index("Excerpts:") + 1 :]
+
+
+def _shown_seqs(bundle: EvidenceBundle) -> set[int]:
+    return {fragment.ref.seq for fragment in bundle.shown.values()}
+
+
+def _statuses(bundle: EvidenceBundle) -> list[str]:
+    return [item.status for item in bundle.episodes]
+
+
+def _seq_at(path: Path, line: int) -> int:
+    with path.open(encoding="utf-8") as handle:
+        for number, raw in enumerate(handle, start=1):
+            if number == line:
+                return json.loads(raw)["seq"]
+    raise AssertionError(f"{path} has no line {line}")
+
+
 # ------------------------------------------------------------------ ordering
 
 
@@ -227,61 +269,110 @@ def test_blocks_ordered_by_weight_and_numbered() -> None:
         _episode("error_recovery", [4, 5, 8, 9]),  # 0.6
     ]
 
-    text, seqs = build_evidence_bundle(episodes, [_sample()])
+    bundle = build_evidence_bundle(episodes, [_sample()])
 
-    headers = _headers(text)
+    headers = _headers(bundle.text)
     assert [m.group(1, 2, 3) for m in headers] == [
         ("1", "approval_denied", "1.00"),
         ("2", "error_recovery", "0.60"),
         ("3", "skill_gap", "0.40"),
     ]
     assert {m.group(4) for m in headers} == {"thread-t"}
-    assert seqs == {2, 4, 5, 8, 9, 12}
+    assert _shown_seqs(bundle) == {2, 4, 5, 8, 9, 12}
+    assert list(bundle.shown) == [f"ev{n}" for n in range(1, 7)]
+    assert _statuses(bundle) == ["shown"] * 3
+    assert bundle.kept == [episodes[1], episodes[2], episodes[0]]
 
 
 def test_equal_weights_keep_input_order() -> None:
     episodes = [_episode("retry_loop", [4, 8]), _episode("retry_loop", [2, 4])]
 
-    text, _ = build_evidence_bundle(episodes, [_sample()])
+    bundle = build_evidence_bundle(episodes, [_sample()])
 
-    first, second = _blocks(text)
-    assert first.splitlines()[1] == "Evidence: seq 4, 8"
-    assert second.splitlines()[1] == "Evidence: seq 2, 4"
+    first, second = _blocks(bundle.text)
+    assert _excerpts(first)[0].startswith('- [ev1] tool.start bash: {"cmd": "make"}')
+    assert _excerpts(second)[0] == '- [ev3] user: "please build it"'
+
+
+def test_shared_event_has_one_id_across_blocks() -> None:
+    episodes = [_episode("retry_loop", [4, 8]), _episode("retry_loop", [2, 4])]
+
+    bundle = build_evidence_bundle(episodes, [_sample()])
+
+    first, second = _blocks(bundle.text)
+    assert _excerpts(first) == [
+        '- [ev1] tool.start bash: {"cmd": "make"}',
+        '- [ev2] tool.start bash: {"cmd": "make deps && make"}',
+    ]
+    assert _excerpts(second) == [
+        '- [ev3] user: "please build it"',
+        '- [ev1] tool.start bash: {"cmd": "make"}',
+    ]
+    assert len(bundle.shown) == 3
+    assert bundle.shown["ev1"].ref == EvidenceRef(source="thread-t.jsonl", line=4, seq=4)
 
 
 def test_thread_id_is_shortened_in_header() -> None:
     traj = _traj(_turn("run-1", 2, "hi"), thread_id="thread-0123456789")
     episode = _episode("skill_gap", [2], thread_id="thread-0123456789")
 
-    text, _ = build_evidence_bundle([episode], [traj])
+    bundle = build_evidence_bundle([episode], [traj])
 
-    assert text.splitlines()[0] == "### Episode E1 — skill_gap (weight 0.40, thread thread-0)"
+    assert bundle.text.splitlines()[0] == "### Episode E1 — skill_gap (weight 0.40, thread thread-0)"
 
 
 # -------------------------------------------------------------------- budget
 
 
-def test_budget_drops_whole_episodes_from_the_end() -> None:
+def test_budget_trims_then_excludes() -> None:
     traj = _sample()
-    light = _episode("skill_gap", [2, 4])
-    heavy = _episode("approval_denied", [8, 12])
-    full, full_seqs = build_evidence_bundle([light, heavy], [traj])
-    first_block, second_block = _blocks(full)
-    assert full_seqs == {2, 4, 8, 12}
+    light = _episode("skill_gap", [2, 4], optional=[4])
+    heavy = _episode("approval_denied", [12, 8], optional=[8])
+    full = build_evidence_bundle([light, heavy], [traj])
+    first_block, second_block = _blocks(full.text)
+    assert _statuses(full) == ["shown", "shown"]
+    assert _shown_seqs(full) == {2, 4, 8, 12}
 
-    exact, seqs = build_evidence_bundle([light, heavy], [traj], max_chars=len(full))
-    assert exact == full
-    assert seqs == full_seqs
+    exact = build_evidence_bundle([light, heavy], [traj], max_chars=len(full.text))
+    assert (exact.text, set(exact.shown)) == (full.text, set(full.shown))
 
-    trimmed, seqs = build_evidence_bundle([light, heavy], [traj], max_chars=len(full) - 1)
-    assert trimmed == first_block
-    assert seqs == {8, 12}  # only the kept episode's seqs are citable
-    assert second_block not in trimmed
+    trimmed = build_evidence_bundle([light, heavy], [traj], max_chars=len(full.text) - 1)
+    assert _statuses(trimmed) == ["shown", "trimmed"]
+    assert _blocks(trimmed.text)[0] == first_block
+    assert _excerpts(_blocks(trimmed.text)[1]) == [
+        '- [ev3] user: "please build it"',
+        f"- {ELLIPSIS} 1 more events not shown",
+    ]
+    assert _shown_seqs(trimmed) == {2, 8, 12}  # seq 4 was not shown: not citable
+    assert trimmed.kept == [heavy, light]
+
+    excluded = build_evidence_bundle([light, heavy], [traj], max_chars=len(first_block))
+    assert _statuses(excluded) == ["shown", "excluded"]
+    assert excluded.text == first_block
+    assert _shown_seqs(excluded) == {8, 12}
+    assert excluded.kept == [heavy]
+    assert second_block not in excluded.text
 
 
-def test_first_block_too_large_raises() -> None:
-    with pytest.raises(ValueError, match=r"episode E1 \(approval_denied\) needs \d+ chars"):
-        build_evidence_bundle([_episode("approval_denied", [12])], [_sample()], max_chars=10)
+def test_excluded_heavy_episode_does_not_stop_scanning(caplog: pytest.LogCaptureFixture) -> None:
+    heavy = _episode("approval_denied", [12], facts={"decision": "x" * 2000})
+    light = _episode("skill_gap", [2], facts={})
+
+    with caplog.at_level(logging.WARNING, logger=LOGGER):
+        bundle = build_evidence_bundle([light, heavy], [_sample()], max_chars=300)
+
+    assert _statuses(bundle) == ["excluded", "shown"]
+    assert bundle.text.startswith("### Episode E1 — skill_gap")
+    assert list(bundle.shown) == ["ev1"]
+    assert bundle.kept == [light]
+    assert "excluded approval_denied episode of thread 'thread-t'" in caplog.text
+
+
+def test_budget_too_small_excludes_everything() -> None:
+    bundle = build_evidence_bundle([_episode("approval_denied", [12])], [_sample()], max_chars=10)
+
+    assert (bundle.text, bundle.shown, _statuses(bundle)) == ("", {}, ["excluded"])
+    assert bundle.kept == []
 
 
 @pytest.mark.parametrize("max_chars", [0, -1])
@@ -291,8 +382,8 @@ def test_non_positive_budget_raises(max_chars: int) -> None:
 
 
 def test_empty_episodes_give_empty_bundle() -> None:
-    assert build_evidence_bundle([], [_sample()]) == ("", set())
-    assert build_evidence_bundle([], []) == ("", set())
+    assert build_evidence_bundle([], [_sample()]) == EvidenceBundle("", {}, [])
+    assert build_evidence_bundle([], []) == EvidenceBundle("", {}, [])
 
 
 # ------------------------------------------------------------------ excerpts
@@ -301,23 +392,27 @@ def test_empty_episodes_give_empty_bundle() -> None:
 def test_excerpts_come_from_the_cited_records() -> None:
     episode = _episode("error_recovery", [2, 4, 5, 6, 8, 9, 12], facts={"tool": "bash", "calls_between": 2})
 
-    text, seqs = build_evidence_bundle([episode], [_sample()])
+    bundle = build_evidence_bundle([episode], [_sample()])
 
-    lines = text.splitlines()
-    assert seqs == {2, 4, 5, 6, 8, 9, 12}
-    assert lines[1] == "Evidence: seq 2, 4, 5, 6, 8, 9, 12"
-    assert lines[2] == "Tools: bash"
-    assert lines[3:6] == ["Facts:", '- tool: "bash"', "- calls_between: 2"]
-    assert lines[6] == "Excerpts:"
-    assert lines[7:] == [
-        '- seq 2 user: "please build it"',
-        '- seq 4 tool.start bash: {"cmd": "make"}',
-        "- seq 5 tool.error bash (error): CalledProcessError: exit 2 missing dep",
-        '- seq 6 ai: "I will build" [tool calls: bash]',
-        '- seq 8 tool.start bash: {"cmd": "make deps && make"}',
-        "- seq 9 tool.result bash (ok): ok built 42 targets",
-        '- seq 12 approval.decision: request={"tool": "rm"} decision={"decisions": [{"type": "reject"}]}',
+    lines = bundle.text.splitlines()
+    assert "Evidence: seq" not in bundle.text
+    assert lines[1] == "Tools: bash"
+    assert lines[2:5] == ["Facts:", '- tool: "bash"', "- calls_between: 2"]
+    assert lines[5] == "Excerpts:"
+    assert lines[6:] == [
+        '- [ev1] user: "please build it"',
+        '- [ev2] tool.start bash: {"cmd": "make"}',
+        "- [ev3] tool.error bash (error): CalledProcessError: exit 2 missing dep",
+        '- [ev4] ai: "I will build" [tool calls: bash]',
+        '- [ev5] tool.start bash: {"cmd": "make deps && make"}',
+        "- [ev6] tool.result bash (ok): ok built 42 targets",
+        '- [ev7] approval.decision: request={"tool": "rm"} decision={"decisions": [{"type": "reject"}]}',
     ]
+    fragment = bundle.shown["ev3"]
+    assert fragment.text == "tool.error bash (error): CalledProcessError: exit 2 missing dep"
+    assert fragment.ref == EvidenceRef(source="thread-t.jsonl", line=5, seq=5)
+    assert (fragment.role, fragment.required) == ("event", True)
+    assert all(f"- [{fid}] {fragment.text}" in bundle.text for fid, fragment in bundle.shown.items())
 
 
 def test_turn_without_message_orphan_and_empty_output() -> None:
@@ -330,24 +425,79 @@ def test_turn_without_message_orphan_and_empty_output() -> None:
     )
     episode = _episode("retry_loop", [20, 22, 24, 25], tools=[])
 
-    text, _ = build_evidence_bundle([episode], [_traj(turn)])
+    bundle = build_evidence_bundle([episode], [_traj(turn)])
 
-    lines = text.splitlines()
-    assert "Tools:" not in text
-    assert lines[-4:] == [
-        "- seq 20 turn.start: (source=resume)",
-        '- seq 22 tool.start grep: {"q": "x"}',
-        "- seq 24 tool.start ls: {}",
-        "- seq 25 tool.result ls (ok): (no output)",
+    assert "Tools:" not in bundle.text
+    assert _excerpts(bundle.text) == [
+        "- [ev1] turn.start: (source=resume)",
+        '- [ev2] tool.start grep: {"q": "x"}',
+        "- [ev3] tool.start ls: {}",
+        "- [ev4] tool.result ls (ok): (no output)",
     ]
 
 
 def test_start_less_call_has_only_a_result_record() -> None:
     turn = _turn("run-1", 2, "go", [_call("bash", seq=4, seq_end=4, output="done")])
 
-    text, _ = build_evidence_bundle([_episode("retry_loop", [4])], [_traj(turn)])
+    bundle = build_evidence_bundle([_episode("retry_loop", [4])], [_traj(turn)])
 
-    assert text.splitlines()[-1] == "- seq 4 tool.result bash (ok): done"
+    assert bundle.text.splitlines()[-1] == "- [ev1] tool.result bash (ok): done"
+
+
+def test_error_in_tool_result_output_is_shown() -> None:
+    # The error came back as tool.result status=error: the text is in output_text.
+    trace = "Traceback (most recent call last):\n  File x\nKeyError: 'device'"
+    failed = _call("bash", {"cmd": "run"}, seq=4, status="error", output=trace)
+
+    bundle = build_evidence_bundle([_episode("retry_loop", [5])], [_traj(_turn("run-1", 2, "go", [failed]))])
+
+    assert bundle.text.splitlines()[-1] == (
+        "- [ev1] tool.error bash (error): error: Traceback (most recent call last): File x KeyError: 'device'"
+    )
+
+
+def test_snippet_replaces_the_record_head() -> None:
+    turn = _turn("run-1", 2, "x" * 400 + " no, do it instead")
+    snippet = f"{ELLIPSIS}xxxx no, do it instead"
+    episode = _episode("user_correction", [2], snippets={2: snippet})
+
+    bundle = build_evidence_bundle([episode], [_traj(turn)])
+
+    assert bundle.text.splitlines()[-1] == f"- [ev1] user: {snippet}"
+    assert bundle.shown["ev1"].text == f"user: {snippet}"
+
+
+def test_correction_snippet_reaches_the_bundle() -> None:
+    # The correcting phrase sits after the first 600 characters of the message.
+    message = "context " * 80 + "нет, не так: сначала запусти профилировщик" + " tail" * 20
+    traj = _traj(
+        _turn("run-1", 2, "do it", [_call("bash", {}, seq=4)]),
+        _turn("run-2", 10, message, []),
+    )
+    assert message.index("не так") > 600
+
+    bundle = build_evidence_bundle(extract_episodes(traj), [traj])
+
+    (correction,) = [f for f in bundle.shown.values() if f.role == "correction"]
+    assert "не так: сначала запусти профилировщик" in correction.text
+    assert correction.text.startswith(f"user: {ELLIPSIS}")
+    assert correction.text in bundle.text
+
+
+def test_args_diff_window_is_in_facts_and_excerpt() -> None:
+    # The changed part of a long argument sits at its end.
+    old = "python train.py " + "--flag=value " * 40 + "--device cpu"
+    new = old[: -len("cpu")] + "npu"
+    failed = _call("bash", {"cmd": old}, seq=4, status="error", error="no cpu")
+    fixed = _call("bash", {"cmd": new}, seq=6, output="ok")
+    traj = _traj(_turn("run-1", 2, "train", [failed, fixed]))
+
+    bundle = build_evidence_bundle(extract_episodes(traj), [traj])
+
+    (facts_line,) = [line for line in bundle.text.splitlines() if line.startswith("- args_diff:")]
+    assert f'"new": "{ELLIPSIS}' in facts_line and "--device npu" in facts_line
+    assert "--device cpu" in facts_line
+    assert "python train.py" not in facts_line  # the unchanged head is not repeated
 
 
 def test_excerpt_and_fact_clipping() -> None:
@@ -355,33 +505,30 @@ def test_excerpt_and_fact_clipping() -> None:
     long_decision = {"comment": "x" * 5000}
     episode = _episode("approval_denied", [2], facts={"decision": long_decision})
 
-    text, _ = build_evidence_bundle([episode], [_traj(turn)])
+    bundle = build_evidence_bundle([episode], [_traj(turn)])
 
-    fact_line, excerpt_line = text.splitlines()[-3], text.splitlines()[-1]
+    fact_line, excerpt_line = bundle.text.splitlines()[-3], bundle.text.splitlines()[-1]
     assert fact_line.startswith('- decision: {"comment": "xxx')
     assert fact_line.endswith(ELLIPSIS)
     assert len(fact_line) == len("- decision: ") + FACT_LIMIT
-    assert excerpt_line.startswith('- seq 2 user: "word word word')
+    assert excerpt_line.startswith('- [ev1] user: "word word word')
     assert excerpt_line.endswith(ELLIPSIS)
-    assert len(excerpt_line) == len("- seq 2 user: ") + EXCERPT_LIMIT
+    assert len(excerpt_line) == len("- [ev1] user: ") + EXCERPT_LIMIT
 
 
-def test_excerpt_count_is_capped_but_evidence_line_is_complete() -> None:
+def test_minimal_block_shows_required_only_and_counts_omitted() -> None:
     turns = [_turn(f"run-{i}", 2 * i, f"message {i}") for i in range(1, 21)]
     seqs = [turn.seq_start for turn in turns]
-    episode = _episode("skill_gap", seqs)
+    episode = _episode("skill_gap", seqs, optional=seqs[1:])
+    full = build_evidence_bundle([episode], [_traj(*turns)])
+    assert len(full.shown) == 20
 
-    text, valid = build_evidence_bundle([episode], [_traj(*turns)])
+    bundle = build_evidence_bundle([episode], [_traj(*turns)], max_chars=len(full.text) - 1)
 
-    lines = text.splitlines()
-    assert valid == set(seqs)
-    assert lines[1] == "Evidence: seq " + ", ".join(str(seq) for seq in seqs)
-    excerpts = lines[lines.index("Excerpts:") + 1 :]
-    assert len(excerpts) == EXCERPT_HEAD + 1 + EXCERPT_TAIL
-    omitted = 20 - EXCERPT_HEAD - EXCERPT_TAIL
-    assert excerpts[EXCERPT_HEAD] == f"- {ELLIPSIS} {omitted} more events omitted"
-    assert excerpts[0] == '- seq 2 user: "message 1"'
-    assert excerpts[-1] == '- seq 40 user: "message 20"'
+    assert _statuses(bundle) == ["trimmed"]
+    assert _excerpts(bundle.text) == ['- [ev1] user: "message 1"', f"- {ELLIPSIS} 19 more events not shown"]
+    assert list(bundle.shown) == ["ev1"]
+    assert bundle.shown["ev1"].required is True
 
 
 # ---------------------------------------------------------------- collisions
@@ -389,68 +536,82 @@ def test_excerpt_count_is_capped_but_evidence_line_is_complete() -> None:
 
 @pytest.mark.parametrize(("run_id", "source"), [("run-x", "unknown"), (PRELUDE_RUN_ID, "prelude")])
 def test_synthetic_turn_never_shadows_the_real_record(run_id: str, source: str) -> None:
-    # The reader opens such turns at the seq of the first event it routes there.
+    # The reader opens such turns at the line of the first event it routes there.
     turn = _turn(run_id, 4, None, [_call("bash", {"cmd": "ls"}, seq=4)], source=source)
 
-    text, _ = build_evidence_bundle([_episode("retry_loop", [4, 5])], [_traj(turn)])
+    bundle = build_evidence_bundle([_episode("retry_loop", [4, 5])], [_traj(turn)])
 
-    assert text.splitlines()[-2:] == [
-        '- seq 4 tool.start bash: {"cmd": "ls"}',
-        "- seq 5 tool.result bash (ok): (no output)",
+    assert bundle.text.splitlines()[-2:] == [
+        '- [ev1] tool.start bash: {"cmd": "ls"}',
+        "- [ev2] tool.result bash (ok): (no output)",
     ]
 
 
-def test_shared_seq_is_rendered_as_ambiguous(caplog: pytest.LogCaptureFixture) -> None:
-    # Two writers (recorder restart) both counted up to seq 4 in one thread.
+def test_seq_repeated_after_restart_gets_distinct_refs(caplog: pytest.LogCaptureFixture) -> None:
+    # Two writers (recorder restart) both counted up to seq 4 in one thread;
+    # the second writer's events sit on later physical lines.
     first = _turn("run-1", 2, "one", [_call("bash", {"n": 1}, seq=4)])
-    second = _turn("run-2", 2, "two", [_call("grep", {"n": 2}, seq=4)])
-    episode = _episode("retry_loop", [2, 4])
+    later_call = replace(_call("grep", {"n": 2}, seq=4), line_start=24, line_end=25)
+    second = replace(_turn("run-2", 2, "two", [later_call]), line_start=22)
+    source = "thread-t.jsonl"
+    episode = Episode(
+        kind="retry_loop",
+        thread_id="thread-t",
+        source=source,
+        evidence=[
+            EvidenceItem(EvidenceRef(source=source, line=4, seq=4), "attempt", True),
+            EvidenceItem(EvidenceRef(source=source, line=24, seq=4), "attempt", True),
+        ],
+        tool_sequence=["bash", "grep"],
+        facts={},
+        weight=0.7,
+    )
 
     with caplog.at_level(logging.WARNING, logger=LOGGER):
-        text, seqs = build_evidence_bundle([episode], [_traj(first, second)])
+        bundle = build_evidence_bundle([episode], [_traj(first, second)])
 
-    assert seqs == {2, 4}
-    assert text.splitlines()[-2:] == [
-        "- seq 2 (ambiguous: 2 records share this seq)",
-        "- seq 4 (ambiguous: 2 records share this seq)",
+    assert _excerpts(bundle.text) == [
+        '- [ev1] tool.start bash: {"n": 1}',
+        '- [ev2] tool.start grep: {"n": 2}',
     ]
-    assert "2 records share seq 4 in thread 'thread-t'" in caplog.text
+    assert [(f.ref.line, f.ref.seq) for f in bundle.shown.values()] == [(4, 4), (24, 4)]
+    assert caplog.text == ""
 
 
-def test_duplicate_thread_keeps_the_first_copy() -> None:
+def test_duplicate_source_keeps_the_first_copy() -> None:
     first = _traj(_turn("run-1", 2, "first copy"))
     second = _traj(_turn("run-1", 2, "second copy"))
 
-    text, _ = build_evidence_bundle([_episode("skill_gap", [2])], [first, second])
+    bundle = build_evidence_bundle([_episode("skill_gap", [2])], [first, second])
 
-    assert text.splitlines()[-1] == '- seq 2 user: "first copy"'
+    assert bundle.text.splitlines()[-1] == '- [ev1] user: "first copy"'
 
 
 # -------------------------------------------------------------------- errors
 
 
-def test_unknown_thread_raises() -> None:
+def test_unknown_source_raises() -> None:
     episode = _episode("skill_gap", [2], thread_id="thread-other")
 
-    with pytest.raises(ValueError, match="cites thread 'thread-other', which is not among"):
+    with pytest.raises(ValueError, match="cites source 'thread-other.jsonl', which is not among"):
         build_evidence_bundle([episode], [_sample()])
 
 
-def test_unresolved_seq_raises_even_beyond_the_excerpt_cap() -> None:
+def test_unresolved_ref_raises() -> None:
     turns = [_turn(f"run-{i}", 2 * i, f"message {i}") for i in range(1, 21)]
     seqs = [turn.seq_start for turn in turns]
-    seqs[10] = 21  # in the omitted middle, still validated
+    seqs[10] = 21
     episode = _episode("skill_gap", seqs)
 
-    with pytest.raises(ValueError, match=r"cites seq \[21\], which is not in its trajectory"):
+    with pytest.raises(ValueError, match=r"cites \['thread-t.jsonl:21'\], which is not in its trajectory"):
         build_evidence_bundle([episode], [_traj(*turns)])
 
 
-def test_unresolved_seq_is_reported_regardless_of_budget() -> None:
+def test_unresolved_ref_is_reported_regardless_of_budget() -> None:
     light = _episode("skill_gap", [2, 99])
     heavy = _episode("approval_denied", [12])
 
-    with pytest.raises(ValueError, match=r"cites seq \[99\]"):
+    with pytest.raises(ValueError, match=r"cites \['thread-t.jsonl:99'\]"):
         build_evidence_bundle([light, heavy], [_sample()], max_chars=10**6)
 
 
@@ -462,14 +623,29 @@ def test_fixture_episodes_render(path: Path) -> None:
     traj = load_trajectory(path)
     episodes = extract_episodes(traj, skill_index=BM25Index(DOCS))
 
-    text, seqs = build_evidence_bundle(episodes, [traj])
+    bundle = build_evidence_bundle(episodes, [traj])
 
-    assert seqs == {seq for episode in episodes for seq in episode.evidence_seq}
-    assert len(_blocks(text)) == (len(episodes) if episodes else 1)
-    assert text.count("### Episode E") == len(episodes)
-    for episode in episodes:
-        evidence = ", ".join(str(seq) for seq in episode.evidence_seq)
-        assert f"Evidence: seq {evidence}" in text
+    assert _statuses(bundle) == ["shown"] * len(episodes)
+    assert len(_blocks(bundle.text)) == (len(episodes) if episodes else 1)
+    assert bundle.text.count("### Episode E") == len(episodes)
+    assert "Evidence: seq" not in bundle.text
+    cited = re.findall(r"\[(ev\d+)\]", bundle.text)
+    assert set(cited) == set(bundle.shown)
+    assert list(bundle.shown) == [f"ev{n}" for n in range(1, len(bundle.shown) + 1)]
+    for fragment_id, fragment in bundle.shown.items():
+        assert f"- [{fragment_id}] {fragment.text}" in bundle.text
+    assert {item.ref for e in episodes for item in e.evidence} == {f.ref for f in bundle.shown.values()}
+
+
+@pytest.mark.parametrize("path", FIXTURE_FILES, ids=FIXTURE_IDS)
+def test_shown_refs_resolve_to_physical_lines(path: Path) -> None:
+    # Includes malformed_lines.jsonl: corrupted lines never shift a ref.
+    traj = load_trajectory(path)
+    bundle = build_evidence_bundle(extract_episodes(traj, skill_index=BM25Index(DOCS)), [traj])
+
+    for fragment in bundle.shown.values():
+        assert fragment.ref.source == path.name
+        assert _seq_at(path, fragment.ref.line) == fragment.ref.seq
 
 
 def test_cross_session_episodes_render() -> None:
@@ -477,8 +653,19 @@ def test_cross_session_episodes_render() -> None:
     episodes = mine_cross_session(trajs)
     assert episodes  # the fixtures share procedures (see test_features)
 
-    text, seqs = build_evidence_bundle(episodes, trajs)
+    bundle = build_evidence_bundle(episodes, trajs)
 
-    assert seqs == {seq for episode in episodes for seq in episode.evidence_seq}
-    assert text.count("### Episode E") == len(episodes)
-    assert all(header.group(2) == "repeated_procedure" for header in _headers(text))
+    assert _statuses(bundle) == ["shown"] * len(episodes)
+    blocks = _blocks(bundle.text)
+    paths = {traj.source: traj.path for traj in trajs}
+    for block, item in zip(blocks, bundle.episodes):
+        episode = item.episode
+        support = episode.facts["support"]
+        assert block.splitlines()[1] == f"Support: {support} threads (counted by code); excerpts from 2 of them"
+        excerpts = _excerpts(block)
+        assert len(excerpts) == 2 * len(episode.tool_sequence)
+        own, other = excerpts[: len(episode.tool_sequence)], excerpts[len(episode.tool_sequence) :]
+        assert not any("(thread " in line for line in own)
+        assert all("] (thread " in line for line in other)
+    for fragment in bundle.shown.values():
+        assert _seq_at(paths[fragment.ref.source], fragment.ref.line) == fragment.ref.seq

@@ -21,22 +21,27 @@
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from msagent.skill_evolver.bundle import ShownFragment
 from msagent.skill_evolver.classify import EMPTY_REPLY, Candidate
 from msagent.skill_evolver.render import (
     CANDIDATES_PLACEHOLDER,
     EXISTING_SKILL_PLACEHOLDER,
     NO_EXISTING_SKILL,
+    RENDER_EVIDENCE_LIMIT,
     format_candidates,
     format_existing_skill,
     plan_render,
     render_skill_md,
+    select_render_evidence,
 )
 from msagent.skills.factory import Skill
+from msagent.trajectory_recorder.model import EvidenceRef
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 PROMPT_PATH = (
@@ -79,12 +84,31 @@ def _candidate(**overrides: Any) -> Candidate:
     data: dict[str, Any] = {
         "title": "Build before test",
         "rule": "Run make before invoking the test suite.",
-        "evidence_refs": [4, 5],
+        "evidence_refs": ["ev1", "ev2"],
         "future_applicability": "high",
         "target": {"action": "create", "existing_skill": None},
     }
     data.update(overrides)
     return Candidate.model_validate(data)
+
+
+def _fragment(fragment_id: str, text: str, *, required: bool = True) -> ShownFragment:
+    seq = int(fragment_id[2:])
+    return ShownFragment(
+        id=fragment_id,
+        ref=EvidenceRef(source="thread-t.jsonl", line=seq, seq=seq),
+        role="event",
+        required=required,
+        text=text,
+    )
+
+
+SHOWN = {
+    "ev1": _fragment("ev1", "tool.error bash (error): CalledProcessError: exit 2 missing dep"),
+    "ev2": _fragment("ev2", 'tool.start bash: {"cmd": "make deps && make"}', required=False),
+    "ev3": _fragment("ev3", "tool.result bash (ok): ok built 42 targets"),
+    "ev4": _fragment("ev4", 'user: "please build it"', required=False),
+}
 
 
 def _update(existing_skill: str, **overrides: Any) -> Candidate:
@@ -116,6 +140,53 @@ def test_format_candidates() -> None:
             "   Target: update `real`",
         ]
     )
+
+
+def test_format_candidates_with_conditions_and_evidence() -> None:
+    candidate = _candidate(
+        evidence_refs=["ev2", "ev1"],
+        applies_when="the test suite depends on generated code",
+        constraints=["keep generated files out of version control", "run make once per checkout"],
+        expected_outcome="a green test run without manual generation",
+    )
+
+    text = format_candidates([candidate], SHOWN)
+
+    assert text == "\n".join(
+        [
+            "1. Build before test (future applicability: high)",
+            "   Rule: Run make before invoking the test suite.",
+            "   When: the test suite depends on generated code",
+            "   Constraints:",
+            "   - keep generated files out of version control",
+            "   - run make once per checkout",
+            "   Expected outcome: a green test run without manual generation",
+            "   Target: create a new skill",
+            "   Evidence:",
+            "   - tool.error bash (error): CalledProcessError: exit 2 missing dep",
+            '   - tool.start bash: {"cmd": "make deps && make"}',
+        ]
+    )
+
+
+def test_select_render_evidence_prefers_required_and_caps() -> None:
+    candidate = _candidate(evidence_refs=["ev4", "ev2", "ev3", "ev1", "ev99"])
+
+    fragments = select_render_evidence(candidate, SHOWN)
+
+    assert [fragment.id for fragment in fragments] == ["ev3", "ev1", "ev4"]
+    assert len(fragments) == RENDER_EVIDENCE_LIMIT
+    assert select_render_evidence(candidate, {}) == []
+
+
+def test_render_payload_has_no_evidence_ids() -> None:
+    candidate = _candidate(evidence_refs=["ev1", "ev2", "ev3", "ev4"])
+
+    text = format_candidates([candidate], SHOWN)
+
+    assert "Evidence:" in text
+    assert not re.search(r"\bev\d+\b", text)
+    assert not re.search(r"\bseq\b", text)
 
 
 def test_format_existing_skill() -> None:
@@ -224,6 +295,21 @@ async def test_valid_first_reply_single_call(fake_llm_cls) -> None:
     assert NO_EXISTING_SKILL in instruction
     assert CANDIDATES_PLACEHOLDER not in instruction
     assert EXISTING_SKILL_PLACEHOLDER not in instruction
+
+
+@pytest.mark.asyncio
+async def test_evidence_texts_reach_the_render_payload(fake_llm_cls) -> None:
+    llm = fake_llm_cls(VALID)
+    candidate = _candidate(applies_when="the build is stale")
+
+    result = await render_skill_md([candidate], llm=llm, template=TEMPLATE, evidence=SHOWN)
+
+    assert result.ok
+    instruction = llm.payloads[0][0][1]
+    assert "   When: the build is stale" in instruction
+    assert "   - " + SHOWN["ev1"].text in instruction
+    assert "   - " + SHOWN["ev2"].text in instruction
+    assert "ev1" not in instruction and "ev2" not in instruction
 
 
 @pytest.mark.asyncio
@@ -356,5 +442,8 @@ def test_packaged_render_prompt_contract() -> None:
     assert "Do not create an empty `Examples` section." in text
     assert "# Output contract" in text
     assert text.index("# REQUIRED SKILL.md STRUCTURE") < text.index("# Output contract")
+    # The candidate block carries conditions and evidence text, never ids.
+    for present in ("When", "Constraints", "Expected outcome", "Evidence", "evidence ids"):
+        assert present in text, present
     for absent in ("{evidence_bundle}", "{skill_library}", "Nothing to save", "skills_list"):
         assert absent not in text

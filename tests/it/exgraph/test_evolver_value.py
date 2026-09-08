@@ -141,7 +141,9 @@ def test_evolver_bundle_without_graph_has_episodes_but_no_relations(corpus) -> N
     assert "error_recovery" in kinds
     assert "user_correction" in kinds
     assert "approval_denied" in kinds
-    bundle, seqs = build_evidence_bundle(episodes, [traj])
+    built = build_evidence_bundle(episodes, [traj])
+    bundle = built.text
+    seqs = {fragment.ref.seq for fragment in built.shown.values()}
     assert "### Episode" in bundle
     assert "Experience graph" not in bundle
     assert "fixed_by" not in bundle
@@ -161,7 +163,8 @@ def test_graph_appendix_adds_relations_not_new_evidence_seqs(corpus, tmp_path, m
 
     traj = corpus["signals"]
     episodes = extract_episodes(traj)
-    bundle, seqs = build_evidence_bundle(episodes, [traj])
+    built = build_evidence_bundle(episodes, [traj])
+    bundle, shown = built.text, set(built.shown)
 
     from msagent.exgraph.enrich import remember_thread
     from msagent.exgraph.workspace import rebuild_overlay
@@ -185,8 +188,7 @@ def test_graph_appendix_adds_relations_not_new_evidence_seqs(corpus, tmp_path, m
     # valid_seq is still only evolver episodes
     from msagent.skill_evolver.bundle import build_evidence_bundle as rebuild
 
-    _, seqs_again = rebuild(episodes, [traj])
-    assert seqs_again == seqs
+    assert set(rebuild(episodes, [traj]).shown) == shown
 
 
 def test_kill_switch_removes_value_and_writes(corpus, tmp_path, monkeypatch) -> None:
@@ -196,7 +198,7 @@ def test_kill_switch_removes_value_and_writes(corpus, tmp_path, monkeypatch) -> 
     state.mkdir()
     traj = corpus["signals"]
     episodes = extract_episodes(traj)
-    bundle, _ = build_evidence_bundle(episodes, [traj])
+    bundle = build_evidence_bundle(episodes, [traj]).text
     monkeypatch.setenv("MSAGENT_EXGRAPH_DISABLED", "1")
     text = attach_stored_graph(bundle, traj, working_dir=work, state_dir=state)
     assert text == bundle
@@ -226,7 +228,9 @@ def test_write_value_report(corpus, tmp_path, monkeypatch) -> None:
     traj = corpus["signals"]
     episodes = extract_episodes(traj)
     score = evidence_score(episodes)
-    bundle, seqs = build_evidence_bundle(episodes, [traj])
+    built = build_evidence_bundle(episodes, [traj])
+    bundle = built.text
+    seqs = {fragment.ref.seq for fragment in built.shown.values()}
 
     from msagent.exgraph.enrich import remember_thread
     from msagent.exgraph.workspace import rebuild_overlay

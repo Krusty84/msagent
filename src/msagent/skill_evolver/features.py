@@ -22,10 +22,11 @@ Everything here is computed by code over the typed trajectory model, without
 an LLM: detectors turn recurring session patterns (a failed tool call fixed
 by changed arguments, a user correcting the agent, a retry loop, a denied
 approval, a procedure shared by several sessions, a skill that should have
-been consulted) into :class:`Episode` records whose ``evidence_seq`` points
-at real events of the source JSONL.
+been consulted) into :class:`Episode` records whose ``evidence`` items point
+at real events of the source JSONL by :class:`EvidenceRef` (file name and
+physical line — ``seq`` restarts per recorder writer and is display only).
 
-Rules of FEATURES_VERSION 2:
+Rules of FEATURES_VERSION 3:
 
 - Calls are compared inside one *execution context*: a turn group (a turn
   plus the ``resume`` turns that continue it — the only continuation the
@@ -36,6 +37,17 @@ Rules of FEATURES_VERSION 2:
   a call operates on — tells one operation from another.
 - Approval decisions are read by structure (:func:`classify_approval`); a
   shape that cannot be read is ``unknown``, never an assumed denial.
+- Every episode names the events that make it what it is as
+  :class:`EvidenceItem` records with a role; the ``required`` ones are the
+  minimum without which the episode cannot be shown to the LLM at all
+  (a recovery: the error, the changed call and its result; a correction:
+  the correcting message; a retry: its first and last attempt; a denial:
+  the decision; a shared procedure: its steps in two sessions; a skill gap:
+  the first domain call and the first user message).
+- Text copied into facts or snippets is cut around what matters — the
+  correction marker, the changed part of an argument, the head and tail of
+  an error — and every cut is marked with ``…``. Nothing absent is
+  reconstructed: an empty result stays empty, an orphan stays ``orphan``.
 - Episodes about the same events share ``anchors`` and form one *incident*.
   :func:`evidence_score` counts the heaviest episode of each incident and
   adds incidents up, so several detectors describing one chain do not pile
@@ -50,6 +62,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os.path
 import posixpath
 import re
 import shlex
@@ -59,6 +72,7 @@ from typing import Any, Literal, get_args
 from msagent.skill_evolver.retrieval import BM25Index
 from msagent.trajectory_recorder.model import (
     PRELUDE_RUN_ID,
+    EvidenceRef,
     ToolCall,
     Trajectory,
     Turn,
@@ -77,7 +91,7 @@ EpisodeKind = Literal[
 EPISODE_KINDS: frozenset[str] = frozenset(get_args(EpisodeKind))
 # Version of the detector rules and weights, recorded in the provenance of
 # every proposal; bump it when a rule or a weight changes.
-FEATURES_VERSION = 2
+FEATURES_VERSION = 3
 
 # Gate threshold when the skill evolver config does not set
 # min_evidence_score; direct_skill_generation re-exports it. The strong
@@ -174,9 +188,17 @@ NGRAM_MAX = 5
 # 1.39 at N=5, 3.5 at N=50), so libraries of four or more skills fire on a
 # single distinctive shared term and tiny ones need two.
 SKILL_GAP_MIN_SCORE = 1.0
-# Truncation limits for values copied into ``Episode.facts``.
+# Longest text copied into ``Episode.facts`` or an evidence snippet; a cut
+# is marked with ELLIPSIS and the marked text is never longer than this.
 VALUE_LIMIT = 200
-TEXT_LIMIT = 500
+ELLIPSIS = "…"
+# Error text keeps its head and its tail: a traceback ends with the exception.
+ERROR_HEAD = 100
+ERROR_TAIL = 180
+# Characters kept on each side of the changed part of an argument value.
+DIFF_CONTEXT = 60
+# Characters kept on each side of the correction marker of a user message.
+MARKER_CONTEXT = 120
 
 # Reasons of :func:`gate_decision`, printed by the dry run.
 GATE_NO_EPISODES = "no episodes"
@@ -186,38 +208,76 @@ GATE_STRONG_CORRECTION = "strong user correction"
 
 
 @dataclass(frozen=True, slots=True)
+class EvidenceItem:
+    """One cited event of an episode.
+
+    ``ref`` is the physical identity of the event; ``role`` says what the
+    event is to this episode (kind-specific: ``error``, ``fixed_call``,
+    ``correction``, ``attempt``, ``step``, ...). ``required`` marks the items
+    without which the episode cannot be shown at all: the evidence bundle
+    keeps them when it trims for budget and excludes the episode when even
+    they do not fit. ``snippet`` is a content-bearing cut chosen by the
+    detector (edges marked with ELLIPSIS); ``None`` means "show the head of
+    the recorded event".
+    """
+
+    ref: EvidenceRef
+    role: str
+    required: bool
+    snippet: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class Episode:
     """One knowledge candidate mined from a trajectory.
 
-    ``evidence_seq`` lists the ``seq`` of the source events (never empty,
-    strictly increasing); ``facts`` holds JSON-safe, kind-specific details.
-    ``anchors`` are keys (``"<run_id>#<seq>"``) of the events the episode is
-    *about* — its tool calls, its correcting turn, its approval — never of
-    context-only events; episodes sharing an anchor form one incident. A
-    trajectory-level observation (``skill_gap``) has no anchors.
+    ``source`` is the file name of the episode's own thread and ``evidence``
+    lists its cited events (never empty, refs unique, at least one required
+    item and at least one item of ``source`` — a ``repeated_procedure`` also
+    cites the steps of a second supporting thread). ``facts`` holds
+    JSON-safe, kind-specific details. ``anchors`` are keys
+    (``"<run_id>#<seq>"``) of the events the episode is *about* — its tool
+    calls, its correcting turn, its approval — never of context-only events;
+    episodes sharing an anchor form one incident. A trajectory-level
+    observation (``skill_gap``) has no anchors.
     """
 
     kind: EpisodeKind
     thread_id: str
-    evidence_seq: list[int]
+    source: str
+    evidence: list[EvidenceItem]
     tool_sequence: list[str]
     facts: dict[str, Any]
     weight: float
     anchors: list[str] = field(default_factory=list)
+
+    @property
+    def evidence_seq(self) -> list[int]:
+        """Sorted seqs of the own-thread events, for tables and displays.
+
+        Seqs restart per recorder writer, so this is not an identity; cite
+        events by ``EvidenceItem.ref``.
+        """
+        return sorted({item.ref.seq for item in self.evidence if item.ref.source == self.source})
 
     def __post_init__(self) -> None:
         if self.kind not in EPISODE_KINDS:
             raise ValueError(f"unknown episode kind {self.kind!r}")
         if not self.thread_id:
             raise ValueError(f"{self.kind} episode without thread_id")
-        if not self.evidence_seq:
+        if not self.source:
+            raise ValueError(f"{self.kind} episode without source")
+        if not self.evidence:
             raise ValueError(f"{self.kind} episode without evidence")
-        seqs = self.evidence_seq
-        if any(isinstance(s, bool) or not isinstance(s, int) for s in seqs):
-            raise ValueError(f"non-int evidence in {self.kind}: {self.evidence_seq!r}")
-        pairs = zip(self.evidence_seq, self.evidence_seq[1:])
-        if any(earlier >= later for earlier, later in pairs):
-            raise ValueError(f"unsorted evidence in {self.kind}: {self.evidence_seq!r}")
+        if any(not isinstance(item, EvidenceItem) for item in self.evidence):
+            raise ValueError(f"invalid evidence in {self.kind}: {self.evidence!r}")
+        refs = [item.ref for item in self.evidence]
+        if len(set(refs)) != len(refs):
+            raise ValueError(f"duplicate evidence in {self.kind}: {refs!r}")
+        if not any(item.required for item in self.evidence):
+            raise ValueError(f"{self.kind} episode without required evidence")
+        if not any(ref.source == self.source for ref in refs):
+            raise ValueError(f"{self.kind} episode cites no event of {self.source!r}")
         if not 0.0 <= self.weight <= 1.0:
             raise ValueError(f"weight out of range in {self.kind}: {self.weight!r}")
         if any(not isinstance(a, str) or not a for a in self.anchors):
@@ -298,9 +358,27 @@ def _anchor(run_id: str, seq: int) -> str:
     return f"{run_id}#{seq}"
 
 
-def _evidence(*seqs: int | None) -> list[int]:
-    """Deduplicate and sort event seqs, dropping ``None`` (orphan spans)."""
-    return sorted({seq for seq in seqs if seq is not None})
+def _start(traj: Trajectory, call: ToolCall) -> EvidenceRef:
+    """Ref of a call's ``tool.start`` (or of its result when the start is missing)."""
+    return traj.event_ref(seq=call.seq_start, line=call.line_start)
+
+
+def _end(traj: Trajectory, call: ToolCall) -> EvidenceRef | None:
+    """Ref of a call's ``tool.result``/``tool.error``; ``None`` for an orphan."""
+    if call.seq_end is None or call.line_end is None:
+        return None
+    return traj.event_ref(seq=call.seq_end, line=call.line_end)
+
+
+def _turn_ref(traj: Trajectory, turn: Turn) -> EvidenceRef:
+    """Ref of the event that opened a turn (its ``turn.start`` for real turns)."""
+    return traj.event_ref(seq=turn.seq_start, line=turn.line_start)
+
+
+def _end_item(traj: Trajectory, call: ToolCall, role: str, *, snippet: str | None = None) -> list[EvidenceItem]:
+    """A required item for the end of ``call``, or nothing for an orphan."""
+    ref = _end(traj, call)
+    return [] if ref is None else [EvidenceItem(ref, role, True, snippet)]
 
 
 def _canonical(value: Any) -> str:
@@ -308,12 +386,51 @@ def _canonical(value: Any) -> str:
     return json.dumps(value, sort_keys=True, ensure_ascii=False, default=str)
 
 
+def _text(value: Any) -> str:
+    """A value as text: strings as they are, anything else as canonical JSON."""
+    return value if isinstance(value, str) else _canonical(value)
+
+
 def _clip(value: Any) -> Any:
-    """JSON-safe, short copy of a value: text longer than VALUE_LIMIT is cut."""
+    """JSON-safe, short copy of a value: text longer than VALUE_LIMIT is cut and marked."""
     if value is None or isinstance(value, (bool, int, float)):
         return value
-    text = value if isinstance(value, str) else _canonical(value)
-    return text[:VALUE_LIMIT]
+    text = _text(value)
+    if len(text) <= VALUE_LIMIT:
+        return text
+    return text[: VALUE_LIMIT - len(ELLIPSIS)] + ELLIPSIS
+
+
+def _clip_edges(text: str, head: int = ERROR_HEAD, tail: int = ERROR_TAIL) -> str:
+    """Keep the first ``head`` and last ``tail`` characters, marking the cut."""
+    if len(text) <= head + tail + len(ELLIPSIS):
+        return text
+    return text[:head] + ELLIPSIS + text[-tail:]
+
+
+def _window(text: str, start: int, end: int, context: int) -> str:
+    """``text[start:end]`` with ``context`` characters around it; cut edges marked."""
+    low, high = max(0, start - context), min(len(text), end + context)
+    body = _clip(text[low:high])
+    if low:
+        body = ELLIPSIS + body
+    if high < len(text) and not body.endswith(ELLIPSIS):
+        body += ELLIPSIS
+    return body
+
+
+def _diff_window(old: str, new: str) -> tuple[str, str]:
+    """The changed part of two texts with DIFF_CONTEXT around it, cuts marked.
+
+    The common prefix and suffix are dropped, so a change at the end of a
+    long argument stays visible instead of being clipped away with the head.
+    """
+    prefix = len(os.path.commonprefix([old, new]))
+    suffix = len(os.path.commonprefix([old[prefix:][::-1], new[prefix:][::-1]]))
+    return (
+        _window(old, prefix, len(old) - suffix, DIFF_CONTEXT),
+        _window(new, prefix, len(new) - suffix, DIFF_CONTEXT),
+    )
 
 
 def _clip_args(args: dict[str, Any]) -> dict[str, Any]:
@@ -321,12 +438,24 @@ def _clip_args(args: dict[str, Any]) -> dict[str, Any]:
     return {str(key): _clip(value) for key, value in args.items()}
 
 
+def _changed_value(old: Any, new: Any) -> dict[str, Any]:
+    """``{"old", "new"}`` of one changed argument: scalars as they are, text windowed on the change."""
+    if all(value is None or isinstance(value, (bool, int, float)) for value in (old, new)):
+        return {"old": old, "new": new}
+    before, after = _diff_window(_text(old), _text(new))
+    return {"old": before, "new": after}
+
+
 def _args_diff(old: dict[str, Any], new: dict[str, Any]) -> dict[str, Any]:
-    """Keys added, removed or changed between two argument dicts (clipped)."""
+    """Keys added, removed or changed between two argument dicts.
+
+    Added and removed values are clipped; a changed text value is windowed
+    around the change (:func:`_diff_window`).
+    """
     added = {key: _clip(new[key]) for key in sorted(new.keys() - old.keys())}
     removed = {key: _clip(old[key]) for key in sorted(old.keys() - new.keys())}
     changed = {
-        key: {"old": _clip(old[key]), "new": _clip(new[key])}
+        key: _changed_value(old[key], new[key])
         for key in sorted(old.keys() & new.keys())
         if _canonical(old[key]) != _canonical(new[key])
     }
@@ -394,18 +523,26 @@ def _work_object(call: ToolCall) -> str | None:
     return ""
 
 
-def _markers(text: str) -> list[str]:
-    """Correction markers found in the normalized text, strong ones first.
+def _collapse(text: str) -> str:
+    """Whitespace-collapsed text; the form markers are searched in and windows cut from."""
+    return " ".join(text.split())
+
+
+def _markers(text: str) -> list[tuple[str, int]]:
+    """Correction markers found in the collapsed text with their positions, strong ones first.
 
     A marker must start a word (``интернет,`` is not ``нет,``), and an
-    OPENING_MARKERS negation must start the message.
+    OPENING_MARKERS negation must start the message. Matching is
+    case-insensitive on the collapsed text itself (not a casefolded copy,
+    whose length may differ), so positions index :func:`_collapse` output.
     """
-    normalized = " ".join(text.split()).casefold()
-    found: list[str] = []
+    normalized = _collapse(text)
+    found: list[tuple[str, int]] = []
     for marker in (*STRONG_CORRECTION_MARKERS, *WEAK_CORRECTION_MARKERS):
         prefix = "^" if marker in OPENING_MARKERS else r"(?<!\w)"
-        if re.search(prefix + re.escape(marker.casefold()), normalized):
-            found.append(marker)
+        match = re.search(prefix + re.escape(marker), normalized, re.IGNORECASE)
+        if match:
+            found.append((marker, match.start()))
     return found
 
 
@@ -489,18 +626,23 @@ def classify_approval(request: Any, decision: Any) -> ApprovalVerdict:
 
 def _episode(
     kind: EpisodeKind,
-    thread_id: str,
-    evidence: list[int],
+    traj: Trajectory,
+    evidence: list[EvidenceItem],
     tool_sequence: list[str],
     facts: dict[str, Any],
     anchors: list[str],
     *,
     weight: float | None = None,
 ) -> Episode:
+    """An episode of ``traj``; items citing one ref twice keep the first (a start-less call has start == end)."""
+    unique: dict[EvidenceRef, EvidenceItem] = {}
+    for item in evidence:
+        unique.setdefault(item.ref, item)
     return Episode(
         kind=kind,
-        thread_id=thread_id,
-        evidence_seq=evidence,
+        thread_id=traj.thread_id,
+        source=traj.source,
+        evidence=list(unique.values()),
         tool_sequence=tool_sequence,
         facts=facts,
         weight=EPISODE_WEIGHTS[kind] if weight is None else weight,
@@ -522,6 +664,10 @@ def _detect_error_recovery(traj: Trajectory) -> list[Episode]:
     Two failures sharing one recovery yield two episodes: two diffs. Known
     imprecision: the tool name is the only link, so a success of the same
     tool on another work object is reported as a recovery too.
+
+    Required evidence: the error (``tool.error``, or the ``tool.result``
+    whose ``output_text`` carries it), the changed call and its result; the
+    failed call's start is context.
     """
     episodes: list[Episode] = []
     for group in _groups(traj):
@@ -536,21 +682,22 @@ def _detect_error_recovery(traj: Trajectory) -> list[Episode]:
                     diff = _args_diff(failed.args, candidate.args)
                     if diff:
                         between = stream[index : index + offset + 2]
+                        error_text = _clip_edges(failed.error or failed.output_text)
                         episodes.append(
                             _episode(
                                 "error_recovery",
-                                traj.thread_id,
-                                _evidence(
-                                    failed.seq_start,
-                                    failed.seq_end,
-                                    candidate.seq_start,
-                                    candidate.seq_end,
-                                ),
+                                traj,
+                                [
+                                    *_end_item(traj, failed, "error", snippet=error_text),
+                                    *_end_item(traj, candidate, "result"),
+                                    EvidenceItem(_start(traj, candidate), "fixed_call", True),
+                                    EvidenceItem(_start(traj, failed), "failed_call", False),
+                                ],
                                 [call.name for _, call in between],
                                 {
                                     "tool": failed.name,
                                     "error_type": failed.error_type,
-                                    "error": _clip(failed.error or failed.output_text),
+                                    "error": error_text,
                                     "args_diff": diff,
                                     "calls_between": offset,
                                     "subagent": failed.subagent,
@@ -565,12 +712,19 @@ def _detect_error_recovery(traj: Trajectory) -> list[Episode]:
     return episodes
 
 
-def _action_changes(before: list[ToolCall], after: list[ToolCall]) -> dict[str, Any] | None:
+_CallPair = tuple[ToolCall, ToolCall]
+
+
+def _action_changes(
+    before: list[ToolCall],
+    after: list[ToolCall],
+) -> tuple[dict[str, Any] | None, dict[str, _CallPair]]:
     """How the agent's actions changed between two turn groups.
 
     Tools added or removed by name, and for a tool used in both groups the
     diff of its last call before against its first call after, compared in
-    normalized form. ``None`` when nothing changed.
+    normalized form. Returns the change record (``None`` when nothing
+    changed) and, per tool whose arguments changed, that pair of calls.
     """
     names_before = {call.name for call in before}
     names_after = {call.name for call in after}
@@ -579,6 +733,7 @@ def _action_changes(before: list[ToolCall], after: list[ToolCall]) -> dict[str, 
     for call in after:
         first_after.setdefault(call.name, call)
     args_changed: dict[str, Any] = {}
+    pairs: dict[str, _CallPair] = {}
     for name in sorted(names_before & names_after):
         diff = _args_diff(
             _normalize_args(last_before[name].args),
@@ -586,12 +741,13 @@ def _action_changes(before: list[ToolCall], after: list[ToolCall]) -> dict[str, 
         )
         if diff:
             args_changed[name] = diff
+            pairs[name] = (last_before[name], first_after[name])
     changes = {
         "tools_added": sorted(names_after - names_before),
         "tools_removed": sorted(names_before - names_after),
         "args_changed": args_changed,
     }
-    return changes if any(changes.values()) else None
+    return (changes if any(changes.values()) else None), pairs
 
 
 def _detect_user_correction(traj: Trajectory) -> list[Episode]:
@@ -607,6 +763,11 @@ def _detect_user_correction(traj: Trajectory) -> list[Episode]:
     what changed, not that the message caused it. A group without a user
     message cannot correct anything, and the synthetic prelude turn is never
     the corrected one.
+
+    Required evidence: the correcting message, shown as the window around
+    its first marker (a long message keeps the phrase, not its head). The
+    corrected turn and the before/after calls of each changed tool are
+    context.
     """
     episodes: list[Episode] = []
     groups = _groups(traj)
@@ -615,23 +776,31 @@ def _detect_user_correction(traj: Trajectory) -> list[Episode]:
         message = head.user_message
         if prev[0].run_id == PRELUDE_RUN_ID or message is None:
             continue
-        markers = _markers(message)
-        if not markers:
+        found = _markers(message)
+        if not found:
             continue
         before = [call for turn in prev for call in turn.tool_calls]
         after = [call for turn in group for call in turn.tool_calls]
-        changes = _action_changes(before, after)
+        changes, pairs = _action_changes(before, after)
         if changes is None:
             continue
+        markers = [marker for marker, _ in found]
         strong = any(marker in STRONG_CORRECTION_MARKERS for marker in markers)
+        marker, position = found[0]
+        snippet = _window(_collapse(message), position, position + len(marker), MARKER_CONTEXT)
         episodes.append(
             _episode(
                 "user_correction",
-                traj.thread_id,
-                _evidence(prev[0].seq_start, head.seq_start),
+                traj,
+                [
+                    EvidenceItem(_turn_ref(traj, head), "correction", True, snippet),
+                    EvidenceItem(_turn_ref(traj, prev[0]), "corrected_turn", False),
+                    *(EvidenceItem(_start(traj, earlier), "before_call", False) for earlier, _ in pairs.values()),
+                    *(EvidenceItem(_start(traj, later), "after_call", False) for _, later in pairs.values()),
+                ],
                 [call.name for call in after],
                 {
-                    "correction_text": message[:TEXT_LIMIT],
+                    "correction_text": snippet,
                     "strength": "strong" if strong else "weak",
                     "markers": markers,
                     "tools_before": [call.name for call in before],
@@ -670,11 +839,12 @@ def _retry_episode(traj: Trajectory, chain: list[_Step], subject: str) -> list[E
         reason = "search key varies"
     else:
         return []
+    last = len(calls) - 1
     return [
         _episode(
             "retry_loop",
-            traj.thread_id,
-            _evidence(*(call.seq_start for call in calls)),
+            traj,
+            [EvidenceItem(_start(traj, call), "attempt", index in (0, last)) for index, call in enumerate(calls)],
             [call.name for call in calls],
             {
                 "tool_name": calls[0].name,
@@ -700,6 +870,9 @@ def _detect_retry_loop(traj: Trajectory) -> list[Episode]:
     an attempt failed, or when the attempts differ in a search key. Equal
     argument keys alone are not a retry: reading three files is a fan-out,
     and a parameter sweep that never failed is not a loop.
+
+    Required evidence: the first and the last attempt; the attempts between
+    them are context.
     """
     episodes: list[Episode] = []
     for group in _groups(traj):
@@ -725,6 +898,8 @@ def _detect_approval_denied(traj: Trajectory) -> list[Episode]:
     ``resume`` turn that continues an interrupted turn, never a following
     ``dispatch`` turn. Approvals carry no subagent, so the context takes
     calls of any subagent.
+
+    Required evidence: the decision; the following calls are context.
     """
     episodes: list[Episode] = []
     for group in _groups(traj):
@@ -748,8 +923,11 @@ def _detect_approval_denied(traj: Trajectory) -> list[Episode]:
                 episodes.append(
                     _episode(
                         "approval_denied",
-                        traj.thread_id,
-                        _evidence(approval.seq, *(call.seq_start for call in context)),
+                        traj,
+                        [
+                            EvidenceItem(traj.event_ref(seq=approval.seq, line=approval.line), "approval", True),
+                            *(EvidenceItem(_start(traj, call), "next_call", False) for call in context),
+                        ],
                         [call.name for call in context],
                         {
                             "interrupt_id": approval.interrupt_id,
@@ -781,6 +959,9 @@ def _detect_skill_gap(traj: Trajectory, index: BM25Index) -> list[Episode]:
     against the library scores at least SKILL_GAP_MIN_SCORE. The candidate is
     a description-fix suggestion for that skill, not a new skill. It is a
     trajectory-level observation and has no anchors.
+
+    Required evidence: the first domain call and the first user message;
+    later user messages are context.
     """
     if traj.skills_consulted or len(index) == 0:
         return []
@@ -804,8 +985,11 @@ def _detect_skill_gap(traj: Trajectory, index: BM25Index) -> list[Episode]:
     return [
         _episode(
             "skill_gap",
-            traj.thread_id,
-            _evidence(first_call.seq_start, *(turn.seq_start for turn in turns)),
+            traj,
+            [
+                EvidenceItem(_start(traj, first_call), "first_call", True),
+                *(EvidenceItem(_turn_ref(traj, turn), "user_message", index == 0) for index, turn in enumerate(turns)),
+            ],
             domain_tools,
             {
                 "candidate_skill": hit.doc.name,
@@ -890,19 +1074,23 @@ def mine_cross_session(
     ``thread_id`` values, so repetition inside one trajectory is not
     evidence. Only closed patterns are reported: an n-gram is dropped when a
     longer frequent n-gram containing it has the same support, so a shared
-    five-step procedure yields one episode, not ten. The episode cites the
-    first supporting trajectory; every supporting thread is listed in
-    ``facts["thread_ids"]``. A shared n-gram says that several sessions
+    five-step procedure yields one episode, not ten. The episode belongs to
+    the first supporting trajectory in input order and cites, as required
+    evidence, the steps of that trajectory and of the lexicographically
+    first other supporting thread — proof from two sessions, while
+    ``facts["support"]`` counts every supporting thread (all listed in
+    ``facts["thread_ids"]``). A shared n-gram says that several sessions
     issued these calls in this order and each returned ``ok`` — not that
     the task succeeded.
     """
     if min_support < 2:
         raise ValueError(f"min_support must be >= 2, got {min_support}")
-    segments_by_thread: dict[str, list[list[_Step]]] = {}
+    by_thread: dict[str, Trajectory] = {}
     for traj in trajs:
-        segments_by_thread.setdefault(traj.thread_id, _procedure_segments(traj))
+        by_thread.setdefault(traj.thread_id, traj)
+    segments_by_thread = {thread_id: _procedure_segments(traj) for thread_id, traj in by_thread.items()}
     support: dict[tuple[str, ...], set[str]] = {}
-    first_seen: dict[tuple[str, ...], tuple[str, int, int]] = {}
+    first_seen: dict[tuple[tuple[str, ...], str], tuple[int, int]] = {}
     for thread_id, segments in segments_by_thread.items():
         for segment_index, segment in enumerate(segments):
             names = [call.name for _, call in segment]
@@ -910,27 +1098,37 @@ def mine_cross_session(
                 for start in range(len(names) - size + 1):
                     gram = tuple(names[start : start + size])
                     support.setdefault(gram, set()).add(thread_id)
-                    first_seen.setdefault(gram, (thread_id, segment_index, start))
+                    first_seen.setdefault((gram, thread_id), (segment_index, start))
     frequent = {g: t for g, t in support.items() if len(t) >= min_support}
+    order = {thread_id: index for index, thread_id in enumerate(by_thread)}
+
+    def steps_of(gram: tuple[str, ...], thread_id: str) -> list[_Step]:
+        segment_index, start = first_seen[gram, thread_id]
+        return segments_by_thread[thread_id][segment_index][start : start + len(gram)]
+
     episodes: list[Episode] = []
     for gram in sorted(frequent, key=lambda g: (-len(frequent[g]), -len(g), g)):
         if _is_extended(gram, frequent):
             continue
-        thread_id, segment_index, start = first_seen[gram]
-        steps = segments_by_thread[thread_id][segment_index][start : start + len(gram)]
         threads = frequent[gram]
+        owner = min(threads, key=order.__getitem__)
+        second = min(threads - {owner})
+        own, other = steps_of(gram, owner), steps_of(gram, second)
         episodes.append(
             _episode(
                 "repeated_procedure",
-                thread_id,
-                _evidence(*(call.seq_start for _, call in steps)),
+                by_thread[owner],
+                [
+                    *(EvidenceItem(_start(by_thread[owner], call), "step", True) for _, call in own),
+                    *(EvidenceItem(_start(by_thread[second], call), "step", True) for _, call in other),
+                ],
                 list(gram),
                 {
                     "ngram": list(gram),
                     "support": len(threads),
                     "thread_ids": sorted(threads),
                 },
-                [_anchor(turn.run_id, call.seq_start) for turn, call in steps],
+                [_anchor(turn.run_id, call.seq_start) for turn, call in own],
             ),
         )
     return episodes

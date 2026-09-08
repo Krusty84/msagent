@@ -12,13 +12,15 @@ Each episode is one block:
 
 ```
 ### Episode E<n> — <kind> (weight <w>, thread <id>)
-Evidence: seq <numbers>
+Support: <threads counted by code>        (repeated_procedure only)
 Tools: <tool names in order>
 Facts: <structured details the detector found>
-Excerpts: <short cuts of the cited events, one per seq>
+Excerpts:
+- [ev<k>] <event label>: <cut of that recorded event>
+- … <n> more events not shown
 ```
 
-`Evidence: seq` lists the identifiers of the real events the episode is built from. They are the only identifiers you may cite.
+Every `[ev<k>]` line is one real recorded event, shown with a cut of its content: the phrase around a correction, the changed part of an argument (`…` marks a cut), the head and tail of an error. These `ev` ids are the only identifiers you may cite. An event listed as "not shown", a `Support:` count, a fact value, and the stored experience graph section (if present) are context, not citable evidence. A `[ev<k>]` line prefixed with `(thread …)` comes from another session that supports the same procedure.
 
 Kinds:
 
@@ -70,7 +72,10 @@ Autonomous sessions without human corrections can still contain durable discover
 - One candidate per distinct rule. Merge episodes only when they share the same trigger, decision process, and expected outcome. Prefer fewer, stronger candidates.
 - `title`: a short noun phrase naming the task class or decision domain, meaningful outside this session.
 - `rule`: one imperative sentence stating what a future agent should do, phrased positively (what to do, not what is broken).
-- `evidence_refs`: seq numbers copied from the `Evidence:` line of the episode(s) the candidate is built from. Cite every seq that supports the rule. Never cite a number that is not in an `Evidence:` line. If you cannot ground a candidate in cited seqs, omit it.
+- `evidence_refs`: the `ev` ids of the excerpt lines that support the rule, copied exactly (`"ev3"`). Cite every fragment that supports the rule. Never cite an id that is not on an excerpt line, and never cite a seq number. If you cannot ground a candidate in shown fragments, omit it.
+- `applies_when`: the condition under which the rule applies, as the evidence shows it (the error text, the argument that had to change, the situation the user corrected). `null` when the evidence does not establish a condition; never invent one.
+- `constraints`: limits the evidence shows must hold when following the rule (an argument that must keep a value, an order that must be kept). `[]` when none are shown.
+- `expected_outcome`: what happened once the rule was followed, as the evidence shows it (the result of the fixed call, the accepted action). `null` when no outcome was observed.
 - `future_applicability`: `high` when the rule is likely to matter in most sessions of its task class, `medium` when it matters in some, `low` when it is plausible but unproven.
 - `target.action`: `create` when no existing skill governs the task class (`existing_skill` is `null`); `update` when an existing skill governs it but lacks or contradicts this rule; `reference` when an existing skill already contains the rule and the evidence only shows that it was not consulted. For `update` and `reference`, `existing_skill` is the exact name from the library.
 
@@ -86,10 +91,13 @@ Reply with exactly one JSON object and nothing else: no markdown fences, no pros
 {"verdict": "save" | "nothing",
  "candidates": [{"title": "<short noun phrase>",
                  "rule": "<one imperative sentence>",
-                 "evidence_refs": [<seq>, ...],
+                 "evidence_refs": ["ev<k>", ...],
+                 "applies_when": "<condition shown by the evidence>" | null,
+                 "constraints": ["<limit shown by the evidence>", ...],
+                 "expected_outcome": "<observed result>" | null,
                  "future_applicability": "high" | "medium" | "low",
                  "target": {"action": "create" | "update" | "reference",
                             "existing_skill": "<library name>" | null}}]}
 ```
 
-`"verdict": "nothing"` requires `"candidates": []`; use it when no candidate passes the eligibility test or when the bundle is empty. `"verdict": "save"` requires at least one candidate. Every `evidence_refs` entry must be an integer that appears in an `Evidence:` line above.
+`"verdict": "nothing"` requires `"candidates": []`; use it when no candidate passes the eligibility test or when the bundle is empty. `"verdict": "save"` requires at least one candidate. Every `evidence_refs` entry must be a string `ev` id that appears on an excerpt line above; a candidate citing anything else is discarded.

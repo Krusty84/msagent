@@ -20,6 +20,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -30,6 +31,7 @@ from typing import Any, get_args
 
 import pytest
 
+from msagent.skill_evolver import features as features_mod
 from msagent.skill_evolver.features import (
     DEFAULT_MIN_EVIDENCE_SCORE,
     EPISODE_WEIGHTS,
@@ -40,6 +42,7 @@ from msagent.skill_evolver.features import (
     WEAK_CORRECTION_WEIGHT,
     Episode,
     EpisodeKind,
+    EvidenceItem,
     classify_approval,
     evidence_score,
     extract_episodes,
@@ -51,6 +54,7 @@ from msagent.skill_evolver.retrieval import BM25Index, SkillDoc
 from msagent.trajectory_recorder.model import (
     PRELUDE_RUN_ID,
     Approval,
+    EvidenceRef,
     ToolCall,
     ToolStatus,
     Trajectory,
@@ -91,20 +95,31 @@ def _call(
     error_type: str | None = None,
     error: str | None = None,
     subagent: str | None = None,
+    output: str = "",
+    seq_end: int | None = -1,
 ) -> ToolCall:
-    """A tool span starting at ``seq``; its result (if any) sits at ``seq + 1``."""
+    """A tool span starting at ``seq``; by default its result (if any) sits at ``seq + 1``.
+
+    ``seq_end=-1`` (the default) derives the end from the status; pass an
+    explicit value to model a start-less call (``seq_end == seq``). Physical
+    lines equal seqs, as in every single-writer fixture.
+    """
+    if seq_end == -1:
+        seq_end = None if status == "orphan" else seq + 1
     return ToolCall(
         span_id=f"s{seq}",
         parent_span_id=None,
         name=name,
         args={} if args is None else args,
         status=status,
-        output_text="",
+        output_text=output,
         error_type=error_type,
         error=error,
         duration_ms=1,
         seq_start=seq,
-        seq_end=None if status == "orphan" else seq + 1,
+        seq_end=seq_end,
+        line_start=seq,
+        line_end=seq_end,
         subagent=subagent,
     )
 
@@ -121,6 +136,7 @@ def _turn(
     return Turn(
         run_id=run_id,
         seq_start=seq,
+        line_start=seq,
         user_message=message,
         source=source,
         tool_calls=list(calls),
@@ -153,11 +169,48 @@ def _approval(seq: int, decision: Any, request: Any = None) -> Approval:
         interrupt_id=f"int-{seq}",
         request=request,
         decision=decision,
+        line=seq,
     )
 
 
 def _kinds(episodes: list[Episode]) -> list[str]:
     return [episode.kind for episode in episodes]
+
+
+def _ep(
+    kind: str,
+    seqs: Sequence[int],
+    *,
+    anchors: Sequence[str] = (),
+    thread_id: str = "t",
+    weight: float | None = None,
+) -> Episode:
+    """A hand-built episode citing ``seqs`` of ``<thread_id>.jsonl`` (line == seq)."""
+    source = f"{thread_id}.jsonl"
+    return Episode(
+        kind=kind,  # type: ignore[arg-type]
+        thread_id=thread_id,
+        source=source,
+        evidence=[EvidenceItem(EvidenceRef(source=source, line=seq, seq=seq), "event", True) for seq in seqs],
+        tool_sequence=[],
+        facts={},
+        weight=EPISODE_WEIGHTS[kind] if weight is None else weight,
+        anchors=list(anchors),
+    )
+
+
+def _roles(episode: Episode) -> list[tuple[str, int, bool]]:
+    """``(role, seq, required)`` of every evidence item, in episode order."""
+    return [(item.role, item.ref.seq, item.required) for item in episode.evidence]
+
+
+def _seq_at(path: Path, line: int) -> int:
+    """The ``seq`` written on physical ``line`` of ``path`` (read like the reader does)."""
+    with path.open(encoding="utf-8") as handle:
+        for number, raw in enumerate(handle, start=1):
+            if number == line:
+                return json.loads(raw)["seq"]
+    raise AssertionError(f"{path} has no line {line}")
 
 
 def _msprof_chain(seq: int) -> list[ToolCall]:
@@ -172,12 +225,17 @@ def _msprof_chain(seq: int) -> list[ToolCall]:
 # ------------------------------------------------------------------- Episode
 
 
+def _item(seq: int, *, source: str = "t.jsonl", required: bool = True) -> EvidenceItem:
+    return EvidenceItem(EvidenceRef(source=source, line=seq, seq=seq), "event", required)
+
+
 def test_episode_rejects_invalid_fields() -> None:
     def make(**overrides: Any) -> Episode:
         fields: dict[str, Any] = {
             "kind": "retry_loop",
             "thread_id": "t",
-            "evidence_seq": [1, 2],
+            "source": "t.jsonl",
+            "evidence": [_item(1), _item(2, required=False)],
             "tool_sequence": ["bash"],
             "facts": {},
             "weight": 0.7,
@@ -189,11 +247,12 @@ def test_episode_rejects_invalid_fields() -> None:
     assert make().anchors == []
     assert make(anchors=["run-1#1"]).anchors == ["run-1#1"]
     for overrides, message in (
-        ({"evidence_seq": []}, "without evidence"),
-        ({"evidence_seq": [3, 3]}, "unsorted"),
-        ({"evidence_seq": [5, 2]}, "unsorted"),
-        ({"evidence_seq": [1, True]}, "non-int"),
-        ({"evidence_seq": [1, "2"]}, "non-int"),
+        ({"evidence": []}, "without evidence"),
+        ({"evidence": [_item(3), _item(3)]}, "duplicate evidence"),
+        ({"evidence": [_item(1, required=False)]}, "without required evidence"),
+        ({"evidence": [_item(1, source="other.jsonl")]}, "cites no event of 't.jsonl'"),
+        ({"evidence": [1, 2]}, "invalid evidence"),
+        ({"source": ""}, "without source"),
         ({"weight": -0.1}, "out of range"),
         ({"weight": 1.1}, "out of range"),
         ({"kind": "bogus"}, "unknown episode kind"),
@@ -203,6 +262,57 @@ def test_episode_rejects_invalid_fields() -> None:
     ):
         with pytest.raises(ValueError, match=message):
             make(**overrides)
+
+
+def test_evidence_seq_lists_own_source_seqs_sorted() -> None:
+    episode = Episode(
+        kind="repeated_procedure",
+        thread_id="t",
+        source="t.jsonl",
+        evidence=[_item(8), _item(4), _item(4, source="other.jsonl"), _item(2, source="other.jsonl")],
+        tool_sequence=["bash", "grep"],
+        facts={},
+        weight=1.0,
+    )
+    assert episode.evidence_seq == [4, 8]
+
+
+# ------------------------------------------------------------ text windows
+
+
+def test_clip_marks_the_cut() -> None:
+    assert features_mod._clip("x" * 200) == "x" * 200
+    clipped = features_mod._clip("x" * 300)
+    assert (len(clipped), clipped[-1]) == (200, "…")
+    assert features_mod._clip({"k": "v" * 400}).endswith("…")
+    assert features_mod._clip(7) == 7 and features_mod._clip(None) is None
+
+
+def test_clip_edges_keeps_head_and_tail() -> None:
+    trace = "Traceback (most recent call last):\n" + "  frame\n" * 100 + "KeyError: 'device'"
+    clipped = features_mod._clip_edges(trace)
+    assert clipped.startswith("Traceback (most recent call last):")
+    assert clipped.endswith("KeyError: 'device'")
+    assert "…" in clipped and len(clipped) == 100 + 1 + 180
+    assert features_mod._clip_edges("short") == "short"
+
+
+def test_diff_window_keeps_changed_tail() -> None:
+    old = "A" * 300 + "X" + "B" * 300
+    new = "A" * 300 + "Y" + "B" * 300
+
+    before, after = features_mod._diff_window(old, new)
+
+    assert before == "…" + "A" * 60 + "X" + "B" * 60 + "…"
+    assert after == "…" + "A" * 60 + "Y" + "B" * 60 + "…"
+    assert features_mod._diff_window("a", "a --fix") == ("a", "a --fix")
+
+
+def test_markers_report_positions_in_collapsed_text() -> None:
+    found = features_mod._markers("x" * 10 + "\n\n  Нет, не так,  actually")
+    assert found[0] == ("не так", 16)
+    assert [marker for marker, _ in found] == ["не так", "actually"]
+    assert features_mod._markers("Нет, не так")[:2] == [("не так", 5), ("нет,", 0)]
 
 
 def test_episode_weights_cover_all_kinds() -> None:
@@ -316,6 +426,41 @@ def test_error_recovery_clips_long_values() -> None:
 
     changed = episode.facts["args_diff"]["changed"]["cmd"]
     assert (len(changed["old"]), len(changed["new"])) == (200, 200)
+    assert changed["old"].endswith("…") and changed["new"].endswith("…")
+
+
+def test_error_recovery_evidence_roles_and_error_from_output_text() -> None:
+    # The error came back as a tool.result with status=error: its text lives
+    # in output_text, and the required evidence is error + fixed call + result.
+    trace = "Traceback\n" + "  at frame\n" * 40 + "FileNotFoundError: cfg.yml"
+    failed = _call("read_file", {"path": "cfg.yml"}, seq=4, status="error", output=trace)
+    fixed = _call("read_file", {"path": "conf/cfg.yml"}, seq=8, output="key: value")
+    traj = _traj(_turn("run-1", 2, "read it", [failed, _call("ls", {}, seq=6), fixed]))
+
+    (episode,) = extract_episodes(traj)
+
+    assert _roles(episode) == [
+        ("error", 5, True),
+        ("result", 9, True),
+        ("fixed_call", 8, True),
+        ("failed_call", 4, False),
+    ]
+    error_item = episode.evidence[0]
+    assert error_item.ref == EvidenceRef(source="thread-t.jsonl", line=5, seq=5)
+    assert error_item.snippet is not None and error_item.snippet.endswith("FileNotFoundError: cfg.yml")
+    assert error_item.snippet.startswith("Traceback") and "…" in error_item.snippet
+    assert episode.facts["error"] == error_item.snippet
+    assert [item.snippet for item in episode.evidence[1:]] == [None, None, None]
+
+
+def test_error_recovery_start_less_calls_cite_one_ref_each() -> None:
+    failed = _call("bash", {}, seq=4, status="error", error="boom", seq_end=4)
+    fixed = _call("bash", {"cmd": "make"}, seq=8, seq_end=8)
+
+    (episode,) = extract_episodes(_traj(_turn("run-1", 2, "go", [failed, fixed])))
+
+    assert _roles(episode) == [("error", 4, True), ("result", 8, True)]
+    assert episode.evidence_seq == [4, 8]
 
 
 def test_error_recovery_stays_inside_the_stream() -> None:
@@ -464,11 +609,34 @@ def test_user_correction_clips_text_and_accepts_marker_anywhere() -> None:
 
     (episode,) = extract_episodes(traj)
 
-    assert len(episode.facts["correction_text"]) == 500
+    # The phrase after the first 600 characters is what the window keeps.
+    text = episode.facts["correction_text"]
+    assert text.startswith("…") and text.endswith("no, do it instead")
+    assert len(text) == 1 + 120 + len("instead")
     assert episode.facts["strength"] == "strong"
     assert episode.facts["tools_after"] == []
     assert episode.facts["changes"]["tools_removed"] == ["bash"]
     assert episode.tool_sequence == []
+    correction = episode.evidence[0]
+    assert (correction.role, correction.required, correction.snippet) == ("correction", True, text)
+    assert _roles(episode) == [("correction", 10, True), ("corrected_turn", 2, False)]
+
+
+def test_user_correction_cites_the_changed_calls_as_context() -> None:
+    long_path = "a/" * 200 + "old.yml"
+    before = _turn("run-1", 2, "read the config", [_call("read_file", {"path": long_path}, seq=4)])
+    after = _turn("run-2", 10, "нет, не так", [_call("read_file", {"path": long_path[:-7] + "new.yml"}, seq=12)])
+
+    (episode,) = extract_episodes(_traj(before, after))
+
+    assert _roles(episode) == [
+        ("correction", 10, True),
+        ("corrected_turn", 2, False),
+        ("before_call", 4, False),
+        ("after_call", 12, False),
+    ]
+    changed = episode.facts["changes"]["args_changed"]["read_file"]["changed"]["path"]
+    assert changed == {"old": "…" + "a/" * 30 + "old.yml", "new": "…" + "a/" * 30 + "new.yml"}
 
 
 def test_user_correction_records_a_path_change_of_the_same_tool() -> None:
@@ -568,6 +736,7 @@ def test_retry_loop_positive() -> None:
     assert episode.facts["run_id"] == "run-1"
     variants = [variant["pattern"] for variant in episode.facts["args_variants"]]
     assert variants == ["hotspot", "hot_spot", "HotSpot"]
+    assert _roles(episode) == [("attempt", 4, True), ("attempt", 8, False), ("attempt", 10, True)]
 
 
 def test_retry_loop_negative_cases() -> None:
@@ -803,7 +972,7 @@ def test_classify_approval_reports_the_shape_problem() -> None:
     # Denied arguments are clipped like every fact value.
     decision = {"decisions": [{"type": "approve"}, {"type": "reject"}]}
     verdict = classify_approval(_TWO_ACTIONS, decision)
-    assert verdict.denied == [{"name": "write_file", "args": {"content": "x" * 200}}]
+    assert verdict.denied == [{"name": "write_file", "args": {"content": "x" * 199 + "…"}}]
 
 
 def test_approval_denied_positive_with_real_hitl_shape() -> None:
@@ -834,8 +1003,9 @@ def test_approval_denied_positive_with_real_hitl_shape() -> None:
     assert episode.facts["run_id"] == "run-1"
     assert episode.facts["tools"] == ["write_file"]
     assert episode.facts["denied_actions"] == [
-        {"name": "write_file", "args": {"content": "x" * 200}},
+        {"name": "write_file", "args": {"content": "x" * 199 + "…"}},
     ]
+    assert _roles(episode) == [("approval", 9, True), ("next_call", 12, False), ("next_call", 14, False)]
     assert episode.facts["decision"] == decision
     assert len(episode.facts["request"]) == 200
     assert episode.facts["next_tools"] == [
@@ -923,6 +1093,7 @@ def test_skill_gap_positive() -> None:
     assert episode.facts["score"] >= 1.0
     assert episode.facts["matched_terms"] == ["calibration", "dit", "int8", "quantize"]
     assert episode.facts["domain_tools"] == ["bash"]
+    assert _roles(episode) == [("first_call", 6, True), ("user_message", 2, True)]
 
 
 def test_skill_gap_negative_cases() -> None:
@@ -973,6 +1144,16 @@ def test_mine_cross_session_reports_closed_patterns() -> None:
         "support": 2,
         "thread_ids": ["A", "B"],
     }
+    # Steps of both sessions are required evidence: the proof is the repetition.
+    assert [(item.ref.source, item.ref.seq, item.required) for item in episode.evidence] == [
+        ("A.jsonl", 4, True),
+        ("A.jsonl", 6, True),
+        ("A.jsonl", 8, True),
+        ("B.jsonl", 20, True),
+        ("B.jsonl", 22, True),
+        ("B.jsonl", 24, True),
+    ]
+    assert episode.source == "A.jsonl"
 
 
 def test_mine_cross_session_negative_cases() -> None:
@@ -1121,7 +1302,7 @@ def test_signals_fixture_end_to_end() -> None:
     assert [(e.kind, e.evidence_seq) for e in episodes] == [
         ("error_recovery", [4, 5, 10, 11]),
         ("error_recovery", [7, 8, 10, 11]),
-        ("user_correction", [2, 17]),
+        ("user_correction", [2, 10, 17, 19]),
         ("retry_loop", [4, 7, 10]),
         ("approval_denied", [26, 29, 32]),
         ("skill_gap", [2, 4, 17]),
@@ -1226,15 +1407,22 @@ def test_evidence_seqs_exist_in_source(path: Path) -> None:
     for episode in extract_episodes(traj, skill_index=_index()):
         assert episode.kind in EPISODE_WEIGHTS
         assert episode.thread_id == traj.thread_id
+        assert episode.source == path.name
         assert episode.evidence_seq == sorted(set(episode.evidence_seq))
         assert set(episode.evidence_seq) <= recorded
         assert _anchor_seqs(episode) <= set(episode.evidence_seq)
         assert 0.0 <= episode.weight <= 1.0
+        assert any(item.required for item in episode.evidence)
+        for item in episode.evidence:
+            # Every ref points at the physical line that holds that very seq.
+            assert item.ref.source == path.name
+            assert _seq_at(path, item.ref.line) == item.ref.seq
 
 
 def test_cross_session_evidence_exists_in_source() -> None:
     trajs = [load_trajectory(path) for path in FIXTURE_FILES]
     recorded = {traj.thread_id: _recorded_seqs(traj.path) for traj in trajs}
+    paths = {traj.source: traj.path for traj in trajs}
 
     episodes = mine_cross_session(trajs)
 
@@ -1247,6 +1435,13 @@ def test_cross_session_evidence_exists_in_source() -> None:
         assert 2 <= len(episode.tool_sequence) <= 5
         assert set(episode.evidence_seq) <= recorded[episode.thread_id]
         assert _anchor_seqs(episode) == set(episode.evidence_seq)
+        # Two sources, both required, both resolving to their physical lines.
+        sources = [item.ref.source for item in episode.evidence]
+        assert sources[: len(episode.tool_sequence)] == [episode.source] * len(episode.tool_sequence)
+        assert len(set(sources)) == 2 and len(sources) == 2 * len(episode.tool_sequence)
+        assert all(item.required for item in episode.evidence)
+        for item in episode.evidence:
+            assert _seq_at(paths[item.ref.source], item.ref.line) == item.ref.seq
     procedures = {tuple(e.tool_sequence): e for e in episodes}
     shared = procedures[("bash", "read_file", "grep", "bash")]
     assert shared.facts["thread_ids"] == ["thread-ctrlc", "thread-limit"]
@@ -1263,7 +1458,7 @@ def test_cross_session_evidence_exists_in_source() -> None:
 
 def test_group_incidents_links_episodes_transitively_by_anchor() -> None:
     def make(kind: EpisodeKind, seqs: list[int], anchors: list[str]) -> Episode:
-        return Episode(kind, "t", seqs, [], {}, EPISODE_WEIGHTS[kind], anchors)
+        return _ep(kind, seqs, anchors=anchors)
 
     first = make("error_recovery", [4, 8], ["run-1#4", "run-1#8"])
     second = make("retry_loop", [8, 12], ["run-1#8", "run-1#12"])
@@ -1345,15 +1540,7 @@ def test_gate_decision_compares_exact_decimal_sums() -> None:
     # 0.6 + 0.7 + 0.7 is 2.0 to the user who set the threshold, not
     # 1.9999999999999998.
     def episode(kind: str, seq: int) -> Episode:
-        return Episode(
-            kind=kind,  # type: ignore[arg-type]
-            thread_id="thread-t",
-            evidence_seq=[seq],
-            tool_sequence=["bash"],
-            facts={},
-            weight=EPISODE_WEIGHTS[kind],
-            anchors=[f"run-1#{seq}"],
-        )
+        return _ep(kind, [seq], anchors=[f"run-1#{seq}"], thread_id="thread-t")
 
     episodes = [episode("error_recovery", 2), episode("retry_loop", 10), episode("retry_loop", 20)]
 
@@ -1364,9 +1551,8 @@ def test_gate_decision_compares_exact_decimal_sums() -> None:
 
 
 def test_gate_decision_reasons() -> None:
-    gap = Episode("skill_gap", "t", [2, 6], ["bash"], {}, EPISODE_WEIGHTS["skill_gap"])
-    weight = EPISODE_WEIGHTS["approval_denied"]
-    denial = Episode("approval_denied", "t", [9], [], {}, weight, ["run-1#9"])
+    gap = _ep("skill_gap", [2, 6])
+    denial = _ep("approval_denied", [9], anchors=["run-1#9"])
 
     empty = gate_decision([], min_score=DEFAULT_MIN_EVIDENCE_SCORE)
     assert empty.incidents == []

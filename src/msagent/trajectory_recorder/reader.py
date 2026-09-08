@@ -20,7 +20,8 @@
 
 Stdlib only (no langchain): this is the entry point for trajectory analysis
 that must run in tests and CI without an LLM. Files are read line by line via
-:func:`iter_events`; only the resulting model is retained in memory.
+:func:`iter_numbered_events`; only the resulting model is retained in memory,
+and every event keeps its physical line number (``EvidenceRef``).
 
 Assembly rules:
 
@@ -69,16 +70,18 @@ class TrajectoryReadError(ValueError):
 # ---------------------------------------------------------------- parsing
 
 
-def iter_events(
+def iter_numbered_events(
     path: Path,
     *,
     malformed: list[int] | None = None,
-) -> Iterator[dict[str, Any]]:
-    """Yield events from a trajectory JSONL file, skipping broken lines.
+) -> Iterator[tuple[int, dict[str, Any]]]:
+    """Yield ``(line, event)`` pairs from a trajectory JSONL file.
 
-    Blank lines are ignored. Lines that are not valid JSON or do not decode
-    to an object are skipped; when ``malformed`` is given, their 1-based line
-    numbers are appended to it.
+    ``line`` is the 1-based physical line number, the ``EvidenceRef.line`` of
+    the event. Blank lines are ignored and broken lines are skipped, but both
+    keep their number, so a corrupted line never shifts the refs after it.
+    Lines that are not valid JSON or do not decode to an object are appended
+    to ``malformed`` when it is given.
     """
     with path.open("r", encoding="utf-8") as handle:
         for line_no, raw in enumerate(handle, start=1):
@@ -92,9 +95,22 @@ def iter_events(
                     malformed.append(line_no)
                 continue
             if isinstance(payload, dict):
-                yield payload
+                yield line_no, payload
             elif malformed is not None:
                 malformed.append(line_no)
+
+
+def iter_events(
+    path: Path,
+    *,
+    malformed: list[int] | None = None,
+) -> Iterator[dict[str, Any]]:
+    """Yield events from a trajectory JSONL file, skipping broken lines.
+
+    :func:`iter_numbered_events` without the line numbers.
+    """
+    for _, event in iter_numbered_events(path, malformed=malformed):
+        yield event
 
 
 def extract_message_text(message: Any) -> str:
@@ -216,7 +232,9 @@ class _ToolSlot:
     args: dict[str, Any]
     subagent: str | None
     seq_start: int
+    line_start: int
     seq_end: int | None = None
+    line_end: int | None = None
     status: ToolStatus = "orphan"
     output_text: str = ""
     error_type: str | None = None
@@ -236,6 +254,8 @@ class _ToolSlot:
             duration_ms=self.duration_ms,
             seq_start=self.seq_start,
             seq_end=self.seq_end,
+            line_start=self.line_start,
+            line_end=self.line_end,
             subagent=self.subagent,
         )
 
@@ -263,13 +283,16 @@ class _TrajectoryBuilder:
         self.skills: list[str] = []
         self.truncated_by_limit = False
         self.invalid_dicts = 0
+        # Physical line of the event being fed; handlers copy it into the model.
+        self.line = 0
 
     # ---------------------------------------------------------------- public
 
-    def feed(self, event: dict[str, Any]) -> None:
-        """Consume one valid schema-v1 event."""
+    def feed(self, event: dict[str, Any], line: int) -> None:
+        """Consume one valid schema-v1 event recorded at physical ``line``."""
         if self.first_event is None:
             self.first_event = event
+        self.line = line
         handler = self._HANDLERS.get(event["event"])
         if handler is not None:
             handler(self, event)
@@ -315,6 +338,7 @@ class _TrajectoryBuilder:
         turn = Turn(
             run_id=run_id,
             seq_start=seq,
+            line_start=self.line,
             user_message=user_message,
             source=source,
             status=status,
@@ -408,6 +432,7 @@ class _TrajectoryBuilder:
                 usage=usage if isinstance(usage, dict) else None,
                 duration_ms=_optional_int(event.get("duration_ms")),
                 subagent=_subagent_of(event),
+                line=self.line,
             ),
         )
         for call in calls:
@@ -424,6 +449,7 @@ class _TrajectoryBuilder:
             args=args,
             subagent=_subagent_of(event),
             seq_start=event["seq"],
+            line_start=self.line,
         )
         state.slots.append(slot)
         self.open_tools[slot.span_id] = slot
@@ -441,9 +467,11 @@ class _TrajectoryBuilder:
                 args={},
                 subagent=_subagent_of(event),
                 seq_start=event["seq"],
+                line_start=self.line,
             )
             self._route(event).slots.append(slot)
         slot.seq_end = event["seq"]
+        slot.line_end = self.line
         slot.duration_ms = _optional_int(event.get("duration_ms"))
         return slot
 
@@ -469,6 +497,7 @@ class _TrajectoryBuilder:
                 interrupt_id=_optional_str(event.get("interrupt_id")),
                 request=event.get("request"),
                 decision=event.get("decision"),
+                line=self.line,
             ),
         )
 
@@ -502,9 +531,9 @@ def load_trajectory(path: Path) -> Trajectory:
     path = Path(path)
     builder = _TrajectoryBuilder(path)
     malformed: list[int] = []
-    for event in iter_events(path, malformed=malformed):
+    for line, event in iter_numbered_events(path, malformed=malformed):
         if _is_v1_event(event, path):
-            builder.feed(event)
+            builder.feed(event, line)
         else:
             builder.invalid_dicts += 1
     return builder.finish(len(malformed) + builder.invalid_dicts)

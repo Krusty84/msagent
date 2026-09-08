@@ -31,10 +31,11 @@ from __future__ import annotations
 
 import logging
 import re
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from msagent.skill_evolver.bundle import ShownFragment
 from msagent.skill_evolver.classify import (
     EMPTY_REPLY,
     ERROR_TEXT_LIMIT,
@@ -52,6 +53,8 @@ CANDIDATES_PLACEHOLDER = "{candidates}"
 EXISTING_SKILL_PLACEHOLDER = "{existing_skill}"
 # Text of the "Existing skill" section when the proposal is a new skill.
 NO_EXISTING_SKILL = "None. Create a new skill."
+# Most evidence fragments quoted to the renderer per candidate.
+RENDER_EVIDENCE_LIMIT = 3
 
 # One pass over the template, so a placeholder-looking string inside a rule
 # or inside the existing skill text is never substituted.
@@ -149,8 +152,33 @@ def plan_render(
     )
 
 
-def format_candidates(candidates: Sequence[Candidate]) -> str:
-    """Numbered candidate blocks for the ``{candidates}`` placeholder."""
+def select_render_evidence(
+    candidate: Candidate,
+    evidence: Mapping[str, ShownFragment],
+) -> list[ShownFragment]:
+    """The fragments quoted to the renderer for one candidate.
+
+    Its cited fragments, required ones first (stable otherwise), at most
+    RENDER_EVIDENCE_LIMIT. Provenance records the same selection, so what
+    the renderer saw is reproducible from the candidate and the bundle.
+    """
+    fragments = [evidence[ref] for ref in candidate.evidence_refs if ref in evidence]
+    fragments.sort(key=lambda fragment: not fragment.required)
+    return fragments[:RENDER_EVIDENCE_LIMIT]
+
+
+def format_candidates(
+    candidates: Sequence[Candidate],
+    evidence: Mapping[str, ShownFragment] | None = None,
+) -> str:
+    """Numbered candidate blocks for the ``{candidates}`` placeholder.
+
+    Each block carries the rule and its conditions (``When``,
+    ``Constraints``, ``Expected outcome`` — only when the classifier filled
+    them), the target, and the text of its evidence fragments. Fragment ids
+    never appear: they belong in provenance, not in a prompt whose reply is
+    the user-facing SKILL.md.
+    """
     blocks: list[str] = []
     for number, candidate in enumerate(candidates, start=1):
         target = candidate.target
@@ -162,8 +190,19 @@ def format_candidates(candidates: Sequence[Candidate]) -> str:
         lines = [
             f"{number}. {candidate.title} (future applicability: {applicability})",
             f"   Rule: {candidate.rule}",
-            f"   Target: {where}",
         ]
+        if candidate.applies_when:
+            lines.append(f"   When: {candidate.applies_when}")
+        if candidate.constraints:
+            lines.append("   Constraints:")
+            lines.extend(f"   - {constraint}" for constraint in candidate.constraints)
+        if candidate.expected_outcome:
+            lines.append(f"   Expected outcome: {candidate.expected_outcome}")
+        lines.append(f"   Target: {where}")
+        fragments = select_render_evidence(candidate, evidence or {})
+        if fragments:
+            lines.append("   Evidence:")
+            lines.extend(f"   - {fragment.text}" for fragment in fragments)
         blocks.append("\n".join(lines))
     return "\n".join(blocks)
 
@@ -188,12 +227,15 @@ async def render_skill_md(
     existing_skill: str | None = None,
     expected_name: str | None = None,
     taken_names: Collection[str] = (),
+    evidence: Mapping[str, ShownFragment] | None = None,
 ) -> RenderResult:
     """Ask the LLM for a SKILL.md, validate it, correct once, return the last try.
 
     ``existing_skill`` is the formatted text of the skill being updated and
     ``expected_name`` its name (both or neither). ``taken_names`` are library
-    names a new skill must not reuse. Raises ``ValueError`` before any LLM
+    names a new skill must not reuse. ``evidence`` is the bundle's registry
+    of shown fragments; each candidate is rendered with the text of its own
+    (:func:`select_render_evidence`). Raises ``ValueError`` before any LLM
     call when there is nothing to render, the template lacks a placeholder,
     or the update arguments disagree. Whether the content may be written is
     ``result.validation.ok``.
@@ -208,7 +250,7 @@ async def render_skill_md(
         raise ValueError("render: existing_skill and expected_name go together")
 
     values = {
-        "candidates": format_candidates(candidates),
+        "candidates": format_candidates(candidates, evidence),
         "existing_skill": existing_skill or NO_EXISTING_SKILL,
     }
     instruction = _PLACEHOLDER_RE.sub(lambda match: values[match.group(1)], template)

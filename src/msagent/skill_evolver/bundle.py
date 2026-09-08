@@ -22,9 +22,15 @@
 of the code-only detectors in :mod:`msagent.skill_evolver.features`) into
 one markdown block per episode, heaviest first, with the structured facts and
 short excerpts of the events the episode cites. There is no transcript and
-no chronological narrative: the model sees evidence, not the session. The
-seqs listed in the ``Evidence:`` lines are returned as a set, so the classify
-stage can reject any candidate citing an event the model never saw.
+no chronological narrative: the model sees evidence, not the session.
+
+Every excerpt line carries a bundle-local id (``[ev3]``) and the returned
+:class:`EvidenceBundle` keeps a registry of exactly those fragments — text
+and :class:`EvidenceRef` — so the classify stage can reject a candidate
+citing anything the model was not shown. A bare event number is never
+citable: an episode's optional excerpts may be trimmed under budget, and an
+episode whose *required* excerpts do not fit is excluded altogether rather
+than shown as a stump.
 
 Stdlib only: importing this module must not load langchain.
 """
@@ -34,12 +40,13 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from msagent.skill_evolver.features import Episode
 from msagent.trajectory_recorder.model import (
     AiMessage,
     Approval,
+    EvidenceRef,
     ToolCall,
     Trajectory,
     Turn,
@@ -47,35 +54,75 @@ from msagent.trajectory_recorder.model import (
 
 logger = logging.getLogger(__name__)
 
-# Header of one episode block; ``idx`` is the 1-based rank after sorting.
+# Header of one episode block; ``idx`` is the 1-based rank among the rendered blocks.
 EPISODE_HEADER = "### Episode E{idx} — {kind} (weight {weight:.2f}, thread {thread})"
-# Characters of the thread id shown in the header.
+# Characters of the thread id shown in the header and on cross-thread excerpts.
 THREAD_ID_CHARS = 8
 # Length limits of one rendered fact line and of one excerpt line.
 FACT_LIMIT = 800
 EXCERPT_LIMIT = 300
-# An episode citing more events than EXCERPT_HEAD + EXCERPT_TAIL gets excerpts
-# of its first EXCERPT_HEAD and last EXCERPT_TAIL seqs; the rest is counted.
-EXCERPT_HEAD = 6
-EXCERPT_TAIL = 2
 # Marks text that was cut.
 ELLIPSIS = "…"
+# Prefix of the bundle-local fragment ids the model cites.
+FRAGMENT_ID_PREFIX = "ev"
 
 _SEPARATOR = "\n\n"
 # ``Turn.source`` of the turns the reader opens itself (``reader._route``) at
 # the seq of a real event that had no turn to belong to.
 _SYNTHETIC_SOURCES = frozenset({"unknown", "prelude"})
 
+# Outcome of one episode in the bundle: shown in full, shown with only its
+# required excerpts (``trimmed``), or left out because even those did not
+# fit (``excluded`` — insufficient context).
+BundleStatus = Literal["shown", "trimmed", "excluded"]
 
-@dataclass(slots=True)
-class _Record:
-    """What the model sees for one cited ``seq``: a label and its text."""
 
-    label: str
+@dataclass(frozen=True, slots=True)
+class ShownFragment:
+    """One excerpt the model saw: its id, the event it came from and the exact text."""
+
+    id: str
+    ref: EvidenceRef
+    role: str
+    required: bool
+    # The excerpt line after "- [evN] ", i.e. "<label>: <text>".
     text: str
 
 
-_ThreadIndex = dict[int, list[_Record]]
+@dataclass(frozen=True, slots=True)
+class BundleEpisode:
+    """One input episode with what became of it."""
+
+    episode: Episode
+    status: BundleStatus
+
+
+@dataclass(frozen=True, slots=True)
+class EvidenceBundle:
+    """The classify input: its text, the registry of shown fragments, the episode outcomes."""
+
+    text: str
+    # Fragment id -> fragment; exactly the "[evN]" lines of ``text``.
+    shown: dict[str, ShownFragment]
+    # Every input episode, heaviest first.
+    episodes: list[BundleEpisode]
+
+    @property
+    def kept(self) -> list[Episode]:
+        """The episodes the model sees (shown or trimmed), heaviest first."""
+        return [item.episode for item in self.episodes if item.status != "excluded"]
+
+
+@dataclass(slots=True)
+class _Record:
+    """What the model sees for one event: a label, its text and its thread."""
+
+    label: str
+    text: str
+    thread_id: str
+
+
+_Records = dict[EvidenceRef, _Record]
 
 
 # ------------------------------------------------------------------ helpers
@@ -97,116 +144,122 @@ def _clip(text: str, limit: int) -> str:
 # ------------------------------------------------------------------ records
 
 
-def _turn_record(turn: Turn) -> _Record:
+def _turn_record(turn: Turn, thread_id: str) -> _Record:
     if turn.user_message is None:
-        return _Record("turn.start", f"(source={turn.source})")
-    return _Record("user", _json(turn.user_message))
+        return _Record("turn.start", f"(source={turn.source})", thread_id)
+    return _Record("user", _json(turn.user_message), thread_id)
 
 
-def _start_record(call: ToolCall) -> _Record:
-    return _Record(f"tool.start {call.name}", _json(call.args))
+def _start_record(call: ToolCall, thread_id: str) -> _Record:
+    return _Record(f"tool.start {call.name}", _json(call.args), thread_id)
 
 
-def _end_record(call: ToolCall) -> _Record:
+def _end_record(call: ToolCall, thread_id: str) -> _Record:
     if call.status == "error":
-        detail = f"{call.error_type or 'error'}: {call.error or ''}"
-        return _Record(f"tool.error {call.name} (error)", detail.rstrip(": "))
+        # A tool.result with status=error carries its text in output_text.
+        detail = f"{call.error_type or 'error'}: {call.error or call.output_text or ''}"
+        return _Record(f"tool.error {call.name} (error)", detail.rstrip(": "), thread_id)
     label = f"tool.result {call.name} ({call.status})"
-    return _Record(label, call.output_text or "(no output)")
+    return _Record(label, call.output_text or "(no output)", thread_id)
 
 
-def _ai_record(message: AiMessage) -> _Record:
+def _ai_record(message: AiMessage, thread_id: str) -> _Record:
     text = _json(message.text)
     if message.tool_call_names:
         text += f" [tool calls: {', '.join(message.tool_call_names)}]"
-    return _Record("ai", text)
+    return _Record("ai", text, thread_id)
 
 
-def _approval_record(approval: Approval) -> _Record:
+def _approval_record(approval: Approval, thread_id: str) -> _Record:
     detail = f"request={_json(approval.request)} decision={_json(approval.decision)}"
-    return _Record("approval.decision", detail)
+    return _Record("approval.decision", detail, thread_id)
 
 
-def _index_thread(traj: Trajectory) -> _ThreadIndex:
-    """Records of one trajectory keyed by ``seq``.
+def _index_thread(traj: Trajectory) -> _Records:
+    """Records of one trajectory keyed by :class:`EvidenceRef`.
 
     Tool, AI and approval records go first; a synthetic turn (opened by the
-    reader at the seq of a real event) is added only when its seq is still
-    free, so it never shadows that event. Several records under one seq mean
-    the recorder process restarted mid-thread (``seq`` restarts per writer);
-    they are all kept and rendered as ambiguous.
+    reader at the line of a real event) is added only when its ref is still
+    free, so it never shadows that event. Refs are unique per physical
+    line, so a recorder restart that repeats a ``seq`` yields two records.
     """
-    by_seq: _ThreadIndex = {}
+    by_ref: _Records = {}
+    thread = traj.thread_id
     for turn in traj.turns:
         for call in turn.tool_calls:
-            if call.seq_end != call.seq_start:
-                by_seq.setdefault(call.seq_start, []).append(_start_record(call))
-            if call.seq_end is not None:
-                by_seq.setdefault(call.seq_end, []).append(_end_record(call))
+            start = traj.event_ref(seq=call.seq_start, line=call.line_start)
+            end = None
+            if call.seq_end is not None and call.line_end is not None:
+                end = traj.event_ref(seq=call.seq_end, line=call.line_end)
+            if end != start:
+                by_ref.setdefault(start, _start_record(call, thread))
+            if end is not None:
+                by_ref.setdefault(end, _end_record(call, thread))
         for message in turn.ai_messages:
-            by_seq.setdefault(message.seq, []).append(_ai_record(message))
+            by_ref.setdefault(traj.event_ref(seq=message.seq, line=message.line), _ai_record(message, thread))
         for approval in turn.approvals:
-            by_seq.setdefault(approval.seq, []).append(_approval_record(approval))
+            ref = traj.event_ref(seq=approval.seq, line=approval.line)
+            by_ref.setdefault(ref, _approval_record(approval, thread))
     for turn in traj.turns:
-        record = _turn_record(turn)
-        if turn.source in _SYNTHETIC_SOURCES:
-            by_seq.setdefault(turn.seq_start, [record])
-        else:
-            by_seq.setdefault(turn.seq_start, []).append(record)
-    return by_seq
+        ref = traj.event_ref(seq=turn.seq_start, line=turn.line_start)
+        by_ref.setdefault(ref, _turn_record(turn, thread))
+    return by_ref
 
 
-def _index_records(trajectories: list[Trajectory]) -> dict[str, _ThreadIndex]:
-    """Per-thread seq index; a thread recorded twice keeps its first copy."""
-    index: dict[str, _ThreadIndex] = {}
+def _index_records(trajectories: list[Trajectory]) -> _Records:
+    """Records of every trajectory; a source seen twice keeps its first copy."""
+    records: _Records = {}
+    seen: set[str] = set()
     for traj in trajectories:
-        if traj.thread_id not in index:
-            index[traj.thread_id] = _index_thread(traj)
-    return index
+        if traj.source in seen:
+            continue
+        seen.add(traj.source)
+        records.update(_index_thread(traj))
+    return records
 
 
 # ---------------------------------------------------------------- rendering
 
 
-def _thread_index(index: dict[str, _ThreadIndex], episode: Episode) -> _ThreadIndex:
-    """The seq index of the episode's thread; every cited seq must be in it."""
-    by_seq = index.get(episode.thread_id)
-    if by_seq is None:
-        where = f"{episode.kind} episode cites thread {episode.thread_id!r}"
+def _check_refs(episode: Episode, records: _Records, sources: set[str]) -> None:
+    """Every cited ref must resolve: episodes and trajectories must be the same data."""
+    if episode.source not in sources:
+        where = f"{episode.kind} episode cites source {episode.source!r}"
         raise ValueError(f"{where}, which is not among the trajectories")
-    missing = [seq for seq in episode.evidence_seq if seq not in by_seq]
+    missing = [f"{item.ref.source}:{item.ref.line}" for item in episode.evidence if item.ref not in records]
     if missing:
-        where = f"{episode.kind} episode of thread {episode.thread_id!r}"
-        raise ValueError(f"{where} cites seq {missing}, which is not in its trajectory")
-    return by_seq
+        where = f"{episode.kind} episode of {episode.source!r}"
+        raise ValueError(f"{where} cites {missing}, which is not in its trajectory")
 
 
-def _excerpt(seq: int, by_seq: _ThreadIndex, thread_id: str) -> str:
-    records = by_seq[seq]
-    if len(records) > 1:
-        logger.warning(
-            "bundle: %d records share seq %d in thread %r (recorder restart?)",
-            len(records),
-            seq,
-            thread_id,
-        )
-        return f"- seq {seq} (ambiguous: {len(records)} records share this seq)"
-    record = records[0]
-    return f"- seq {seq} {record.label}: {_clip(record.text, EXCERPT_LIMIT)}"
+def _render_block(
+    rank: int,
+    episode: Episode,
+    records: _Records,
+    by_ref: dict[EvidenceRef, ShownFragment],
+    *,
+    required_only: bool,
+) -> tuple[str, list[ShownFragment]]:
+    """One markdown block and the fragments it introduces (not yet in ``by_ref``).
 
-
-def _render_block(idx: int, episode: Episode, by_seq: _ThreadIndex) -> str:
-    """One markdown block: header, evidence seqs, tools, facts, excerpts."""
-    seqs = episode.evidence_seq
+    A ref already shown by an earlier block keeps its id and text: one event
+    is one fragment, even when a lighter episode would have cut it
+    differently. With ``required_only`` the optional excerpts are replaced by
+    a count, which is not citable.
+    """
+    items = [item for item in episode.evidence if item.required] if required_only else list(episode.evidence)
+    omitted = len(episode.evidence) - len(items)
     lines = [
         EPISODE_HEADER.format(
-            idx=idx,
+            idx=rank,
             kind=episode.kind,
             weight=episode.weight,
             thread=episode.thread_id[:THREAD_ID_CHARS],
         ),
-        "Evidence: seq " + ", ".join(str(seq) for seq in seqs),
     ]
+    if episode.kind == "repeated_procedure":
+        support = episode.facts.get("support")
+        lines.append(f"Support: {support} threads (counted by code); excerpts from 2 of them")
     if episode.tool_sequence:
         lines.append("Tools: " + _clip(", ".join(episode.tool_sequence), FACT_LIMIT))
     if episode.facts:
@@ -214,17 +267,25 @@ def _render_block(idx: int, episode: Episode, by_seq: _ThreadIndex) -> str:
         for key, value in episode.facts.items():
             lines.append(f"- {key}: {_clip(_json(value), FACT_LIMIT)}")
     lines.append("Excerpts:")
-    shown: list[int | None] = list(seqs)
-    omitted = 0
-    if len(seqs) > EXCERPT_HEAD + EXCERPT_TAIL:
-        omitted = len(seqs) - EXCERPT_HEAD - EXCERPT_TAIL
-        shown = [*seqs[:EXCERPT_HEAD], None, *seqs[-EXCERPT_TAIL:]]
-    for seq in shown:
-        if seq is None:
-            lines.append(f"- {ELLIPSIS} {omitted} more events omitted")
-        else:
-            lines.append(_excerpt(seq, by_seq, episode.thread_id))
-    return "\n".join(lines)
+    new: dict[EvidenceRef, ShownFragment] = {}
+    for item in items:
+        fragment = by_ref.get(item.ref) or new.get(item.ref)
+        record = records[item.ref]
+        if fragment is None:
+            text = f"{record.label}: {_clip(item.snippet or record.text, EXCERPT_LIMIT)}"
+            fragment = ShownFragment(
+                id=f"{FRAGMENT_ID_PREFIX}{len(by_ref) + len(new) + 1}",
+                ref=item.ref,
+                role=item.role,
+                required=item.required,
+                text=text,
+            )
+            new[item.ref] = fragment
+        where = "" if item.ref.source == episode.source else f"(thread {record.thread_id[:THREAD_ID_CHARS]}) "
+        lines.append(f"- [{fragment.id}] {where}{fragment.text}")
+    if omitted:
+        lines.append(f"- {ELLIPSIS} {omitted} more events not shown")
+    return "\n".join(lines), list(new.values())
 
 
 # --------------------------------------------------------------- public API
@@ -235,40 +296,56 @@ def build_evidence_bundle(
     trajectories: list[Trajectory],
     *,
     max_chars: int = 30000,
-) -> tuple[str, set[int]]:
-    """Render episodes for the classify stage; return the text and its seqs.
+) -> EvidenceBundle:
+    """Render episodes for the classify stage; return the text and its registry.
 
-    One block per episode, heaviest first (stable for equal weights). When
-    the text would exceed ``max_chars`` the lightest episodes are dropped
-    whole, never cut. The returned set holds every seq listed in a kept
-    block's ``Evidence:`` line: a classification citing any other seq is
-    fabricated. Seqs are unique per thread only, so a bundle mixing threads
-    cannot tell the same number apart across them (known limitation).
+    One block per episode, heaviest first (stable for equal weights). Each
+    episode is tried in full, then with its required excerpts only
+    (``trimmed``); when even those do not fit ``max_chars`` the episode is
+    ``excluded`` — insufficient context — and lighter episodes are still
+    tried. ``shown`` holds exactly the fragments printed with an ``[evN]``
+    id: a classification citing any other id is fabricated. Fragment ids
+    are assigned in order of first appearance; one event has one id across
+    blocks.
 
-    Raises ``ValueError`` on a non-positive budget, on an episode whose
-    thread is not among ``trajectories`` or whose evidence seq is not in it
-    (episodes and trajectories must come from the same data), and when even
-    the heaviest episode does not fit the budget.
+    Raises ``ValueError`` on a non-positive budget and on an episode whose
+    source is not among ``trajectories`` or whose evidence ref is not in it
+    (episodes and trajectories must come from the same data). Nothing
+    raises for size: an empty bundle is a legitimate outcome.
     """
     if max_chars <= 0:
         raise ValueError(f"max_chars must be positive, got {max_chars}")
-    index = _index_records(trajectories)
+    records = _index_records(trajectories)
+    sources = {traj.source for traj in trajectories}
     ranked = sorted(episodes, key=lambda episode: -episode.weight)
-    rendered: list[str] = []
-    for idx, episode in enumerate(ranked, start=1):
-        rendered.append(_render_block(idx, episode, _thread_index(index, episode)))
+    for episode in ranked:
+        _check_refs(episode, records, sources)
 
+    by_ref: dict[EvidenceRef, ShownFragment] = {}
     blocks: list[str] = []
-    seqs: set[int] = set()
+    outcomes: list[BundleEpisode] = []
     total = 0
-    for episode, block in zip(ranked, rendered):
-        cost = len(block) + (len(_SEPARATOR) if blocks else 0)
-        if total + cost > max_chars:
-            if not blocks:
-                need = f"episode E1 ({episode.kind}) needs {len(block)} chars"
-                raise ValueError(f"{need}, more than max_chars={max_chars}")
-            break
-        blocks.append(block)
-        seqs.update(episode.evidence_seq)
-        total += cost
-    return _SEPARATOR.join(blocks), seqs
+    for episode in ranked:
+        status: BundleStatus = "excluded"
+        attempts = [False]
+        if any(not item.required for item in episode.evidence):
+            attempts.append(True)
+        for required_only in attempts:
+            block, new = _render_block(len(blocks) + 1, episode, records, by_ref, required_only=required_only)
+            cost = len(block) + (len(_SEPARATOR) if blocks else 0)
+            if total + cost <= max_chars:
+                blocks.append(block)
+                total += cost
+                by_ref.update((fragment.ref, fragment) for fragment in new)
+                status = "trimmed" if required_only else "shown"
+                break
+        if status == "excluded":
+            logger.warning(
+                "bundle: excluded %s episode of thread %r: its required evidence does not fit max_chars=%d",
+                episode.kind,
+                episode.thread_id,
+                max_chars,
+            )
+        outcomes.append(BundleEpisode(episode, status))
+    shown = {fragment.id: fragment for fragment in by_ref.values()}
+    return EvidenceBundle(_SEPARATOR.join(blocks), shown, outcomes)

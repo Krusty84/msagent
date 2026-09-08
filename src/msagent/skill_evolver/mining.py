@@ -54,6 +54,7 @@ from msagent.skill_evolver.direct_skill_generation import (
     DirectSkillGenerationConfig,
     DirectSkillGenerationHandler,
     _collect_episodes,
+    _supporting,
 )
 from msagent.skill_evolver.features import (
     Episode,
@@ -138,6 +139,9 @@ class ThreadStats:
     tool_calls: int
     ai_messages: int
     episodes: list[Episode] = field(default_factory=list)
+    # Other trajectories the episodes cite (a shared procedure's second
+    # session); the evidence bundle indexes them next to ``trajectory``.
+    supporting: list[Trajectory] = field(default_factory=list)
 
     @property
     def thread_id(self) -> str:
@@ -511,8 +515,9 @@ def mine_stats(
     for target in targets:
         others = [item for item in pool if item.thread_id != target.thread_id]
         # The target goes in first: mine_cross_session attributes an n-gram to
-        # the first thread it sees, so the kept episodes cite this thread's own
-        # events and the bundle needs only this trajectory.
+        # the first thread it sees, so the kept episodes belong to this thread
+        # and cite its events plus those of one supporting session, which the
+        # bundle must index too (``supporting``).
         episodes = _collect_episodes(target, others, skill_index=index)
         turns, tool_calls, ai_messages = count_shape(target)
         stats.append(
@@ -522,6 +527,7 @@ def mine_stats(
                 tool_calls=tool_calls,
                 ai_messages=ai_messages,
                 episodes=episodes,
+                supporting=_supporting(others, episodes),
             ),
         )
     return stats
@@ -755,21 +761,30 @@ class SkillMiningHandler:
         """The LLM stages of one thread; nothing is written unless valid."""
         current = stats.trajectory
         thread_id = stats.thread_id
-        bundle_text, valid_seq = build_evidence_bundle(stats.episodes, [current])
+        trajectories = [current, *stats.supporting]
+        bundle = build_evidence_bundle(stats.episodes, trajectories)
+        warnings, stop = DirectSkillGenerationHandler._report_bundle(bundle, cfg.min_evidence_score)
+        for line in warnings:
+            console.print_warning(escape(line))
+        if stop is not None:
+            console.print_info(stop)
+            return "nothing"
         work = Path(self.session.context.working_dir)
         state = initializer.get_project_paths(work).root
         bundle_text = attach_stored_graph(
-            bundle_text, current, working_dir=work, state_dir=state,
+            bundle.text, current, working_dir=work, state_dir=state,
         )
         llm = await llm_slot.get()
         library = DirectSkillGenerationHandler._skill_library_snapshot(skills)
         with self._status("Classifying evidence..."):
             result = await classify(
                 bundle_text,
-                valid_seq,
+                bundle.shown,
                 llm,
                 prompts.classify.replace("{skill_library}", library),
             )
+        for candidate, reason in result.rejected:
+            console.print_warning(escape(f"Rejected '{candidate.title}': {reason}"))
         if result.verdict == "nothing":
             console.print_info(
                 f"Nothing to save: no durable learning found in thread {thread_id}",
@@ -803,6 +818,7 @@ class SkillMiningHandler:
                 existing_skill=existing_text,
                 expected_name=expected_name,
                 taken_names=taken_names,
+                evidence=bundle.shown,
             )
         if not rendered.ok:
             console.print_error(_REJECTED)
@@ -816,8 +832,10 @@ class SkillMiningHandler:
                 current,
                 stats.episodes,
             ),
-            episodes=stats.episodes,
-            candidates=result.candidates,
+            bundle=bundle,
+            classification=result,
+            rendered=plan.accepted,
+            sources={traj.source: str(traj.path) for traj in trajectories},
             model=llm_slot.model,
             prompt_variants={
                 "classify": prompts.classify_source,

@@ -283,7 +283,7 @@ async def test_handle_writes_proposal_not_library(pipeline: _Pipeline, tmp_path:
         "classify": "packaged/classify/prompt_v1.md",
         "render": "packaged/render/prompt_v1.md",
     }
-    assert provenance["features_version"] == 1
+    assert provenance["features_version"] == 2
     assert provenance["category"] == "default"
     assert provenance["target"] == {"action": "create", "existing_skill": None, "existing_path": None}
     recorded = _recorded_seqs(FIXTURE)
@@ -356,6 +356,7 @@ async def test_handle_stops_below_evidence_threshold(pipeline: _Pipeline, tmp_pa
     assert hint == module._DEPRECATION_HINT
     assert info.startswith("Nothing to save: evidence score ")
     assert "< min_evidence_score 100.00" in info
+    assert info.endswith("incidents)")
     assert not (tmp_path / "skills").exists()
 
 

@@ -31,12 +31,20 @@ from typing import Any, get_args
 import pytest
 
 from msagent.skill_evolver.features import (
+    DEFAULT_MIN_EVIDENCE_SCORE,
     EPISODE_WEIGHTS,
+    GATE_NO_EPISODES,
+    GATE_SCORE_BELOW,
+    GATE_SCORE_REACHED,
+    GATE_STRONG_CORRECTION,
+    WEAK_CORRECTION_WEIGHT,
     Episode,
     EpisodeKind,
-    _is_denial,
+    classify_approval,
     evidence_score,
     extract_episodes,
+    gate_decision,
+    group_incidents,
     mine_cross_session,
 )
 from msagent.skill_evolver.retrieval import BM25Index, SkillDoc
@@ -82,6 +90,7 @@ def _call(
     status: ToolStatus = "ok",
     error_type: str | None = None,
     error: str | None = None,
+    subagent: str | None = None,
 ) -> ToolCall:
     """A tool span starting at ``seq``; its result (if any) sits at ``seq + 1``."""
     return ToolCall(
@@ -96,7 +105,7 @@ def _call(
         duration_ms=1,
         seq_start=seq,
         seq_end=None if status == "orphan" else seq + 1,
-        subagent=None,
+        subagent=subagent,
     )
 
 
@@ -151,6 +160,15 @@ def _kinds(episodes: list[Episode]) -> list[str]:
     return [episode.kind for episode in episodes]
 
 
+def _msprof_chain(seq: int) -> list[ToolCall]:
+    """Two failed msprof invocations fixed by a third: one incident, three episodes."""
+    return [
+        _call("bash", {"cmd": "msprof --collect train.py"}, seq=seq, status="error"),
+        _call("bash", {"cmd": "msprof --application train.py"}, seq=seq + 2, status="error"),
+        _call("bash", {"cmd": "msprof --application train.py --output ./prof"}, seq=seq + 4),
+    ]
+
+
 # ------------------------------------------------------------------- Episode
 
 
@@ -168,6 +186,8 @@ def test_episode_rejects_invalid_fields() -> None:
         return Episode(**fields)
 
     assert make().weight == 0.7
+    assert make().anchors == []
+    assert make(anchors=["run-1#1"]).anchors == ["run-1#1"]
     for overrides, message in (
         ({"evidence_seq": []}, "without evidence"),
         ({"evidence_seq": [3, 3]}, "unsorted"),
@@ -178,6 +198,8 @@ def test_episode_rejects_invalid_fields() -> None:
         ({"weight": 1.1}, "out of range"),
         ({"kind": "bogus"}, "unknown episode kind"),
         ({"thread_id": ""}, "without thread_id"),
+        ({"anchors": ["run-1#4", 4]}, "invalid anchors"),
+        ({"anchors": [""]}, "invalid anchors"),
     ):
         with pytest.raises(ValueError, match=message):
             make(**overrides)
@@ -186,6 +208,7 @@ def test_episode_rejects_invalid_fields() -> None:
 def test_episode_weights_cover_all_kinds() -> None:
     assert set(EPISODE_WEIGHTS) == set(get_args(EpisodeKind))
     assert all(0.0 < weight <= 1.0 for weight in EPISODE_WEIGHTS.values())
+    assert 0.0 < WEAK_CORRECTION_WEIGHT < EPISODE_WEIGHTS["user_correction"]
 
 
 # ----------------------------------------------------------- error_recovery
@@ -219,11 +242,13 @@ def test_error_recovery_positive_reports_args_diff() -> None:
     assert episode.weight == 0.6
     assert episode.thread_id == "thread-t"
     assert episode.evidence_seq == [4, 5, 8, 9]
+    assert episode.anchors == ["run-1#4", "run-1#8"]
     assert episode.tool_sequence == ["bash", "read_file", "bash"]
     assert episode.facts["tool"] == "bash"
     assert episode.facts["error_type"] == "ToolException"
     assert episode.facts["error"] == "boom"
     assert episode.facts["calls_between"] == 1
+    assert episode.facts["subagent"] is None
     assert episode.facts["args_diff"] == {
         "added": {"timeout": 30},
         "removed": {"shell": True},
@@ -277,6 +302,10 @@ def test_error_recovery_crosses_turns_and_pairs_every_failure() -> None:
     assert evidence == [[4, 5, 12, 13], [6, 7, 12, 13]]
     olds = [episode.facts["args_diff"]["changed"]["cmd"]["old"] for episode in episodes]
     assert olds == ["a", "b"]
+    assert [episode.anchors for episode in episodes] == [
+        ["run-1#4", "run-2#12"],
+        ["run-1#6", "run-2#12"],
+    ]
 
 
 def test_error_recovery_clips_long_values() -> None:
@@ -289,19 +318,65 @@ def test_error_recovery_clips_long_values() -> None:
     assert (len(changed["old"]), len(changed["new"])) == (200, 200)
 
 
+def test_error_recovery_stays_inside_the_stream() -> None:
+    err = _call("bash", {"cmd": "a"}, seq=4, status="error", subagent="tools:b1")
+    # A success of another subagent, or of the root agent, fixes nothing.
+    for other in ("tools:b2", None):
+        fixed = _call("bash", {"cmd": "b"}, seq=6, subagent=other)
+        assert extract_episodes(_traj(_turn("run-1", 2, "go", [err, fixed]))) == []
+    # The same subagent succeeding is the recovery.
+    fixed = _call("bash", {"cmd": "b"}, seq=6, subagent="tools:b1")
+    (episode,) = extract_episodes(_traj(_turn("run-1", 2, "go", [err, fixed])))
+    assert episode.kind == "error_recovery"
+    assert episode.facts["subagent"] == "tools:b1"
+    assert episode.anchors == ["run-1#4", "run-1#6"]
+
+    # The window counts calls of the failing stream only: five subagent calls
+    # in between do not push the root recovery out of it.
+    root_err = _call("bash", {"cmd": "a"}, seq=4, status="error")
+    fillers = [_call(f"step{i}", {"n": i}, seq=10 + 2 * i, subagent="tools:b1") for i in range(5)]
+    root_fixed = _call("bash", {"cmd": "b"}, seq=30)
+    (episode,) = extract_episodes(_traj(_turn("run-1", 2, "go", [root_err, *fillers, root_fixed])))
+    assert episode.evidence_seq == [4, 5, 30, 31]
+    assert episode.tool_sequence == ["bash", "bash"]
+    assert episode.facts["calls_between"] == 0
+
+
+def test_error_recovery_continues_into_a_resume_turn_only() -> None:
+    err = _call("bash", {"cmd": "a"}, seq=4, status="error")
+    fixed = _call("bash", {"cmd": "b"}, seq=12)
+
+    resumed = _traj(
+        _turn("run-1", 2, "go", [err]),
+        _turn("run-2", 10, None, [fixed], source="resume"),
+    )
+    (episode,) = extract_episodes(resumed)
+    assert episode.kind == "error_recovery"
+    assert episode.evidence_seq == [4, 5, 12, 13]
+    assert episode.anchors == ["run-1#4", "run-2#12"]
+
+    # A new dispatch (or an unknown) turn is another execution context.
+    for source, message in (("dispatch", "continue"), ("unknown", None)):
+        apart = _traj(
+            _turn("run-1", 2, "go", [err]),
+            _turn("run-2", 10, message, [fixed], source=source),
+        )
+        assert extract_episodes(apart) == []
+
+
 # ---------------------------------------------------------- user_correction
 
 
 @pytest.mark.parametrize(
-    "message",
+    ("message", "markers"),
     [
-        "Нет, не так — сначала посмотри summary",
-        "No, you should have used grep",
-        "Actually, run pytest instead",
-        "Надо было проверить логи",
+        ("Нет, не так — сначала посмотри summary", ["не так", "нет,", "сначала"]),
+        ("No, you should have used grep", ["no, ", "should have"]),
+        ("Actually, run pytest instead", ["instead", "actually"]),
+        ("Надо было проверить логи", ["надо было"]),
     ],
 )
-def test_user_correction_positive(message: str) -> None:
+def test_user_correction_positive(message: str, markers: list[str]) -> None:
     traj = _traj(
         _turn("run-1", 2, "do it", [_call("bash", {"cmd": "a"}, seq=4)]),
         _turn("run-2", 10, message, [_call("grep", {"pattern": "b"}, seq=12)]),
@@ -312,11 +387,15 @@ def test_user_correction_positive(message: str) -> None:
     assert episode.kind == "user_correction"
     assert episode.weight == 0.9
     assert episode.evidence_seq == [2, 10]
+    assert episode.anchors == ["run-2#10"]
     assert episode.tool_sequence == ["grep"]
     assert episode.facts == {
         "correction_text": message,
+        "strength": "strong",
+        "markers": markers,
         "tools_before": ["bash"],
         "tools_after": ["grep"],
+        "changes": {"tools_added": ["grep"], "tools_removed": ["bash"], "args_changed": {}},
         "run_id_before": "run-1",
         "run_id_after": "run-2",
     }
@@ -327,7 +406,7 @@ def test_user_correction_negative_cases() -> None:
     # Gratitude is not a correction even when the tools differ.
     thanks = _turn("run-2", 10, "спасибо, всё работает", [_call("grep", {}, seq=12)])
     assert extract_episodes(_traj(before, thanks)) == []
-    # A marker without a change of tools is just grumbling.
+    # A marker without a change of action is just grumbling.
     grumble = _turn("run-2", 10, "нет, не так", [_call("bash", {"cmd": "a"}, seq=12)])
     assert extract_episodes(_traj(before, grumble)) == []
     # A resumed turn carries no user message and cannot correct anything.
@@ -340,6 +419,42 @@ def test_user_correction_negative_cases() -> None:
     assert extract_episodes(_traj(prelude, first)) == []
 
 
+def test_user_correction_markers_start_a_word_and_negations_open_the_message() -> None:
+    before = _turn("run-1", 2, "покажи файлы", [_call("bash", {"cmd": "ls"}, seq=4)])
+    # "интернет," is not "нет,": a marker has to start a word.
+    inside = _turn(
+        "run-2",
+        10,
+        "Проверь интернет, потом запусти тест",
+        [_call("grep", {"pattern": "x"}, seq=12)],
+    )
+    assert extract_episodes(_traj(before, inside)) == []
+    # "если нет, создай" is an ordinary instruction: a negation corrects
+    # only when it opens the message.
+    middle = _turn(
+        "run-2",
+        10,
+        "Проверь лог; если нет, создай его",
+        [_call("write_file", {"path": "log.txt"}, seq=12)],
+    )
+    assert extract_episodes(_traj(before, middle)) == []
+    opening = _turn("run-2", 10, "Нет, покажи логи", [_call("grep", {"pattern": "x"}, seq=12)])
+
+    (episode,) = extract_episodes(_traj(before, opening))
+
+    assert episode.facts["markers"] == ["нет,"]
+    assert episode.facts["strength"] == "strong"
+
+
+def test_user_correction_ignores_normalized_equal_arguments() -> None:
+    # A path spelled differently plus a volatile key is the same action.
+    first = _call("read_file", {"path": "./cfg/dev.yml", "limit": 10}, seq=4)
+    second = _call("read_file", {"path": "cfg/dev.yml", "limit": 50}, seq=12)
+    before = _turn("run-1", 2, "read it", [first])
+    after = _turn("run-2", 10, "нет, не так", [second])
+    assert extract_episodes(_traj(before, after)) == []
+
+
 def test_user_correction_clips_text_and_accepts_marker_anywhere() -> None:
     message = "x" * 600 + " no, do it instead"
     traj = _traj(
@@ -350,8 +465,81 @@ def test_user_correction_clips_text_and_accepts_marker_anywhere() -> None:
     (episode,) = extract_episodes(traj)
 
     assert len(episode.facts["correction_text"]) == 500
+    assert episode.facts["strength"] == "strong"
     assert episode.facts["tools_after"] == []
+    assert episode.facts["changes"]["tools_removed"] == ["bash"]
     assert episode.tool_sequence == []
+
+
+def test_user_correction_records_a_path_change_of_the_same_tool() -> None:
+    traj = _traj(
+        _turn("run-1", 2, "read the config", [_call("read_file", {"path": "cfg/dev.yml"}, seq=4)]),
+        _turn(
+            "run-2",
+            10,
+            "Нет, не так: надо было читать cfg/prod.yml",
+            [_call("read_file", {"path": "cfg/prod.yml"}, seq=12)],
+        ),
+    )
+
+    (episode,) = extract_episodes(traj)
+
+    assert episode.kind == "user_correction"
+    assert episode.facts["strength"] == "strong"
+    assert episode.facts["markers"] == ["не так", "нет,", "надо было"]
+    assert episode.facts["changes"] == {
+        "tools_added": [],
+        "tools_removed": [],
+        "args_changed": {
+            "read_file": {"changed": {"path": {"old": "cfg/dev.yml", "new": "cfg/prod.yml"}}},
+        },
+    }
+
+
+def test_user_correction_weak_marker_is_never_strong() -> None:
+    before = _turn("run-1", 2, "run it", [_call("bash", {"cmd": "a"}, seq=4)])
+    message = "Actually, let's also run pytest"
+    changed = _turn("run-2", 10, message, [_call("bash", {"cmd": "pytest"}, seq=12)])
+
+    (episode,) = extract_episodes(_traj(before, changed))
+
+    assert episode.kind == "user_correction"
+    assert episode.facts["strength"] == "weak"
+    assert episode.facts["markers"] == ["actually"]
+    assert episode.weight == WEAK_CORRECTION_WEIGHT == 0.5
+    assert episode.facts["changes"]["args_changed"] == {
+        "bash": {"changed": {"cmd": {"old": "a", "new": "pytest"}}},
+    }
+    decision = gate_decision([episode], min_score=DEFAULT_MIN_EVIDENCE_SCORE)
+    assert (decision.passes, decision.reason) == (False, GATE_SCORE_BELOW)
+
+    # A weak marker without a change of action is nothing at all.
+    unchanged = _turn("run-2", 10, message, [_call("bash", {"cmd": "a"}, seq=12)])
+    assert extract_episodes(_traj(before, unchanged)) == []
+
+
+def test_user_correction_compares_turn_groups() -> None:
+    traj = _traj(
+        _turn("run-1", 2, "do it", [_call("bash", {"cmd": "a"}, seq=4)]),
+        _turn("run-2", 10, None, [_call("read_file", {"path": "x"}, seq=12)], source="resume"),
+        _turn(
+            "run-3",
+            20,
+            "Нет, не так — ищи через grep",
+            [_call("grep", {"pattern": "b"}, seq=22)],
+        ),
+    )
+
+    (episode,) = extract_episodes(traj)
+
+    assert episode.kind == "user_correction"
+    assert episode.evidence_seq == [2, 20]
+    assert episode.anchors == ["run-3#20"]
+    assert episode.facts["tools_before"] == ["bash", "read_file"]
+    assert episode.facts["tools_after"] == ["grep"]
+    assert episode.facts["changes"]["tools_removed"] == ["bash", "read_file"]
+    assert episode.facts["run_id_before"] == "run-1"
+    assert episode.facts["run_id_after"] == "run-3"
 
 
 # ---------------------------------------------------------------- retry_loop
@@ -370,8 +558,11 @@ def test_retry_loop_positive() -> None:
     assert episode.kind == "retry_loop"
     assert episode.weight == 0.7
     assert episode.evidence_seq == [4, 8, 10]
+    assert episode.anchors == ["run-1#4", "run-1#8", "run-1#10"]
     assert episode.tool_sequence == ["grep", "grep", "grep"]
     assert episode.facts["tool_name"] == "grep"
+    assert episode.facts["work_object"] == "a.csv"
+    assert episode.facts["reason"] == "search key varies"
     assert episode.facts["attempts"] == 3
     assert episode.facts["statuses"] == ["ok", "ok", "ok"]
     assert episode.facts["run_id"] == "run-1"
@@ -388,7 +579,7 @@ def test_retry_loop_negative_cases() -> None:
     assert extract_episodes(_traj(_turn("run-1", 2, "go", same))) == []
     empty = [_call("bash", {}, seq=seq) for seq in (4, 6, 8)]
     assert extract_episodes(_traj(_turn("run-1", 2, "go", empty))) == []
-    # Dissimilar key sets break the chain (Jaccard 0 between {cmd} and {path}).
+    # Different work objects (commands a and c, path b) never chain.
     mixed = [
         _call("bash", {"cmd": "a"}, seq=4),
         _call("bash", {"path": "b"}, seq=6),
@@ -401,30 +592,133 @@ def test_retry_loop_negative_cases() -> None:
         _turn("run-2", 10, "more", [_call("bash", {"cmd": "c"}, seq=12)]),
     )
     assert extract_episodes(split) == []
+    # A parameter sweep that never failed is not a loop.
+    sweep = [
+        _call("bash", {"cmd": "python train.py --lr 0.1"}, seq=4),
+        _call("bash", {"cmd": "python train.py --lr 0.01"}, seq=6),
+        _call("bash", {"cmd": "python train.py --lr 0.001"}, seq=8),
+    ]
+    assert extract_episodes(_traj(_turn("run-1", 2, "go", sweep))) == []
+    # Paging through one file differs only in a volatile key: one variant.
+    paging = [
+        _call("read_file", {"path": "big.bin", "offset": 0}, seq=4),
+        _call("read_file", {"path": "big.bin", "offset": 100}, seq=6),
+        _call("read_file", {"path": "big.bin", "offset": 200}, seq=8),
+    ]
+    assert extract_episodes(_traj(_turn("run-1", 2, "go", paging))) == []
+    # The third attempt made by another subagent belongs to another stream.
+    apart = [
+        _call("bash", {"cmd": "pip install torch"}, seq=4, status="error"),
+        _call("bash", {"cmd": "pip install torch==2.1"}, seq=6, status="error"),
+        _call("bash", {"cmd": "pip install torch==2.2"}, seq=8, subagent="tools:b1"),
+    ]
+    assert extract_episodes(_traj(_turn("run-1", 2, "go", apart))) == []
+    # Three interrupted variants without a failure or a search key: no loop.
+    orphans = [
+        _call("bash", {"cmd": f"pip install torch=={v}"}, seq=4 + 2 * i, status="orphan")
+        for i, v in enumerate(("2.0", "2.1", "2.2"))
+    ]
+    assert extract_episodes(_traj(_turn("run-1", 2, "go", orphans))) == []
 
 
-def test_retry_loop_literal_rule_reports_ok_fanout_and_orphans() -> None:
-    # Reading three files with one key set is a retry loop by the literal rule
-    # (documented false positive); an interrupted attempt still counts.
+def test_retry_loop_work_object_is_the_command_not_its_directory() -> None:
+    # Three unrelated commands in one working directory are not one operation.
+    unrelated = [
+        _call("bash", {"cmd": "pytest tests/a", "cwd": "/repo"}, seq=4, status="error"),
+        _call("bash", {"cmd": "make docs", "cwd": "/repo"}, seq=6),
+        _call("bash", {"cmd": "git status", "cwd": "/repo"}, seq=8),
+    ]
+    assert _kinds(extract_episodes(_traj(_turn("run-1", 2, "go", unrelated)))) == ["error_recovery"]
+    # The same command retried with options is one operation.
+    attempts = [
+        _call("bash", {"cmd": "pytest tests/a", "cwd": "/repo"}, seq=4, status="error"),
+        _call("bash", {"cmd": "pytest tests/a -x", "cwd": "/repo"}, seq=6, status="error"),
+        _call("bash", {"cmd": "pytest tests/a -x -k smoke", "cwd": "/repo"}, seq=8, status="error"),
+    ]
+
+    (episode,) = extract_episodes(_traj(_turn("run-1", 2, "go", attempts)))
+
+    assert episode.kind == "retry_loop"
+    assert episode.facts["work_object"] == "pytest tests/a"
+
+
+def test_retry_loop_fanout_over_different_files_is_not_a_retry() -> None:
+    # Reading three files is three work objects, whatever their key sets.
     calls = [
         _call("read_file", {"path": "c.py"}, seq=4),
         _call("bash", {"cmd": "ls"}, seq=6),
         _call("read_file", {"path": "d.py"}, seq=8),
         _call("read_file", {"path": "e.py"}, seq=10, status="orphan"),
     ]
+    assert extract_episodes(_traj(_turn("run-1", 2, "read", calls))) == []
 
-    (episode,) = extract_episodes(_traj(_turn("run-1", 2, "read", calls)))
 
-    assert episode.evidence_seq == [4, 8, 10]
-    assert episode.facts["statuses"] == ["ok", "ok", "orphan"]
+def test_retry_loop_counts_orphans_as_attempts() -> None:
+    calls = [
+        _call("bash", {"cmd": "pip install torch"}, seq=4, status="error"),
+        _call("bash", {"cmd": "pip  install torch==2.1"}, seq=6, status="orphan"),
+        _call("bash", {"cmd": "pip install torch --index-url https://x"}, seq=8, status="error"),
+    ]
+
+    (episode,) = extract_episodes(_traj(_turn("run-1", 2, "install", calls)))
+
+    assert episode.kind == "retry_loop"
+    assert episode.evidence_seq == [4, 6, 8]
+    assert episode.anchors == ["run-1#4", "run-1#6", "run-1#8"]
+    assert episode.facts["work_object"] == "pip install"
+    assert episode.facts["reason"] == "failed attempt"
+    assert episode.facts["statuses"] == ["error", "orphan", "error"]
+    assert episode.facts["args_variants"] == [
+        {"cmd": "pip install torch"},
+        {"cmd": "pip install torch==2.1"},
+        {"cmd": "pip install torch --index-url https://x"},
+    ]
+
+
+def test_retry_loop_continues_into_a_resume_turn_only() -> None:
+    first = [
+        _call("grep", {"pattern": "a", "path": "f"}, seq=4),
+        _call("grep", {"pattern": "b", "path": "f"}, seq=6),
+    ]
+    third = _call("grep", {"pattern": "c", "path": "f"}, seq=12)
+
+    resumed = _traj(
+        _turn("run-1", 2, "find", first),
+        _turn("run-2", 10, None, [third], source="resume"),
+    )
+    (episode,) = extract_episodes(resumed)
+    assert episode.kind == "retry_loop"
+    assert episode.evidence_seq == [4, 6, 12]
+    assert episode.anchors == ["run-1#4", "run-1#6", "run-2#12"]
+    assert episode.facts["run_id"] == "run-1"
+    assert episode.facts["reason"] == "search key varies"
+
+    for source, message in (("dispatch", "keep looking"), ("unknown", None)):
+        apart = _traj(
+            _turn("run-1", 2, "find", first),
+            _turn("run-2", 10, message, [third], source=source),
+        )
+        assert extract_episodes(apart) == []
 
 
 # ----------------------------------------------------------- approval_denied
 
+_TWO_ACTIONS = {
+    "action_requests": [
+        {"name": "bash", "args": {"cmd": "ls"}},
+        {"name": "write_file", "args": {"content": "x" * 300}},
+    ],
+    "review_configs": [],
+}
+_ONE_ACTION = {"action_requests": [{"name": "bash", "args": {"cmd": "ls"}}]}
+_FLAT_REQUEST = {"tool": "bash", "args": {"cmd": "rm"}}
+
 
 @pytest.mark.parametrize(
-    ("decision", "expected"),
+    ("decision", "interrupt", "status", "denied_names"),
     [
+        # Structured HITL decisions, matched by index against action_requests.
+        ({"decisions": [{"type": "approve", "message": "no issues"}]}, _ONE_ACTION, "approved", []),
         (
             {
                 "decisions": [
@@ -432,37 +726,87 @@ def test_retry_loop_literal_rule_reports_ok_fanout_and_orphans() -> None:
                     {"type": "reject", "message": "Rejected by policy."},
                 ],
             },
-            True,
+            _TWO_ACTIONS,
+            "denied",
+            ["write_file"],
         ),
-        ({"decisions": [{"type": "approve"}]}, False),
-        ({"decisions": []}, False),
-        ({"action": "reject"}, True),
-        ({"action": "approve"}, False),
-        ({"type": "edit", "edited_action": {"args": {"cmd": "echo note"}}}, False),
-        ("no", True),
-        ("No, don't", True),
-        ("note", False),
-        ("unknown", False),
-        ("no_changes", False),
-        ("Denied", True),
-        ("deny", True),
-        ("rejected", True),
-        (None, False),
-        (42, False),
+        (
+            {"decisions": [{"type": "reject"}, {"type": "reject"}]},
+            _TWO_ACTIONS,
+            "denied",
+            ["bash", "write_file"],
+        ),
+        ({"decisions": [{"type": "reject"}]}, _TWO_ACTIONS, "unknown", []),
+        ({"decisions": [{"type": "reject"}, {"type": "reject"}]}, None, "unknown", []),
+        ({"decisions": [{"type": "reject"}]}, None, "denied", [None]),
+        ({"decisions": [{"type": "reject"}]}, _FLAT_REQUEST, "denied", ["bash"]),
+        ({"decisions": []}, _ONE_ACTION, "unknown", []),
+        ({"decisions": "reject"}, _ONE_ACTION, "unknown", []),
+        ({"decisions": ["reject"]}, _ONE_ACTION, "unknown", []),
+        ({"decisions": [{"type": "veto"}]}, _ONE_ACTION, "unknown", []),
+        (
+            {"decisions": [{"type": "edit", "edited_action": {"args": {"cmd": "ls -a"}}}]},
+            _ONE_ACTION,
+            "approved",
+            [],
+        ),
+        ({"decisions": [{"type": "respond", "message": "later"}]}, _ONE_ACTION, "approved", []),
+        # Flat decisions apply to the flat request.
+        ({"action": "approve", "comment": "no issues"}, {"tool": "bash"}, "approved", []),
+        ({"action": "reject"}, _FLAT_REQUEST, "denied", ["bash"]),
+        ({"action": "Reject"}, {"question": "Proceed?"}, "denied", [None]),
+        (
+            {"type": "edit", "edited_action": {"args": {"cmd": "echo note"}}},
+            {"tool": "bash"},
+            "approved",
+            [],
+        ),
+        ({"action": "veto"}, {"tool": "bash"}, "unknown", []),
+        ({"comment": "no"}, {"tool": "bash"}, "unknown", []),
+        # Legacy option answers must match exactly; free text is unknown.
+        ("no", {"tool": "bash"}, "denied", ["bash"]),
+        ("Denied", {"tool": "bash"}, "denied", ["bash"]),
+        ("deny", {"tool": "bash"}, "denied", ["bash"]),
+        ("rejected", None, "denied", [None]),
+        ("yes", {"tool": "bash"}, "approved", []),
+        (" OK ", {"tool": "bash"}, "approved", []),
+        ("No, don't", {"tool": "bash"}, "unknown", []),
+        ("Cancel", {"tool": "bash"}, "unknown", []),
+        ("note", {"tool": "bash"}, "unknown", []),
+        ("no_changes", {"tool": "bash"}, "unknown", []),
+        # Anything else cannot be read.
+        (None, {"tool": "bash"}, "unknown", []),
+        (42, {"tool": "bash"}, "unknown", []),
+        (["reject"], {"tool": "bash"}, "unknown", []),
     ],
 )
-def test_is_denial(decision: Any, expected: bool) -> None:
-    assert _is_denial(decision) is expected
+def test_classify_approval(
+    decision: Any,
+    interrupt: Any,
+    status: str,
+    denied_names: list[str | None],
+) -> None:
+    verdict = classify_approval(interrupt, decision)
+
+    assert verdict.status == status
+    assert [action["name"] for action in verdict.denied] == denied_names
+    assert all(isinstance(action["args"], dict) for action in verdict.denied)
+    assert isinstance(verdict.reason, str) and verdict.reason
+
+
+def test_classify_approval_reports_the_shape_problem() -> None:
+    mismatch = classify_approval(_TWO_ACTIONS, {"decisions": [{"type": "reject"}]})
+    assert mismatch.reason == "1 decisions for 2 action_requests"
+    assert classify_approval(_ONE_ACTION, {"decisions": []}).reason == "no decision recorded"
+    veto = classify_approval(_ONE_ACTION, {"decisions": [{"type": "veto"}]})
+    assert veto.reason == "decision 0 has type 'veto'"
+    # Denied arguments are clipped like every fact value.
+    decision = {"decisions": [{"type": "approve"}, {"type": "reject"}]}
+    verdict = classify_approval(_TWO_ACTIONS, decision)
+    assert verdict.denied == [{"name": "write_file", "args": {"content": "x" * 200}}]
 
 
 def test_approval_denied_positive_with_real_hitl_shape() -> None:
-    request = {
-        "action_requests": [
-            {"name": "bash", "args": {"cmd": "ls"}},
-            {"name": "write_file", "args": {"content": "x" * 300}},
-        ],
-        "review_configs": [],
-    }
     decision = {"decisions": [{"type": "approve"}, {"type": "reject"}]}
     following = [
         _call("bash", {"cmd": "cat x"}, seq=12),
@@ -474,7 +818,7 @@ def test_approval_denied_positive_with_real_hitl_shape() -> None:
             2,
             "write it",
             [_call("grep", {"pattern": "a"}, seq=4)],
-            approvals=[_approval(9, decision, request)],
+            approvals=[_approval(9, decision, _TWO_ACTIONS)],
         ),
         _turn("run-2", 10, None, following, source="resume"),
     )
@@ -484,10 +828,14 @@ def test_approval_denied_positive_with_real_hitl_shape() -> None:
     assert episode.kind == "approval_denied"
     assert episode.weight == 1.0
     assert episode.evidence_seq == [9, 12, 14]
+    assert episode.anchors == ["run-1#9"]
     assert episode.tool_sequence == ["bash", "ls"]
     assert episode.facts["interrupt_id"] == "int-9"
     assert episode.facts["run_id"] == "run-1"
-    assert episode.facts["tools"] == ["bash", "write_file"]
+    assert episode.facts["tools"] == ["write_file"]
+    assert episode.facts["denied_actions"] == [
+        {"name": "write_file", "args": {"content": "x" * 200}},
+    ]
     assert episode.facts["decision"] == decision
     assert len(episode.facts["request"]) == 200
     assert episode.facts["next_tools"] == [
@@ -497,18 +845,24 @@ def test_approval_denied_positive_with_real_hitl_shape() -> None:
 
 
 def test_approval_denied_negative_and_context_rules() -> None:
-    approve = _approval(9, {"decisions": [{"type": "approve"}]}, {"tool": "bash"})
+    # "no issues" in an approval message is not a denial.
+    approve = _approval(
+        9,
+        {"decisions": [{"type": "approve", "message": "no issues"}]},
+        {"tool": "bash"},
+    )
     before = _call("grep", {}, seq=4)
     approved = _traj(_turn("run-1", 2, "go", [before], approvals=[approve]))
     assert extract_episodes(approved) == []
 
-    denied = _approval(9, {"action": "reject"}, {"tool": "bash", "args": {"cmd": "rm"}})
-    # Calls before the approval are excluded; later ones are capped at three.
+    denied = _approval(9, {"action": "reject"}, _FLAT_REQUEST)
+    # Calls before the approval are excluded; later ones of the same turn
+    # group (the resume turn) are included and capped at three.
     later = [_call(f"step{i}", {}, seq=20 + 2 * i) for i in range(4)]
     same_turn = _call("ls", {}, seq=11)
     traj = _traj(
         _turn("run-1", 2, "go", [before, same_turn], approvals=[denied]),
-        _turn("run-2", 18, "next", later),
+        _turn("run-2", 18, None, later, source="resume"),
     )
 
     (episode,) = extract_episodes(traj)
@@ -516,6 +870,15 @@ def test_approval_denied_negative_and_context_rules() -> None:
     assert episode.evidence_seq == [9, 11, 20, 22]
     assert episode.tool_sequence == ["ls", "step0", "step1"]
     assert episode.facts["tools"] == ["bash"]
+    assert episode.facts["denied_actions"] == [{"name": "bash", "args": {"cmd": "rm"}}]
+
+    # A following dispatch turn is not the reaction to the denial.
+    dispatched = _traj(
+        _turn("run-1", 2, "go", [before, same_turn], approvals=[denied]),
+        _turn("run-2", 18, "next", later),
+    )
+    (episode,) = extract_episodes(dispatched)
+    assert (episode.evidence_seq, episode.tool_sequence) == ([9, 11], ["ls"])
 
     # Nothing after the denial and an unknown request shape: the approval
     # alone is the evidence and no tool can be named.
@@ -525,6 +888,20 @@ def test_approval_denied_negative_and_context_rules() -> None:
         (episode,) = extract_episodes(_traj(turn))
         assert (episode.evidence_seq, episode.tool_sequence) == ([9], [])
         assert episode.facts["tools"] == []
+        assert episode.facts["denied_actions"] == [{"name": None, "args": {}}]
+
+
+def test_approval_unknown_formats_yield_no_episode() -> None:
+    following = [_call("ls", {}, seq=11)]
+    for decision, request in (
+        ({"decisions": [{"type": "reject"}]}, _TWO_ACTIONS),
+        ({"decisions": [{"type": "veto"}]}, _ONE_ACTION),
+        ("Cancel", {"tool": "bash"}),
+        ("No, don't", {"tool": "bash"}),
+        (None, {"tool": "bash"}),
+    ):
+        turn = _turn("run-1", 2, "go", following, approvals=[_approval(9, decision, request)])
+        assert extract_episodes(_traj(turn)) == []
 
 
 # ----------------------------------------------------------------- skill_gap
@@ -540,6 +917,7 @@ def test_skill_gap_positive() -> None:
     assert episode.kind == "skill_gap"
     assert episode.weight == 0.4
     assert episode.evidence_seq == [2, 6]
+    assert episode.anchors == []
     assert episode.tool_sequence == ["bash"]
     assert episode.facts["candidate_skill"] == "dit-quant"
     assert episode.facts["score"] >= 1.0
@@ -588,6 +966,7 @@ def test_mine_cross_session_reports_closed_patterns() -> None:
     assert episode.weight == 1.0
     assert episode.thread_id == "A"
     assert episode.evidence_seq == [4, 6, 8]
+    assert episode.anchors == ["run-1#4", "run-1#6", "run-1#8"]
     assert episode.tool_sequence == ["bash", "read_file", "grep"]
     assert episode.facts == {
         "ngram": ["bash", "read_file", "grep"],
@@ -636,13 +1015,99 @@ def test_mine_cross_session_caps_ngrams_at_five() -> None:
     assert all(e.facts["support"] == 2 for e in episodes)
 
 
+def test_mine_cross_session_ignores_catalog_calls() -> None:
+    mixed = _procedure("A", ["get_skill", "bash", "fetch_tools", "grep", "run_tool"])
+    plain = _procedure("B", ["bash", "grep"])
+
+    (episode,) = mine_cross_session([mixed, plain])
+
+    assert episode.thread_id == "A"
+    assert episode.tool_sequence == ["bash", "grep"]
+    assert episode.evidence_seq == [6, 10]
+    assert episode.anchors == ["run-1#6", "run-1#10"]
+    assert episode.facts["thread_ids"] == ["A", "B"]
+    # Catalog calls alone are not a procedure.
+    catalog = [
+        _procedure("A", ["get_skill", "fetch_tools"]),
+        _procedure("B", ["get_skill", "fetch_tools"]),
+    ]
+    assert mine_cross_session(catalog) == []
+
+
+def test_mine_cross_session_splits_at_a_failed_call() -> None:
+    plain = _procedure("B", ["bash", "read_file", "grep"])
+    for status in ("error", "orphan"):
+        broken = _traj(
+            _turn(
+                "run-1",
+                2,
+                "go",
+                [
+                    _call("bash", {"cmd": "a"}, seq=4),
+                    _call("read_file", {"path": "x"}, seq=6, status=status),
+                    _call("grep", {"pattern": "p"}, seq=8),
+                ],
+            ),
+            thread_id="A",
+        )
+        assert mine_cross_session([broken, plain]) == []
+    whole = _traj(
+        _turn(
+            "run-1",
+            2,
+            "go",
+            [
+                _call("bash", {"cmd": "a"}, seq=4),
+                _call("read_file", {"path": "x"}, seq=6),
+                _call("grep", {"pattern": "p"}, seq=8),
+            ],
+        ),
+        thread_id="A",
+    )
+
+    (episode,) = mine_cross_session([whole, plain])
+
+    assert episode.tool_sequence == ["bash", "read_file", "grep"]
+    assert episode.evidence_seq == [4, 6, 8]
+
+
+def test_mine_cross_session_keeps_streams_apart() -> None:
+    plain = _procedure("B", ["bash", "grep"])
+    first = _call("bash", {"cmd": "a"}, seq=4)
+    second = _call("grep", {"pattern": "p"}, seq=12)
+    # A resume turn continues the sequence of the turn it resumes.
+    resumed = _traj(
+        _turn("run-1", 2, "go", [first]),
+        _turn("run-2", 10, None, [second], source="resume"),
+    )
+    (episode,) = mine_cross_session([resumed, plain])
+    assert episode.tool_sequence == ["bash", "grep"]
+    assert episode.evidence_seq == [4, 12]
+    assert episode.anchors == ["run-1#4", "run-2#12"]
+    # A dispatch turn starts another sequence.
+    dispatched = _traj(_turn("run-1", 2, "go", [first]), _turn("run-2", 10, "more", [second]))
+    assert mine_cross_session([dispatched, plain]) == []
+    # A step made by another subagent is not a step of this stream ...
+    elsewhere = _call("grep", {"pattern": "p"}, seq=6, subagent="tools:b1")
+    apart = _traj(_turn("run-1", 2, "go", [first, elsewhere]))
+    assert mine_cross_session([apart, plain]) == []
+    # ... and does not interrupt it either.
+    aside = _call("ls", {}, seq=6, subagent="tools:b1")
+    around = _turn("run-1", 2, "go", [first, aside, _call("grep", {}, seq=8)])
+    (episode,) = mine_cross_session([_traj(around), plain])
+    assert episode.evidence_seq == [4, 8]
+
+
 # ------------------------------------------------------------------- scoring
 
 
-def test_evidence_score_sums_weights() -> None:
+def test_evidence_score_adds_independent_incidents() -> None:
     assert evidence_score([]) == 0.0
     signals = load_trajectory(FIXTURES / "skill_evolver_signals.jsonl")
-    assert evidence_score(extract_episodes(signals)) == pytest.approx(3.8)
+    episodes = extract_episodes(signals)
+    # error_recovery x2 + retry_loop describe one msprof chain: 0.7, not 1.9.
+    assert len(group_incidents(episodes)) == 3
+    assert evidence_score(episodes) == pytest.approx(2.6)
 
 
 # ------------------------------------------------------------------ fixtures
@@ -661,25 +1126,52 @@ def test_signals_fixture_end_to_end() -> None:
         ("approval_denied", [26, 29, 32]),
         ("skill_gap", [2, 4, 17]),
     ]
-    recovery, _, correction, retry, denial, gap = episodes
+    recovery, second, correction, retry, denial, gap = episodes
     changed = recovery.facts["args_diff"]["changed"]["cmd"]
     assert changed["old"] == "msprof --collect train.py"
     assert changed["new"] == "msprof --application train.py --output ./prof"
+    assert recovery.anchors == ["run-1#4", "run-1#10"]
+    assert second.anchors == ["run-1#7", "run-1#10"]
+    assert correction.facts["strength"] == "strong"
+    assert correction.facts["markers"] == ["не так", "нет,", "надо было", "сначала"]
     assert correction.facts["tools_before"] == ["bash", "bash", "bash", "read_file"]
-    assert correction.facts["tools_after"] == ["bash", "grep"]
+    # The group of run-2 includes the resume turn run-3.
+    assert correction.facts["tools_after"] == ["bash", "grep", "bash", "ls"]
+    assert correction.facts["changes"]["tools_added"] == ["grep", "ls"]
+    assert correction.facts["changes"]["tools_removed"] == ["read_file"]
+    new_cmd = correction.facts["changes"]["args_changed"]["bash"]["changed"]["cmd"]["new"]
+    assert new_cmd.endswith("--level kernel")
+    assert correction.anchors == ["run-2#17"]
     assert retry.facts["attempts"] == 3
+    assert retry.facts["work_object"] == "msprof train.py"
+    assert retry.facts["reason"] == "failed attempt"
+    assert retry.facts["statuses"] == ["error", "error", "ok"]
+    assert retry.anchors == ["run-1#4", "run-1#7", "run-1#10"]
     assert denial.facts["tools"] == ["write_file"]
+    assert denial.facts["denied_actions"] == [
+        {"name": "write_file", "args": {"path": "report.md", "content": "# Report"}},
+    ]
     assert denial.tool_sequence == ["bash", "ls"]
+    assert denial.anchors == ["run-2#26"]
     assert gap.facts["candidate_skill"] == "profiling-bottleneck"
-    assert evidence_score(episodes) == pytest.approx(4.2)
+    assert gap.anchors == []
+    assert [_kinds(incident) for incident in group_incidents(episodes)] == [
+        ["error_recovery", "error_recovery", "retry_loop"],
+        ["user_correction"],
+        ["approval_denied"],
+        ["skill_gap"],
+    ]
+    assert evidence_score(episodes) == pytest.approx(3.0)
+    decision = gate_decision(episodes, min_score=DEFAULT_MIN_EVIDENCE_SCORE)
+    assert (decision.passes, decision.reason) == (True, GATE_SCORE_REACHED)
 
 
 EXPECTED_KINDS = {
     "malformed_lines.jsonl": {"approval_denied": 1},
-    "missing_turn_end.jsonl": {"retry_loop": 1, "skill_gap": 1},
+    "missing_turn_end.jsonl": {"skill_gap": 1},
     "normal_subagent.jsonl": {},
-    "orphan_tool_start.jsonl": {"retry_loop": 1, "skill_gap": 1},
-    "recorder_limit.jsonl": {"retry_loop": 1, "skill_gap": 1},
+    "orphan_tool_start.jsonl": {"skill_gap": 1},
+    "recorder_limit.jsonl": {"skill_gap": 1},
     "result_without_start.jsonl": {},
     "skill_evolver_signals.jsonl": {
         "error_recovery": 2,
@@ -701,6 +1193,15 @@ def test_fixture_episode_kinds(path: Path) -> None:
     assert Counter(_kinds(episodes)) == Counter(EXPECTED_KINDS[path.name])
 
 
+def test_malformed_fixture_denial_is_anchored_to_the_prelude() -> None:
+    (episode,) = extract_episodes(load_trajectory(FIXTURES / "malformed_lines.jsonl"))
+    assert episode.kind == "approval_denied"
+    assert episode.evidence_seq == [3]
+    assert episode.tool_sequence == []
+    assert episode.facts["tools"] == ["bash"]
+    assert episode.anchors == [f"{PRELUDE_RUN_ID}#3"]
+
+
 def _recorded_seqs(path: Path) -> set[int]:
     """Seqs of the events the reader accepts (its own schema-v1 filter)."""
     seqs: set[int] = set()
@@ -709,6 +1210,12 @@ def _recorded_seqs(path: Path) -> set[int]:
         if valid and isinstance(event.get("seq"), int):
             seqs.add(event["seq"])
     return seqs
+
+
+def _anchor_seqs(episode: Episode) -> set[int]:
+    """The seq part of every anchor; anchors must read ``<run_id>#<seq>``."""
+    assert all(isinstance(anchor, str) and "#" in anchor for anchor in episode.anchors)
+    return {int(anchor.rsplit("#", 1)[1]) for anchor in episode.anchors}
 
 
 @pytest.mark.parametrize("path", FIXTURE_FILES, ids=FIXTURE_IDS)
@@ -721,6 +1228,7 @@ def test_evidence_seqs_exist_in_source(path: Path) -> None:
         assert episode.thread_id == traj.thread_id
         assert episode.evidence_seq == sorted(set(episode.evidence_seq))
         assert set(episode.evidence_seq) <= recorded
+        assert _anchor_seqs(episode) <= set(episode.evidence_seq)
         assert 0.0 <= episode.weight <= 1.0
 
 
@@ -738,12 +1246,166 @@ def test_cross_session_evidence_exists_in_source() -> None:
         assert episode.tool_sequence == episode.facts["ngram"]
         assert 2 <= len(episode.tool_sequence) <= 5
         assert set(episode.evidence_seq) <= recorded[episode.thread_id]
+        assert _anchor_seqs(episode) == set(episode.evidence_seq)
     procedures = {tuple(e.tool_sequence): e for e in episodes}
-    shared = procedures[("bash", "read_file", "grep", "bash", "bash")]
+    shared = procedures[("bash", "read_file", "grep", "bash")]
     assert shared.facts["thread_ids"] == ["thread-ctrlc", "thread-limit"]
     assert shared.thread_id == "thread-ctrlc"
-    assert shared.evidence_seq == [4, 7, 10, 13, 18]
-    assert ("bash", "read_file", "grep", "bash") not in procedures
+    assert shared.evidence_seq == [4, 7, 10, 13]
+    assert shared.anchors == ["run-1#4", "run-1#7", "run-1#10", "run-1#13"]
+    # The fifth step of the old five-gram failed in one thread: no longer a procedure.
+    assert ("bash", "read_file", "grep", "bash", "bash") not in procedures
+    assert procedures[("bash", "read_file")].facts["support"] == 3
+
+
+# ------------------------------------------------------- incidents and gate
+
+
+def test_group_incidents_links_episodes_transitively_by_anchor() -> None:
+    def make(kind: EpisodeKind, seqs: list[int], anchors: list[str]) -> Episode:
+        return Episode(kind, "t", seqs, [], {}, EPISODE_WEIGHTS[kind], anchors)
+
+    first = make("error_recovery", [4, 8], ["run-1#4", "run-1#8"])
+    second = make("retry_loop", [8, 12], ["run-1#8", "run-1#12"])
+    third = make("approval_denied", [20], ["run-1#20"])
+    fourth = make("error_recovery", [12, 14], ["run-1#12", "run-1#14"])
+    gap = make("skill_gap", [2, 4], [])
+    twin = make("skill_gap", [2, 4], [])
+    other_gap = make("skill_gap", [2, 6], [])
+
+    incidents = group_incidents([first, second, third, fourth, gap, twin, other_gap])
+
+    assert incidents == [[first, second, fourth], [third], [gap, twin], [other_gap]]
+    assert group_incidents([]) == []
+
+
+def test_one_incident_seen_by_several_detectors_counts_once() -> None:
+    episodes = extract_episodes(_traj(_turn("run-1", 2, "profile", _msprof_chain(4))))
+
+    assert _kinds(episodes) == ["error_recovery", "error_recovery", "retry_loop"]
+    decision = gate_decision(episodes, min_score=DEFAULT_MIN_EVIDENCE_SCORE)
+    assert len(decision.incidents) == 1
+    assert decision.score == pytest.approx(0.7)
+    assert (decision.passes, decision.reason) == (False, GATE_SCORE_BELOW)
+    assert evidence_score(episodes) == pytest.approx(0.7)
+
+
+def test_independent_incidents_add_up() -> None:
+    traj = _traj(
+        _turn("run-1", 2, "profile", _msprof_chain(4)),
+        _turn("run-2", 20, "again", _msprof_chain(22)),
+    )
+
+    episodes = extract_episodes(traj)
+
+    assert len(episodes) == 6
+    decision = gate_decision(episodes, min_score=DEFAULT_MIN_EVIDENCE_SCORE)
+    assert len(decision.incidents) == 2
+    assert decision.score == pytest.approx(1.4)
+    assert (decision.passes, decision.reason) == (True, GATE_SCORE_REACHED)
+
+
+def test_shared_turn_does_not_merge_incidents() -> None:
+    denied = _approval(14, {"action": "reject"}, {"tool": "write_file", "args": {"path": "r.md"}})
+    traj = _traj(
+        _turn("run-1", 2, "do it", [_call("bash", {"cmd": "a"}, seq=4)]),
+        _turn(
+            "run-2",
+            10,
+            "Нет, не так — надо было искать через grep",
+            [_call("grep", {"pattern": "b"}, seq=12), _call("ls", {}, seq=16)],
+            approvals=[denied],
+        ),
+    )
+
+    episodes = extract_episodes(traj)
+
+    assert _kinds(episodes) == ["user_correction", "approval_denied"]
+    assert [e.anchors for e in episodes] == [["run-2#10"], ["run-2#14"]]
+    decision = gate_decision(episodes, min_score=DEFAULT_MIN_EVIDENCE_SCORE)
+    assert len(decision.incidents) == 2
+    assert decision.score == pytest.approx(1.9)
+    assert (decision.passes, decision.reason) == (True, GATE_SCORE_REACHED)
+
+
+def test_duplicate_episode_does_not_change_the_gate() -> None:
+    signals = load_trajectory(FIXTURES / "skill_evolver_signals.jsonl")
+    episodes = extract_episodes(signals, skill_index=_index())
+    base = gate_decision(episodes, min_score=DEFAULT_MIN_EVIDENCE_SCORE)
+    assert len(episodes) == 6
+    assert len(base.incidents) == 4
+
+    for extra in episodes:
+        again = gate_decision([*episodes, extra], min_score=DEFAULT_MIN_EVIDENCE_SCORE)
+        assert (again.score, again.passes, again.reason) == (base.score, base.passes, base.reason)
+        assert len(again.incidents) == len(base.incidents)
+
+
+def test_gate_decision_compares_exact_decimal_sums() -> None:
+    # 0.6 + 0.7 + 0.7 is 2.0 to the user who set the threshold, not
+    # 1.9999999999999998.
+    def episode(kind: str, seq: int) -> Episode:
+        return Episode(
+            kind=kind,  # type: ignore[arg-type]
+            thread_id="thread-t",
+            evidence_seq=[seq],
+            tool_sequence=["bash"],
+            facts={},
+            weight=EPISODE_WEIGHTS[kind],
+            anchors=[f"run-1#{seq}"],
+        )
+
+    episodes = [episode("error_recovery", 2), episode("retry_loop", 10), episode("retry_loop", 20)]
+
+    decision = gate_decision(episodes, min_score=2.0)
+
+    assert decision.score == 2.0
+    assert (decision.passes, decision.reason) == (True, GATE_SCORE_REACHED)
+
+
+def test_gate_decision_reasons() -> None:
+    gap = Episode("skill_gap", "t", [2, 6], ["bash"], {}, EPISODE_WEIGHTS["skill_gap"])
+    weight = EPISODE_WEIGHTS["approval_denied"]
+    denial = Episode("approval_denied", "t", [9], [], {}, weight, ["run-1#9"])
+
+    empty = gate_decision([], min_score=DEFAULT_MIN_EVIDENCE_SCORE)
+    assert empty.incidents == []
+    assert (empty.score, empty.passes, empty.reason) == (0.0, False, GATE_NO_EPISODES)
+    # No episodes never passes, whatever the threshold.
+    assert gate_decision([], min_score=0.0).reason == GATE_NO_EPISODES
+
+    below = gate_decision([gap], min_score=DEFAULT_MIN_EVIDENCE_SCORE)
+    assert below.incidents == [[gap]]
+    assert (below.score, below.passes, below.reason) == (0.4, False, GATE_SCORE_BELOW)
+
+    reached = gate_decision([denial], min_score=DEFAULT_MIN_EVIDENCE_SCORE)
+    assert (reached.incidents, reached.score, reached.passes) == ([[denial]], 1.0, True)
+    assert reached.reason == GATE_SCORE_REACHED
+    assert gate_decision([gap], min_score=0.4).reason == GATE_SCORE_REACHED
+
+
+def test_strong_correction_passes_the_default_gate() -> None:
+    traj = _traj(
+        _turn("run-1", 2, "do it", [_call("bash", {"cmd": "a"}, seq=4)]),
+        _turn(
+            "run-2",
+            10,
+            "Нет, не так — надо было grep",
+            [_call("grep", {"pattern": "b"}, seq=12)],
+        ),
+    )
+    (episode,) = extract_episodes(traj)
+    assert episode.facts["strength"] == "strong"
+
+    decision = gate_decision([episode], min_score=DEFAULT_MIN_EVIDENCE_SCORE)
+    assert decision.score == pytest.approx(0.9)
+    assert (decision.passes, decision.reason) == (True, GATE_STRONG_CORRECTION)
+    # A stricter threshold opts out of the rule.
+    strict = gate_decision([episode], min_score=1.5)
+    assert (strict.passes, strict.reason) == (False, GATE_SCORE_BELOW)
+    # Below the score the ordinary rule applies first.
+    lenient = gate_decision([episode], min_score=0.5)
+    assert (lenient.passes, lenient.reason) == (True, GATE_SCORE_REACHED)
 
 
 # ----------------------------------------------------------------- isolation

@@ -19,9 +19,12 @@
 """/skill-mine: mine several recorded threads into SKILL.md proposals.
 
 One proposal per thread: every selected trajectory is turned into episodes by
-code, gated on ``min_evidence_score`` and only then classified and rendered by
-the LLM. ``--dry-run`` stops after the code-only stage and prints the episode
-table, so detector behaviour can be inspected without spending a token.
+code, gated by ``features.gate_decision`` (incident score against
+``min_evidence_score``, plus the strong correction rule) and only then
+classified and rendered by the LLM. ``--dry-run`` stops after the code-only
+stage and prints the gate decision with its reason and the episode table
+with incident labels, so detector behaviour can be inspected without
+spending a token.
 """
 
 from __future__ import annotations
@@ -52,7 +55,13 @@ from msagent.skill_evolver.direct_skill_generation import (
     DirectSkillGenerationHandler,
     _collect_episodes,
 )
-from msagent.skill_evolver.features import Episode, evidence_score
+from msagent.skill_evolver.features import (
+    Episode,
+    GateDecision,
+    evidence_score,
+    gate_decision,
+    group_incidents,
+)
 from msagent.skill_evolver.render import (
     format_existing_skill,
     plan_render,
@@ -137,8 +146,12 @@ class ThreadStats:
 
     @property
     def score(self) -> float:
-        """Summed weight of the episodes mined from this thread."""
+        """Incident score of the episodes mined from this thread."""
         return evidence_score(self.episodes)
+
+    def gate(self, min_score: float) -> GateDecision:
+        """Whether this thread reaches the LLM stage, and why."""
+        return gate_decision(self.episodes, min_score=min_score)
 
 
 @dataclass(frozen=True, slots=True)
@@ -320,22 +333,26 @@ def build_threads_table(stats: list[ThreadStats], *, min_score: float) -> Table:
     table.add_column("tools", justify="right")
     table.add_column("ai", justify="right", style="muted")
     table.add_column("episodes", justify="right", style="secondary")
+    table.add_column("incidents", justify="right", style="secondary")
     table.add_column("score", justify="right", style="primary")
     table.add_column("gate", no_wrap=True)
+    table.add_column("reason", style="muted")
     for item in stats:
         # A zero tool count is the single most diagnostic number here: it
         # means no detector that needs tool calls could ever fire.
         tools_style = "warning" if item.tool_calls == 0 else "muted"
-        passes = item.score >= min_score
-        gate = Text("pass", style="success") if passes else Text("skip", style="muted")
+        decision = item.gate(min_score)
+        gate = Text("pass", style="success") if decision.passes else Text("skip", style="muted")
         table.add_row(
             escape(short_thread(item.thread_id)),
             str(item.turns),
             Text(str(item.tool_calls), style=tools_style),
             str(item.ai_messages),
             str(len(item.episodes)),
-            f"{item.score:.2f}",
+            str(len(decision.incidents)),
+            f"{decision.score:.2f}",
             gate,
+            escape(decision.reason),
         )
     return table
 
@@ -345,7 +362,9 @@ def build_episodes_table(stats: list[ThreadStats]) -> Table:
 
     Detector order, not weight order: the bundle sorts by weight for the
     model, while a human reading this table wants to know which detector
-    fired.
+    fired. The ``incident`` column labels the episodes of one thread that
+    describe the same events (``I1``, ``I2``, … in ``group_incidents``
+    order), so it is visible which of them count once in the score.
     """
     table = Table(
         box=box.SIMPLE_HEAD,
@@ -359,6 +378,7 @@ def build_episodes_table(stats: list[ThreadStats]) -> Table:
     )
     table.add_column("thread", style="command", no_wrap=True)
     table.add_column("kind", style="secondary", no_wrap=True)
+    table.add_column("incident", style="muted", no_wrap=True)
     table.add_column("weight", justify="right", style="primary", no_wrap=True)
     table.add_column(
         "tool sequence",
@@ -375,11 +395,18 @@ def build_episodes_table(stats: list[ThreadStats]) -> Table:
         if not first_group:
             table.add_section()
         first_group = False
+        # Episodes hold lists and dicts, so they are not hashable: key by id.
+        incident_labels = {
+            id(episode): f"I{number}"
+            for number, incident in enumerate(group_incidents(item.episodes), start=1)
+            for episode in incident
+        }
         for position, episode in enumerate(item.episodes):
             label = escape(short_thread(item.thread_id)) if position == 0 else ""
             table.add_row(
                 label,
                 escape(episode.kind),
+                incident_labels[id(episode)],
                 f"{episode.weight:.2f}",
                 escape(format_tool_sequence(episode.tool_sequence)),
                 escape(format_evidence_seq(episode.evidence_seq)),
@@ -387,6 +414,7 @@ def build_episodes_table(stats: list[ThreadStats]) -> Table:
         table.add_row(
             "",
             Text("subtotal", style="muted.bold"),
+            "",
             Text(f"{item.score:.2f}", style="muted.bold"),
             "",
             "",
@@ -606,12 +634,14 @@ class SkillMiningHandler:
         else:
             console.print_info(f"No episodes detected in {len(stats)} threads.")
 
-        total = sum(item.score for item in stats)
-        passing = sum(1 for item in stats if item.score >= min_score)
+        decisions = [item.gate(min_score) for item in stats]
+        incidents = sum(len(decision.incidents) for decision in decisions)
+        total = sum(decision.score for decision in decisions)
+        passing = sum(1 for decision in decisions if decision.passes)
         summary = " ".join(
             (
                 f"Dry run: {len(stats)} threads, {episodes} episodes,",
-                f"total evidence score {total:.2f};",
+                f"{incidents} incidents, total evidence score {total:.2f};",
                 f"{passing} threads would reach the LLM (up to {passing * 2}",
                 "LLM calls). Nothing was written and no LLM was created.",
             ),
@@ -626,12 +656,12 @@ class SkillMiningHandler:
         cfg: DirectSkillGenerationConfig,
         skills: list[Skill],
     ) -> None:
-        """Run the LLM stages for every thread above the evidence threshold."""
-        passing = [item for item in stats if item.score >= cfg.min_evidence_score]
+        """Run the LLM stages for every thread that passes the evidence gate."""
+        passing = [item for item in stats if item.gate(cfg.min_evidence_score).passes]
         below = len(stats) - len(passing)
         if not passing:
             threshold = f"{cfg.min_evidence_score:.2f}"
-            detail = f"below min_evidence_score {threshold}"
+            detail = f"skipped by the gate (min_evidence_score {threshold})"
             console.print_info(f"Nothing to mine: {below} threads {detail}")
             console.print("")
             return
@@ -663,7 +693,7 @@ class SkillMiningHandler:
 
         summary = (
             f"Mined {len(stats)} threads: {written} proposals,"
-            f" {below} below threshold, {nothing} nothing to save,"
+            f" {below} skipped by the gate, {nothing} nothing to save,"
             f" {len(failed)} failed"
         )
         if failed:
@@ -693,9 +723,11 @@ class SkillMiningHandler:
         discard the remaining threads after earlier ones already wrote files.
         """
         thread_id = stats.thread_id
+        decision = stats.gate(cfg.min_evidence_score)
         header = (
             f"[{position}/{total}] thread {short_thread(thread_id)} —"
-            f" score {stats.score:.2f}, {len(stats.episodes)} episodes"
+            f" score {decision.score:.2f}, {len(stats.episodes)} episodes,"
+            f" {len(decision.incidents)} incidents, {decision.reason}"
         )
         console.print_info(escape(header))
         try:

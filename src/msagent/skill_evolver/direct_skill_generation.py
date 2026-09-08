@@ -53,9 +53,11 @@ from msagent.skill_evolver.classify import (
     strip_think_blocks,
 )
 from msagent.skill_evolver.features import (
+    DEFAULT_MIN_EVIDENCE_SCORE,
+    GATE_NO_EPISODES,
     Episode,
-    evidence_score,
     extract_episodes,
+    gate_decision,
     mine_cross_session,
 )
 from msagent.skill_evolver.render import (
@@ -82,9 +84,9 @@ logger = get_logger(__name__)
 
 DEFAULT_VARIANT = "default"
 DEFAULT_CATEGORY = "default"
-# Evidence threshold of the code-computed candidate extraction
-# (features.evidence_score): sessions scoring below it must not reach the LLM.
-DEFAULT_MIN_EVIDENCE_SCORE = 1.0
+# The evidence threshold (DEFAULT_MIN_EVIDENCE_SCORE) lives in features next
+# to gate_decision, which applies it; it is imported above to stay a name of
+# this module.
 # Prompt stages of the evidence pipeline: folders under skill-evolver/prompts/.
 STAGES = ("classify", "render")
 # Newest trajectories of the agent mined for procedures shared across sessions.
@@ -154,8 +156,10 @@ class DirectSkillGenerationConfig:
     category: str = DEFAULT_CATEGORY
     # Root that receives .proposals/; default <working_dir>/skills.
     output_dir: Path | None = None
-    # Minimal features.evidence_score() of a session for the LLM stages to run
-    # at all; a thread without a recorded trajectory is refused before that.
+    # Threshold of features.gate_decision(): the incident score a session
+    # needs for the LLM stages to run at all (a strong user correction passes
+    # at or below the default); a thread without a recorded trajectory is
+    # refused before that.
     min_evidence_score: float = DEFAULT_MIN_EVIDENCE_SCORE
 
 
@@ -243,11 +247,14 @@ class DirectSkillGenerationHandler:
                 ctx.agent,
                 skills,
             )
-        score = evidence_score(episodes)
-        if score < cfg.min_evidence_score:
-            detail = f"{score:.2f} < min_evidence_score {cfg.min_evidence_score:.2f}"
-            count = len(episodes)
-            msg = f"Nothing to save: evidence score {detail} ({count} episodes)"
+        decision = gate_decision(episodes, min_score=cfg.min_evidence_score)
+        if not decision.passes:
+            if decision.reason == GATE_NO_EPISODES:
+                msg = f"Nothing to save: no episodes detected in thread {thread_id}"
+            else:
+                score = f"{decision.score:.2f} < min_evidence_score {cfg.min_evidence_score:.2f}"
+                counts = f"{len(episodes)} episodes, {len(decision.incidents)} incidents"
+                msg = f"Nothing to save: evidence score {score} ({counts})"
             console.print_info(msg)
             console.print("")
             return

@@ -159,7 +159,7 @@ def test_build_provenance_maps_episodes_and_candidates() -> None:
     (stored,) = provenance["candidates"]
     assert stored["target"] == {"action": "update", "existing_skill": "real"}
     assert stored["evidence_refs"] == [4, 5]
-    assert provenance["features_version"] == FEATURES_VERSION == 1
+    assert provenance["features_version"] == FEATURES_VERSION == 2
     assert provenance["generated_at"] == "2026-09-04T10:00:00+00:00"
     assert provenance["prompt_variants"] == {"classify": "c", "render": "r"}
     assert provenance["category"] == "profiler"
@@ -186,7 +186,7 @@ def test_write_proposal_writes_skill_and_provenance(tmp_path: Path) -> None:
     assert path.read_text(encoding="utf-8") == SKILL
     provenance = json.loads((path.parent / "provenance.json").read_text(encoding="utf-8"))
     assert REQUIRED_PROVENANCE_KEYS <= set(provenance)
-    assert provenance["features_version"] == 1
+    assert provenance["features_version"] == 2
     assert sorted(p.name for p in path.parent.iterdir()) == ["SKILL.md", "provenance.json"]
     assert not (root / "default").exists()
 

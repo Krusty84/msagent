@@ -23,13 +23,13 @@ Excerpts: <short cuts of the cited events, one per seq>
 Kinds:
 
 - `error_recovery`: a tool call failed and the same tool succeeded shortly after with changed arguments; the knowledge is in the argument diff.
-- `user_correction`: the user corrected the previous turn and the agent changed its tool sequence.
-- `retry_loop`: three or more calls of one tool with similar arguments in one turn.
-- `approval_denied`: a human rejected a tool approval; the next calls show the reaction.
-- `repeated_procedure`: the same tool sequence appears in several independent sessions.
+- `user_correction`: the user explicitly corrected the previous turn (strength `strong`) or hedged it (`weak`) and the agent's actions changed; see `strength`, `markers` and `changes`.
+- `retry_loop`: three or more attempts of one tool on the same work object, forced by a failed attempt or a changing search key.
+- `approval_denied`: a human rejected the listed actions (only the rejected ones are named); the next calls show the reaction.
+- `repeated_procedure`: the same sequence of calls that returned ok appears in several independent sessions; ok is not proof that the task succeeded.
 - `skill_gap`: domain work was done without consulting the skill the library describes for it.
 
-Detectors apply their rules literally and have known false positives: reading three different files in one turn is reported as a `retry_loop`, the word "actually" anywhere in a message counts as a correction, the word "no" in free text counts as a denial. Judge by the content of the facts and excerpts, not by the kind alone. Weight is the detector's prior confidence, not a verdict.
+Weight is the detector's prior confidence, not a verdict; judge by the facts and excerpts.
 
 # Existing skill library
 

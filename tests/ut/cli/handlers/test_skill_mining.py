@@ -311,8 +311,37 @@ def test_episodes_table_shows_markup_literally() -> None:
     recorder.print(module.build_episodes_table([stats]))
     text = recorder.export_text()
     assert "[bold]evil" in text
+    assert "I1" in text
     assert "subtotal" in text
     assert "0.70" in text
+
+
+def test_threads_table_explains_a_strong_correction() -> None:
+    from msagent.skill_evolver.features import Episode
+
+    # One strong correction scores 0.9, below the default 1.0: the gate
+    # admits it by its own rule and the table has to say so.
+    episode = Episode(
+        kind="user_correction",
+        thread_id="thread-x",
+        evidence_seq=[2, 10],
+        tool_sequence=["grep"],
+        facts={"strength": "strong"},
+        weight=0.9,
+        anchors=["run-2#10"],
+    )
+    stats = module.ThreadStats(
+        trajectory=SimpleNamespace(thread_id="thread-x"),
+        turns=2,
+        tool_calls=2,
+        ai_messages=2,
+        episodes=[episode],
+    )
+    recorder = _recorder()
+    recorder.print(module.build_threads_table([stats], min_score=1.0))
+    text = recorder.export_text()
+    assert "pass" in text
+    assert "strong user correction" in text
 
 
 # ------------------------------------------------------------------- dry run
@@ -330,6 +359,24 @@ async def test_dry_run_never_creates_an_llm(mine) -> None:
     assert "Episodes" in text
     assert "error_recovery" in text
     assert any("Nothing was written and no LLM was created" in m for m in mine.spy.info)
+
+
+@pytest.mark.asyncio
+async def test_dry_run_reports_incidents_and_the_gate_reason(mine) -> None:
+    _copy(mine.trajectories, SIGNALS, SIGNALS_THREAD)
+
+    await mine.handler.handle(["--dry-run"])
+
+    assert mine.spy.error == []
+    text = mine.spy.rendered_text()
+    assert "incidents" in text
+    assert "reason" in text
+    assert "score >= min_evidence_score" in text
+    assert "I1" in text
+    # Three incidents, not five episodes: the two recoveries and the retry
+    # loop share the bash chain, so the score is 2.60 rather than 3.80.
+    assert any("5 episodes, 3 incidents" in line for line in mine.spy.info)
+    assert "2.60" in text
 
 
 @pytest.mark.asyncio
@@ -436,7 +483,7 @@ def _write_proposal(
         "candidates": [{"title": "t"}],
         "model": "fake-model",
         "prompt_variants": {"classify": "c", "render": "r"},
-        "features_version": 1,
+        "features_version": 2,
         "generated_at": "2026-09-04T10:00:00+00:00",
         "category": category,
         "target": {
@@ -733,6 +780,8 @@ async def test_real_run_writes_one_proposal_per_thread(scripted) -> None:
     assert provenance["model"] == "fake-model"
     assert provenance["thread_ids"][0] == SIGNALS_THREAD
     assert any("1 proposals" in line for line in scripted.spy.success)
+    # The per-thread header names the gate decision that let it through.
+    assert any("incidents" in line for line in scripted.spy.info)
     # Two calls for one thread: classify and render.
     assert len(scripted.llm.payloads) == 2
 

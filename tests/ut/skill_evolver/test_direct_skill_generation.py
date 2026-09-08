@@ -38,11 +38,14 @@ from langchain_core.messages import AIMessage, HumanMessage
 import msagent.cli.handlers  # noqa: F401
 from msagent.skill_evolver import direct_skill_generation as module
 from msagent.skill_evolver.bundle import build_evidence_bundle
+from msagent.skill_evolver.classify import Candidate
 from msagent.skill_evolver.direct_skill_generation import (
     DirectSkillGenerationConfig,
     DirectSkillGenerationHandler,
+    PlanContext,
 )
 from msagent.skill_evolver.features import extract_episodes
+from msagent.skill_evolver.render import NO_EXISTING_SKILL, RenderPlan, RenderPlans
 from msagent.skill_evolver.retrieval import BM25Index
 from msagent.skills.factory import Skill, SkillFactory
 from msagent.trajectory_recorder.config import reset_config_cache
@@ -82,6 +85,15 @@ VALID_SKILL = "\n".join(
     ]
 )
 INVALID_SKILL = "---\nname: fix-it\ndescription: Instructions for debugging\n---\n"
+SECOND_NAME = "kernel-profile-first"
+
+
+def _revised(name: str) -> str:
+    """VALID_SKILL under another frontmatter name."""
+    return VALID_SKILL.replace(f"name: {SKILL_NAME}", f"name: {name}")
+
+
+SECOND_SKILL = _revised(SECOND_NAME)
 
 
 class _NullStatus:
@@ -193,6 +205,11 @@ def _candidate(refs: list[str], **overrides: Any) -> dict[str, Any]:
     return data
 
 
+def _update(refs: list[str], existing: str, **overrides: Any) -> dict[str, Any]:
+    target = {"action": "update", "existing_skill": existing}
+    return _candidate(refs, target=target, **overrides)
+
+
 def _valid_refs(path: Path = FIXTURE) -> list[str]:
     """Two fragment ids the classify stage keeps: they are in the trajectory's evidence bundle."""
     trajectory = load_trajectory(path)
@@ -208,12 +225,25 @@ def _seq_at(path: Path, line: int) -> int:
     raise AssertionError(f"{path} has no line {line}")
 
 
-def _library_skill(tmp_path: Path, name: str) -> Skill:
-    skill_dir = tmp_path / "skills" / "default" / name
+def _library_skill(tmp_path: Path, name: str, category: str = "default") -> Skill:
+    skill_dir = tmp_path / "skills" / category / name
     skill_dir.mkdir(parents=True)
     path = skill_dir / "SKILL.md"
     path.write_text(f"---\nname: {name}\ndescription: Use when testing.\n---\nold body\n", encoding="utf-8")
-    return Skill(name=name, description="Use when testing.", category="default", path=path)
+    return Skill(name=name, description="Use when testing.", category=category, path=path)
+
+
+def _proposal(tmp_path: Path, name: str) -> Path:
+    return tmp_path / "skills" / ".proposals" / THREAD_ID / name / "SKILL.md"
+
+
+def _provenance_of(proposal: Path) -> dict[str, Any]:
+    return json.loads((proposal.parent / "provenance.json").read_text(encoding="utf-8"))
+
+
+def _instruction(pipeline: _Pipeline, call: int) -> str:
+    """The first human message of the ``call``-th LLM payload."""
+    return pipeline.llm.payloads[call][0][1]
 
 
 def _call(name: str, seq: int) -> ToolCall:
@@ -283,7 +313,7 @@ async def test_handle_writes_proposal_not_library(pipeline: _Pipeline, tmp_path:
     assert "   When: the generated sources are older than the schema" in render_instruction
 
     provenance = json.loads((proposal.parent / "provenance.json").read_text(encoding="utf-8"))
-    assert provenance["provenance_version"] == 2
+    assert provenance["provenance_version"] == 3
     assert provenance["thread_ids"] == [THREAD_ID]
     assert provenance["model"] == "fake-model"
     assert provenance["prompt_variants"] == {
@@ -295,10 +325,11 @@ async def test_handle_writes_proposal_not_library(pipeline: _Pipeline, tmp_path:
     assert provenance["target"] == {"action": "create", "existing_skill": None, "existing_path": None}
     source = pipeline.trajectories_dir / f"{AGENT}_{THREAD_ID}.jsonl"
     assert provenance["sources"] == {source.name: str(source)}
-    # Every fragment the classify model saw is in its payload and points at
-    # the physical line holding that very event.
+    # The fragments the rendered candidate cites (a subset of what the
+    # classify model saw) are in the classify payload and point at the
+    # physical line holding that very event.
     shown = provenance["evidence_shown"]
-    assert shown
+    assert set(shown) == set(refs)
     for fragment_id, entry in shown.items():
         assert f"- [{fragment_id}] {entry['text']}" in classify_instruction
         assert entry["source"] == source.name
@@ -307,7 +338,8 @@ async def test_handle_writes_proposal_not_library(pipeline: _Pipeline, tmp_path:
     for episode in provenance["episodes"]:
         assert episode["thread_id"] == THREAD_ID
         assert episode["bundle_status"] == "shown"
-        assert all(item["id"] in shown for item in episode["evidence"])
+        assert all(item["id"] is None or item["id"] in shown for item in episode["evidence"])
+    assert not any(line.startswith("Plans:") for line in pipeline.spy.info)
     (candidate,) = provenance["candidates"]
     assert (candidate["candidate_id"], candidate["evidence_refs"]) == ("c1", refs)
     assert candidate["applies_when"] == "the generated sources are older than the schema"
@@ -408,8 +440,11 @@ async def test_handle_update_passes_existing_text(pipeline: _Pipeline, tmp_path:
     assert "- real: Use when testing." in pipeline.llm.payloads[0][0][1]
     assert skill.path.read_text(encoding="utf-8") == original
     provenance = json.loads((proposal.parent / "provenance.json").read_text(encoding="utf-8"))
+    assert provenance["provenance_version"] == 3
     assert provenance["target"] == {"action": "update", "existing_skill": "real", "existing_path": str(skill.path)}
+    assert [c["candidate_id"] for c in provenance["candidates"]] == ["c1"]
     assert pipeline.spy.success == [f"Skill proposal saved to {proposal}"]
+    assert pipeline.spy.error == []
 
 
 # ----------------------------------------------------------- handle: refusals
@@ -482,7 +517,8 @@ async def test_handle_rejects_invalid_skill_twice(pipeline: _Pipeline, tmp_path:
     await pipeline.handler.handle([])
 
     assert len(pipeline.llm.payloads) == 3
-    assert pipeline.spy.error[0] == "SKILL.md rejected after one correction; nothing written:"
+    assert pipeline.spy.error[0] == f"plan create: Generated source debugging: {module._REJECTED}"
+    assert pipeline.spy.error[-1] == "Plans: 0 proposals, 1 render errors, 0 rejected targets, 0 deferred"
     assert any("task identifier" in error for error in pipeline.spy.error)
     assert any("description: must start with" in error for error in pipeline.spy.error)
     assert any("missing section '## Inputs'" in error for error in pipeline.spy.error)
@@ -516,13 +552,277 @@ async def test_handle_unknown_update_target_dropped(pipeline: _Pipeline, tmp_pat
 
     assert len(pipeline.llm.payloads) == 1
     assert pipeline.spy.warning == [
-        "Dropped 'Generated source debugging': existing_skill 'ghost' is not in the skill library"
+        "Rejected target 'Generated source debugging': invalid_target — "
+        "existing_skill 'ghost' is not in the skill library"
     ]
     assert pipeline.spy.info == [
         module._DEPRECATION_HINT,
         "Nothing to save: no candidate left to render",
     ]
     assert not (tmp_path / "skills").exists()
+
+
+@pytest.mark.asyncio
+async def test_handle_reference_to_missing_skill_is_invalid_target(pipeline: _Pipeline, tmp_path: Path) -> None:
+    target = {"action": "reference", "existing_skill": "ghost"}
+    pipeline.script(_classify_reply(_candidate(_valid_refs(), target=target)))
+
+    await pipeline.handler.handle([])
+
+    assert len(pipeline.llm.payloads) == 1
+    (warning,) = pipeline.spy.warning
+    assert warning.startswith("Rejected target 'Generated source debugging': invalid_target — ")
+    assert "'ghost'" in warning
+    assert pipeline.spy.info == [module._DEPRECATION_HINT, "Nothing to save: no candidate left to render"]
+    assert not (tmp_path / "skills" / ".proposals").exists()
+
+
+@pytest.mark.asyncio
+async def test_handle_ambiguous_bare_name(pipeline: _Pipeline, tmp_path: Path) -> None:
+    pipeline.skills = [
+        _library_skill(tmp_path, "real", category="profiler"),
+        _library_skill(tmp_path, "real", category="modeling"),
+    ]
+    refs = _valid_refs()
+    reference = {"action": "reference", "existing_skill": "real"}
+    pipeline.script(
+        _classify_reply(
+            _update(refs, "real", title="Update rule"),
+            _candidate(refs, title="Reference rule", target=reference),
+        ),
+    )
+
+    await pipeline.handler.handle([])
+
+    assert len(pipeline.llm.payloads) == 1
+    assert [w.split(": ")[0] for w in pipeline.spy.warning] == [
+        "Rejected target 'Update rule'",
+        "Rejected target 'Reference rule'",
+    ]
+    assert all("ambiguous_target" in w for w in pipeline.spy.warning)
+    assert pipeline.spy.info == [module._DEPRECATION_HINT, "Nothing to save: no candidate left to render"]
+    assert not (tmp_path / "skills" / ".proposals").exists()
+
+
+# ------------------------------------------------------- handle: many plans
+
+
+@pytest.mark.asyncio
+async def test_handle_update_a_and_update_b_two_proposals(pipeline: _Pipeline, tmp_path: Path) -> None:
+    alpha = _library_skill(tmp_path, "alpha")
+    beta = _library_skill(tmp_path, "beta")
+    pipeline.skills = [alpha, beta]
+    refs = _valid_refs()
+    pipeline.script(
+        _classify_reply(_update(refs[:1], "alpha", title="Alpha rule"), _update(refs[1:], "beta", title="Beta rule")),
+        _revised("alpha"),
+        _revised("beta"),
+    )
+
+    await pipeline.handler.handle([])
+
+    assert len(pipeline.llm.payloads) == 3 and pipeline.llm.replies == []
+    first, second = _instruction(pipeline, 1), _instruction(pipeline, 2)
+    assert "name: alpha" in first and "Alpha rule" in first
+    assert "name: beta" not in first and "Beta rule" not in first
+    assert "name: beta" in second and "Beta rule" in second
+    assert "name: alpha" not in second and "Alpha rule" not in second
+    proposals = [_proposal(tmp_path, "alpha"), _proposal(tmp_path, "beta")]
+    assert all(p.is_file() for p in proposals), (pipeline.spy.error, pipeline.spy.warning)
+    assert pipeline.spy.success == [f"Skill proposal saved to {p}" for p in proposals]
+    assert pipeline.spy.error == [] and pipeline.spy.warning == []
+    for_alpha, for_beta = _provenance_of(proposals[0]), _provenance_of(proposals[1])
+    assert for_alpha["target"]["existing_skill"] == "alpha"
+    assert [c["candidate_id"] for c in for_alpha["candidates"]] == ["c1"]
+    assert set(for_alpha["evidence_shown"]) == set(refs[:1])
+    assert for_alpha["render_evidence"] == {"c1": refs[:1]}
+    assert "Beta rule" not in json.dumps(for_alpha)
+    assert for_beta["target"]["existing_skill"] == "beta"
+    assert [c["candidate_id"] for c in for_beta["candidates"]] == ["c2"]
+    assert set(for_beta["evidence_shown"]) == set(refs[1:])
+    assert pipeline.spy.info[-1] == "Plans: 2 proposals, 0 render errors, 0 rejected targets, 0 deferred"
+
+
+@pytest.mark.asyncio
+async def test_handle_update_and_create_are_separate_plans(pipeline: _Pipeline, tmp_path: Path) -> None:
+    pipeline.skills = [_library_skill(tmp_path, "real")]
+    refs = _valid_refs()
+    pipeline.script(
+        _classify_reply(_update(refs, "real", title="Real rule"), _candidate(refs)),
+        _revised("real"),
+        VALID_SKILL,
+    )
+
+    await pipeline.handler.handle([])
+
+    assert len(pipeline.llm.payloads) == 3 and pipeline.llm.replies == []
+    update, create = _instruction(pipeline, 1), _instruction(pipeline, 2)
+    assert "old body" in update and "Real rule" in update
+    assert "Generated source debugging" not in update
+    assert NO_EXISTING_SKILL in create and "Generated source debugging" in create
+    assert "Real rule" not in create
+    assert _proposal(tmp_path, "real").is_file() and _proposal(tmp_path, SKILL_NAME).is_file()
+    assert pipeline.spy.warning == [] and pipeline.spy.error == []
+
+
+@pytest.mark.asyncio
+async def test_handle_two_creates_two_proposals(pipeline: _Pipeline, tmp_path: Path) -> None:
+    refs = _valid_refs()
+    second = _candidate(refs, title="Profile before summary", rule="Collect a kernel profile before summarising.")
+    pipeline.script(_classify_reply(_candidate(refs), second), VALID_SKILL, SECOND_SKILL)
+
+    await pipeline.handler.handle([])
+
+    assert len(pipeline.llm.payloads) == 3 and pipeline.llm.replies == []
+    assert _proposal(tmp_path, SKILL_NAME).is_file()
+    assert _proposal(tmp_path, SECOND_NAME).is_file()
+    assert len(pipeline.spy.success) == 2
+    assert [c["candidate_id"] for c in _provenance_of(_proposal(tmp_path, SECOND_NAME))["candidates"]] == ["c2"]
+
+
+@pytest.mark.asyncio
+async def test_handle_second_create_cannot_reuse_first_name(pipeline: _Pipeline, tmp_path: Path) -> None:
+    refs = _valid_refs()
+    second = _candidate(refs, title="Profile before summary")
+    pipeline.script(_classify_reply(_candidate(refs), second), VALID_SKILL, VALID_SKILL, SECOND_SKILL)
+
+    await pipeline.handler.handle([])
+
+    assert len(pipeline.llm.payloads) == 4 and pipeline.llm.replies == []
+    correction = pipeline.llm.payloads[3][-1][1]
+    assert f"'{SKILL_NAME}' already exists in the skill library" in correction
+    assert _proposal(tmp_path, SKILL_NAME).is_file() and _proposal(tmp_path, SECOND_NAME).is_file()
+    assert pipeline.spy.error == []
+
+
+@pytest.mark.asyncio
+async def test_handle_first_plan_fails_second_written(pipeline: _Pipeline, tmp_path: Path) -> None:
+    refs = _valid_refs()
+    second = _candidate(refs, title="Profile before summary")
+    pipeline.script(_classify_reply(_candidate(refs), second), INVALID_SKILL, INVALID_SKILL, SECOND_SKILL)
+
+    await pipeline.handler.handle([])
+
+    assert len(pipeline.llm.payloads) == 4 and pipeline.llm.replies == []
+    assert pipeline.spy.error[0] == f"plan create: Generated source debugging: {module._REJECTED}"
+    assert not _proposal(tmp_path, SKILL_NAME).exists()
+    assert _proposal(tmp_path, SECOND_NAME).is_file()
+    assert pipeline.spy.success == [f"Skill proposal saved to {_proposal(tmp_path, SECOND_NAME)}"]
+    assert pipeline.spy.error[-1] == "Plans: 1 proposals, 1 render errors, 0 rejected targets, 0 deferred"
+
+
+@pytest.mark.asyncio
+async def test_handle_plans_over_limit_deferred(pipeline: _Pipeline, tmp_path: Path) -> None:
+    pipeline.config = DirectSkillGenerationConfig(max_plans=1)
+    refs = _valid_refs()
+    second = _candidate(refs, title="Profile before summary")
+    pipeline.script(_classify_reply(_candidate(refs), second), VALID_SKILL)
+
+    await pipeline.handler.handle([])
+
+    assert len(pipeline.llm.payloads) == 2 and pipeline.llm.replies == []
+    assert "Deferred plan: create: Profile before summary — max_plans 1 reached" in pipeline.spy.info
+    assert _proposal(tmp_path, SKILL_NAME).is_file()
+    assert not _proposal(tmp_path, SECOND_NAME).exists()
+    assert pipeline.spy.info[-1] == "Plans: 1 proposals, 0 render errors, 0 rejected targets, 1 deferred"
+
+
+# ------------------------------------------------------------ plan helpers
+
+
+def _plan_context(tmp_path: Path) -> tuple[PlanContext, list[str]]:
+    trajectory = load_trajectory(FIXTURE)
+    bundle = build_evidence_bundle(extract_episodes(trajectory), [trajectory])
+    context = PlanContext(
+        thread_id=THREAD_ID,
+        thread_ids=[THREAD_ID],
+        bundle=bundle,
+        rejected=[],
+        sources={trajectory.source: str(trajectory.path)},
+        model="fake-model",
+        prompt_variants={"classify": "c", "render": "r"},
+        category="default",
+        output_root=tmp_path / "skills",
+    )
+    return context, sorted(bundle.shown)[:2]
+
+
+def _plan(refs: list[str], existing: Skill | None = None, **overrides: Any) -> RenderPlan:
+    data = _candidate(refs, **overrides)
+    if existing is not None:
+        data["target"] = {"action": "update", "existing_skill": existing.display_name}
+    candidate = Candidate.model_validate(data).model_copy(update={"candidate_id": "c1"})
+    return RenderPlan(candidates=[candidate], existing=existing)
+
+
+@pytest.mark.asyncio
+async def test_render_plan_create_adds_name_to_taken(tmp_path: Path, fake_llm_cls) -> None:
+    context, refs = _plan_context(tmp_path)
+    llm = fake_llm_cls(VALID_SKILL)
+    taken = {"other"}
+
+    outcome = await DirectSkillGenerationHandler._render_plan(
+        _plan(refs), llm=llm, template=RENDER_TEMPLATE, context=context, taken=taken
+    )
+
+    assert outcome.written and outcome.name == SKILL_NAME
+    assert outcome.calls == 1 and outcome.errors == []
+    assert outcome.skill_path == tmp_path / "skills" / ".proposals" / THREAD_ID / SKILL_NAME / "SKILL.md"
+    assert taken == {"other", SKILL_NAME}
+    assert _provenance_of(outcome.skill_path)["target"]["action"] == "create"
+
+
+@pytest.mark.asyncio
+async def test_render_plan_update_reads_existing_and_leaves_taken(tmp_path: Path, fake_llm_cls) -> None:
+    context, refs = _plan_context(tmp_path)
+    skill = _library_skill(tmp_path, "real")
+    llm = fake_llm_cls(_revised("real"))
+    taken: set[str] = set()
+
+    outcome = await DirectSkillGenerationHandler._render_plan(
+        _plan(refs, existing=skill), llm=llm, template=RENDER_TEMPLATE, context=context, taken=taken
+    )
+
+    assert outcome.written and outcome.name == "real"
+    assert "old body" in llm.payloads[0][0][1]
+    assert taken == set()
+    target = _provenance_of(outcome.skill_path)["target"]
+    assert target == {"action": "update", "existing_skill": "real", "existing_path": str(skill.path)}
+
+
+@pytest.mark.asyncio
+async def test_render_plan_invalid_twice_returns_errors_without_writing(tmp_path: Path, fake_llm_cls) -> None:
+    context, refs = _plan_context(tmp_path)
+    llm = fake_llm_cls(INVALID_SKILL, INVALID_SKILL)
+    taken = {"other"}
+
+    outcome = await DirectSkillGenerationHandler._render_plan(
+        _plan(refs), llm=llm, template=RENDER_TEMPLATE, context=context, taken=taken
+    )
+
+    assert not outcome.written and outcome.calls == 2
+    assert any("missing section '## Inputs'" in error for error in outcome.errors)
+    assert taken == {"other"}
+    assert not (tmp_path / "skills").exists()
+
+
+def test_report_plans_lines(tmp_path: Path) -> None:
+    from msagent.skill_evolver.render import PlanRejection
+
+    skill = Skill(name="real", description="Use when testing.", category="profiler", path=tmp_path / "SKILL.md")
+    refs = ["ev1"]
+    kept = Candidate.model_validate(_candidate(refs, title="Kept"))
+    plans = RenderPlans(
+        plans=[],
+        deferred=[(RenderPlan(candidates=[kept], existing=None), "max_plans 1 reached")],
+        references=[(Candidate.model_validate(_candidate(refs, title="Seen")), skill)],
+        rejected=[PlanRejection(Candidate.model_validate(_candidate(refs, title="Lost")), "invalid_target", "why")],
+    )
+
+    warnings, notes = DirectSkillGenerationHandler._report_plans(plans)
+
+    assert warnings == ["Rejected target 'Lost': invalid_target — why"]
+    assert notes == ["already covered by profiler/real: Seen", "Deferred plan: create: Kept — max_plans 1 reached"]
 
 
 @pytest.mark.asyncio
@@ -708,6 +1008,10 @@ def test_load_config_default_min_evidence_score() -> None:
     assert DirectSkillGenerationHandler._load_config().min_evidence_score == 1.0
 
 
+def test_load_config_default_max_plans() -> None:
+    assert DirectSkillGenerationHandler._load_config().max_plans == 3
+
+
 def _write_user_config(text: str) -> None:
     config_dir = module.initializer.app_paths.config_dir
     config_dir.mkdir(parents=True, exist_ok=True)
@@ -735,6 +1039,23 @@ def test_load_config_parses_min_evidence_score(
     assert bool(warnings) is warns
     if warns:
         assert "min_evidence_score" in warnings[0][0]
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected", "warns"),
+    [("5", 5, False), ("1", 1, False), ("0", 3, True), ("abc", 3, True), ("-2", 3, True)],
+)
+def test_load_config_parses_max_plans(raw: str, expected: int, warns: bool, monkeypatch: pytest.MonkeyPatch) -> None:
+    warnings: list[tuple] = []
+    monkeypatch.setattr(module.logger, "warning", lambda *args, **_kwargs: warnings.append(args))
+    _write_user_config(f"active: default\nmax_plans: {raw}\n")
+
+    cfg = DirectSkillGenerationHandler._load_config()
+
+    assert cfg.max_plans == expected
+    assert bool(warnings) is warns
+    if warns:
+        assert "max_plans" in warnings[0][0]
 
 
 def test_load_config_ignores_unsafe_prompt_file(monkeypatch: pytest.MonkeyPatch) -> None:

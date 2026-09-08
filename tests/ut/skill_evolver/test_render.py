@@ -30,10 +30,14 @@ import pytest
 from msagent.skill_evolver.bundle import ShownFragment
 from msagent.skill_evolver.classify import EMPTY_REPLY, Candidate
 from msagent.skill_evolver.render import (
+    AMBIGUOUS_TARGET,
     CANDIDATES_PLACEHOLDER,
     EXISTING_SKILL_PLACEHOLDER,
+    INVALID_TARGET,
     NO_EXISTING_SKILL,
     RENDER_EVIDENCE_LIMIT,
+    RenderPlan,
+    RenderPlans,
     format_candidates,
     format_existing_skill,
     plan_render,
@@ -113,6 +117,18 @@ SHOWN = {
 
 def _update(existing_skill: str, **overrides: Any) -> Candidate:
     return _candidate(target={"action": "update", "existing_skill": existing_skill}, **overrides)
+
+
+def _reference(existing_skill: str, **overrides: Any) -> Candidate:
+    return _candidate(target={"action": "reference", "existing_skill": existing_skill}, **overrides)
+
+
+def _plan(candidates: list[Candidate], skills: list[Skill], max_plans: int = 3) -> RenderPlans:
+    return plan_render(candidates, skills, max_plans=max_plans)
+
+
+def _titles(plan: RenderPlan) -> list[str]:
+    return [candidate.title for candidate in plan.candidates]
 
 
 def _skill(name: str, category: str = "default") -> Skill:
@@ -200,81 +216,189 @@ def test_format_existing_skill() -> None:
 
 
 def test_plan_create_only() -> None:
-    plan = plan_render([_candidate()], [_skill("real")])
+    plans = _plan([_candidate()], [_skill("real")])
 
-    assert [c.title for c in plan.accepted] == ["Build before test"]
+    (plan,) = plans.plans
+    assert _titles(plan) == ["Build before test"]
     assert plan.existing is None
-    assert plan.notes == [] and plan.dropped == []
+    assert plan.label == "create: Build before test"
+    assert plans.deferred == [] and plans.references == [] and plans.rejected == []
 
 
 def test_plan_update_by_display_name() -> None:
     skill = _skill("real", category="profiler")
 
-    plan = plan_render([_update("profiler/real")], [skill, _skill("other")])
+    plans = _plan([_update("profiler/real")], [skill, _skill("other")])
 
+    (plan,) = plans.plans
     assert plan.existing is skill
-    assert len(plan.accepted) == 1
+    assert len(plan.candidates) == 1
+    assert plan.label == "update profiler/real (1 candidate)"
 
 
 def test_plan_update_by_unique_bare_name() -> None:
     skill = _skill("real", category="profiler")
 
-    plan = plan_render([_update("real")], [skill, _skill("other")])
+    plans = _plan([_update("real")], [skill, _skill("other")])
 
-    assert plan.existing is skill
+    assert plans.plans[0].existing is skill
+    assert plans.rejected == []
 
 
-def test_plan_update_ambiguous_bare_name_dropped(caplog: pytest.LogCaptureFixture) -> None:
+def test_plan_update_ambiguous_bare_name_rejected(caplog: pytest.LogCaptureFixture) -> None:
     skills = [_skill("real", category="profiler"), _skill("real", category="modeling")]
 
     with caplog.at_level(logging.WARNING, logger=LOGGER):
-        plan = plan_render([_update("real")], skills)
+        plans = _plan([_update("real")], skills)
 
-    assert plan.accepted == [] and plan.existing is None
-    ((candidate, reason),) = plan.dropped
-    assert candidate.title == "Build before test"
-    assert reason == "existing_skill 'real' is ambiguous"
+    assert plans.plans == []
+    (rejection,) = plans.rejected
+    assert rejection.candidate.title == "Build before test"
+    assert rejection.code == AMBIGUOUS_TARGET
+    assert rejection.detail == "existing_skill 'real' is ambiguous"
     assert "dropped candidate 'Build before test'" in caplog.text
 
 
-def test_plan_update_unknown_skill_dropped() -> None:
-    plan = plan_render([_update("ghost")], [_skill("real")])
+def test_plan_update_unknown_skill_rejected() -> None:
+    plans = _plan([_update("ghost")], [_skill("real")])
 
-    assert plan.accepted == []
-    assert plan.dropped[0][1] == "existing_skill 'ghost' is not in the skill library"
-
-
-def test_plan_reference_noted_not_rendered() -> None:
-    candidate = _candidate(target={"action": "reference", "existing_skill": "real"})
-
-    plan = plan_render([candidate], [_skill("real")])
-
-    assert plan.accepted == []
-    assert plan.notes == ["already covered by real: Build before test"]
+    assert plans.plans == []
+    (rejection,) = plans.rejected
+    assert rejection.code == INVALID_TARGET
+    assert rejection.detail == "existing_skill 'ghost' is not in the skill library"
 
 
-def test_plan_mixed_create_and_updates_of_one_skill() -> None:
+def test_plan_reference_to_library_skill_is_informational() -> None:
+    skill = _skill("real")
+    candidate = _reference("real")
+
+    plans = _plan([candidate], [skill])
+
+    assert plans.plans == []
+    assert plans.references == [(candidate, skill)]
+    assert plans.rejected == []
+
+
+def test_plan_reference_to_missing_skill_rejected(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING, logger=LOGGER):
+        plans = _plan([_reference("ghost")], [_skill("real")])
+
+    assert plans.plans == [] and plans.references == []
+    (rejection,) = plans.rejected
+    assert rejection.code == INVALID_TARGET
+    assert rejection.detail == "existing_skill 'ghost' is not in the skill library"
+    assert "dropped candidate" in caplog.text
+
+
+def test_plan_ambiguous_bare_name_rejects_update_and_reference() -> None:
+    skills = [_skill("real", category="profiler"), _skill("real", category="modeling")]
+
+    plans = _plan([_update("real", title="U"), _reference("real", title="R")], skills)
+
+    assert plans.plans == [] and plans.references == []
+    assert [(r.candidate.title, r.code) for r in plans.rejected] == [
+        ("U", AMBIGUOUS_TARGET),
+        ("R", AMBIGUOUS_TARGET),
+    ]
+
+
+def test_plan_display_name_wins_over_ambiguous_bare_name() -> None:
+    profiler = _skill("real", category="profiler")
+    modeling = _skill("real", category="modeling")
+
+    plans = _plan([_update("profiler/real"), _reference("modeling/real")], [profiler, modeling])
+
+    (plan,) = plans.plans
+    assert plan.existing is profiler
+    assert [skill for _, skill in plans.references] == [modeling]
+    assert plans.rejected == []
+
+
+def test_plan_create_and_updates_of_one_skill_are_two_plans() -> None:
     skill = _skill("real")
     candidates = [_candidate(), _update("real", title="Two"), _update("real", title="Three")]
 
-    plan = plan_render(candidates, [skill])
+    plans = _plan(candidates, [skill])
 
-    assert plan.existing is skill
-    assert [c.title for c in plan.accepted] == ["Build before test", "Two", "Three"]
+    assert [plan.existing for plan in plans.plans] == [None, skill]
+    assert _titles(plans.plans[0]) == ["Build before test"]
+    assert _titles(plans.plans[1]) == ["Two", "Three"]
+    assert plans.plans[1].label == "update real (2 candidates)"
 
 
-def test_plan_updates_of_two_skills_render_a_new_skill() -> None:
-    plan = plan_render([_update("one"), _update("two")], [_skill("one"), _skill("two")])
+def test_plan_two_updates_of_one_skill_share_a_plan() -> None:
+    skill = _skill("real")
+    candidates = [_update("real", title="One"), _candidate(title="Mid"), _update("real", title="Two")]
 
-    assert plan.existing is None
-    assert len(plan.accepted) == 2
-    assert plan.notes == ["2 skills targeted (one, two); rendering a new skill instead"]
+    plans = _plan(candidates, [skill])
+
+    # Plan order is the first appearance; later updates still join their skill.
+    assert len(plans.plans) == 2
+    assert plans.plans[0].existing is skill and _titles(plans.plans[0]) == ["One", "Two"]
+    assert plans.plans[1].existing is None and _titles(plans.plans[1]) == ["Mid"]
+
+
+def test_plan_updates_of_two_skills_are_two_plans() -> None:
+    one, two = _skill("one"), _skill("two")
+
+    plans = _plan([_update("one"), _update("two")], [one, two])
+
+    assert [plan.existing for plan in plans.plans] == [one, two]
+    assert all(len(plan.candidates) == 1 for plan in plans.plans)
+    assert plans.deferred == []
+
+
+def test_plan_each_create_is_its_own_plan() -> None:
+    plans = _plan([_candidate(title="A"), _candidate(title="B")], [])
+
+    assert [plan.label for plan in plans.plans] == ["create: A", "create: B"]
+    assert all(plan.existing is None for plan in plans.plans)
+
+
+def test_plan_over_limit_is_deferred_with_targets_unchanged(caplog: pytest.LogCaptureFixture) -> None:
+    one, two = _skill("one"), _skill("two")
+    candidates = [
+        _update("one", title="A1"),
+        _candidate(title="New"),
+        _update("two", title="B1"),
+        _update("one", title="A2"),
+    ]
+
+    with caplog.at_level(logging.WARNING, logger=LOGGER):
+        plans = _plan(candidates, [one, two], max_plans=2)
+
+    assert [plan.label for plan in plans.plans] == ["update one (2 candidates)", "create: New"]
+    ((plan, reason),) = plans.deferred
+    assert plan.existing is two and _titles(plan) == ["B1"]
+    assert reason == "max_plans 2 reached"
+    assert "deferred plan update two (1 candidate)" in caplog.text
+
+
+def test_plan_every_candidate_lands_in_exactly_one_bucket() -> None:
+    skills = [_skill("one"), _skill("two"), _skill("real")]
+    candidates = [
+        _candidate(candidate_id="c1"),
+        _update("one", candidate_id="c2"),
+        _update("two", candidate_id="c3"),
+        _reference("real", candidate_id="c4"),
+        _update("ghost", candidate_id="c5"),
+        _reference("real", candidate_id="c6"),
+    ]
+
+    plans = _plan(candidates, skills, max_plans=1)
+
+    ids = [c.candidate_id for plan in plans.plans for c in plan.candidates]
+    ids += [c.candidate_id for plan, _ in plans.deferred for c in plan.candidates]
+    ids += [c.candidate_id for c, _ in plans.references]
+    ids += [r.candidate.candidate_id for r in plans.rejected]
+    assert sorted(ids) == ["c1", "c2", "c3", "c4", "c5", "c6"]
 
 
 def test_plan_empty() -> None:
-    plan = plan_render([], [])
+    plans = _plan([], [])
 
-    assert plan.accepted == [] and plan.existing is None
+    assert plans.plans == [] and plans.deferred == []
+    assert plans.references == [] and plans.rejected == []
 
 
 # ----------------------------------------------------------- render_skill_md

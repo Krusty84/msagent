@@ -16,15 +16,20 @@
 # See the Mulan PSL v2 for more details.
 # -------------------------------------------------------------------------
 
-"""LLM rendering of accepted candidates into one validated SKILL.md.
+"""LLM rendering of planned candidates into validated SKILL.md files.
 
-The model receives the candidates the classify stage kept (and, for an
-update, the text of the existing skill) and answers with a complete
-``SKILL.md``. The reply is checked by :mod:`msagent.skill_evolver.validator`;
-on failure the model gets exactly one corrective turn listing every error,
-and a second failure is handed back to the caller, who writes nothing. The
-LLM is duck-typed exactly as in :mod:`msagent.skill_evolver.classify`.
-Stdlib + pydantic; this module never writes files.
+:func:`plan_render` splits the candidates the classify stage kept into render
+plans: one per new skill, one per library skill being updated; every named
+target is resolved against the library once, and a candidate whose target is
+unknown or ambiguous gets a rejection code, never a new plan.
+:func:`render_skill_md` turns one plan into a ``SKILL.md``: the model receives
+its candidates (and, for an update, the text of the existing skill) and
+answers with the complete file. The reply is checked by
+:mod:`msagent.skill_evolver.validator`; on failure the model gets exactly one
+corrective turn listing every error, and a second failure is handed back to
+the caller, who writes nothing. The LLM is duck-typed exactly as in
+:mod:`msagent.skill_evolver.classify`. Stdlib + pydantic; this module never
+writes files.
 """
 
 from __future__ import annotations
@@ -55,6 +60,10 @@ EXISTING_SKILL_PLACEHOLDER = "{existing_skill}"
 NO_EXISTING_SKILL = "None. Create a new skill."
 # Most evidence fragments quoted to the renderer per candidate.
 RENDER_EVIDENCE_LIMIT = 3
+# Rejection codes of plan_render: the candidate names no library skill, or a
+# bare name that exists in several categories.
+INVALID_TARGET = "invalid_target"
+AMBIGUOUS_TARGET = "ambiguous_target"
 
 # One pass over the template, so a placeholder-looking string inside a rule
 # or inside the existing skill text is never substituted.
@@ -81,74 +90,132 @@ class RenderResult:
 
 @dataclass(frozen=True, slots=True)
 class RenderPlan:
-    """What one render call gets, and what the classifier's output left out."""
+    """One render call: its candidates and the library skill they revise."""
 
-    # Candidates to render: every ``create`` and every resolvable ``update``.
-    accepted: list[Candidate]
-    # The library skill every kept update points at; None for a new skill.
+    # Classification order; one candidate for a create, every kept update of
+    # ``existing`` otherwise.
+    candidates: list[Candidate]
+    # The library skill every candidate updates; None for a new skill.
     existing: Skill | None
-    # Console notes: reference candidates, several update targets.
-    notes: list[str]
-    # Update candidates naming no (or an ambiguous) library skill, with why.
-    dropped: list[tuple[Candidate, str]]
+
+    @property
+    def label(self) -> str:
+        """Console/error line: ``update <skill> (N candidates)`` or ``create: <title>``."""
+        if self.existing is None:
+            return f"create: {self.candidates[0].title}"
+        count = len(self.candidates)
+        noun = "candidate" if count == 1 else "candidates"
+        return f"update {self.existing.display_name} ({count} {noun})"
+
+
+@dataclass(frozen=True, slots=True)
+class PlanRejection:
+    """A candidate no plan takes: ``code`` is INVALID_TARGET or AMBIGUOUS_TARGET."""
+
+    candidate: Candidate
+    code: str
+    detail: str
+
+
+@dataclass(frozen=True, slots=True)
+class RenderPlans:
+    """What plan_render decided for one thread; every candidate is in exactly one list."""
+
+    # Plans to render, ordered by the first appearance of their first candidate.
+    plans: list[RenderPlan]
+    # Plans past ``max_plans`` with the reason; content and target untouched.
+    deferred: list[tuple[RenderPlan, str]]
+    # ``reference`` candidates naming a library skill: reported, never rendered.
+    references: list[tuple[Candidate, Skill]]
+    # Update/reference candidates whose target is unknown or ambiguous.
+    rejected: list[PlanRejection]
+
+
+def _resolve_target(
+    wanted: str,
+    by_display: Mapping[str, Skill],
+    by_name: Mapping[str, Skill | None],
+) -> Skill | str:
+    """The library skill ``wanted`` names, or a rejection code.
+
+    A display name wins; a bare name resolves only when it is unique across
+    categories (``by_name`` stores None for a name found in several).
+    """
+    skill = by_display.get(wanted)
+    if skill is not None:
+        return skill
+    if wanted in by_name:
+        return by_name[wanted] or AMBIGUOUS_TARGET
+    return INVALID_TARGET
+
+
+def _rejection_detail(code: str, wanted: str) -> str:
+    """Human text of a rejection code for one target name."""
+    if code == AMBIGUOUS_TARGET:
+        return f"existing_skill '{wanted}' is ambiguous"
+    return f"existing_skill '{wanted}' is not in the skill library"
 
 
 def plan_render(
     candidates: Sequence[Candidate],
     skills: Sequence[Skill],
-) -> RenderPlan:
-    """Decide what gets rendered and which existing skill, if any, it revises.
+    *,
+    max_plans: int,
+) -> RenderPlans:
+    """Split the kept candidates into render plans; resolve every named target once.
 
-    ``reference`` candidates are noted, not rendered: the library already
-    holds the rule. An ``update`` must name a library skill (display name, or
-    a bare name that is unique across categories); others are dropped with a
-    warning, never turned into a ``create``. The existing skill is handed to
-    the renderer only when every kept update points at the same skill.
+    Each ``create`` is its own plan (no merging), every ``update`` of one
+    library skill shares a plan, and ``reference`` candidates are checked
+    with the same resolver and reported, never rendered. A target must name
+    a library skill (display name, or a bare name that is unique across
+    categories); otherwise the candidate is rejected with a warning and
+    never turned into a ``create``. Plans beyond ``max_plans`` are deferred,
+    not rendered.
     """
     by_display = {skill.display_name: skill for skill in skills}
     by_name: dict[str, Skill | None] = {}
     for skill in skills:
         by_name[skill.name] = None if skill.name in by_name else skill
-    accepted: list[Candidate] = []
-    notes: list[str] = []
-    dropped: list[tuple[Candidate, str]] = []
-    targets: dict[str, Skill] = {}
+    groups: list[tuple[Skill | None, list[Candidate]]] = []
+    updates: dict[str, list[Candidate]] = {}
+    references: list[tuple[Candidate, Skill]] = []
+    rejected: list[PlanRejection] = []
     for candidate in candidates:
         target = candidate.target
-        if target.action == "reference":
-            covered = target.existing_skill
-            notes.append(f"already covered by {covered}: {candidate.title}")
+        if target.action == "create":
+            groups.append((None, [candidate]))
             continue
-        if target.action == "update":
-            wanted = (target.existing_skill or "").strip()
-            skill = by_display.get(wanted) or by_name.get(wanted)
-            if skill is None:
-                if wanted in by_name:
-                    reason = f"existing_skill '{wanted}' is ambiguous"
-                else:
-                    reason = f"existing_skill '{wanted}' is not in the skill library"
-                logger.warning(
-                    "render: dropped candidate %r: %s",
-                    candidate.title,
-                    reason,
-                )
-                dropped.append((candidate, reason))
-                continue
-            targets[skill.display_name] = skill
-        accepted.append(candidate)
-    existing: Skill | None = None
-    if len(targets) == 1:
-        (existing,) = targets.values()
-    elif len(targets) > 1:
-        count = len(targets)
-        names = ", ".join(sorted(targets))
-        msg = f"{count} skills targeted ({names}); rendering a new skill instead"
-        notes.append(msg)
-    return RenderPlan(
-        accepted=accepted,
-        existing=existing,
-        notes=notes,
-        dropped=dropped,
+        wanted = (target.existing_skill or "").strip()
+        resolved = _resolve_target(wanted, by_display, by_name)
+        if isinstance(resolved, str):
+            detail = _rejection_detail(resolved, wanted)
+            logger.warning(
+                "render: dropped candidate %r: %s",
+                candidate.title,
+                detail,
+            )
+            rejected.append(PlanRejection(candidate, resolved, detail))
+            continue
+        if target.action == "reference":
+            references.append((candidate, resolved))
+            continue
+        group = updates.get(resolved.display_name)
+        if group is None:
+            # Registered on the first update, so the plan keeps the position
+            # of its first candidate while later updates still join it.
+            group = updates[resolved.display_name] = []
+            groups.append((resolved, group))
+        group.append(candidate)
+    ordered = [RenderPlan(candidates=list(group), existing=skill) for skill, group in groups]
+    reason = f"max_plans {max_plans} reached"
+    deferred = [(plan, reason) for plan in ordered[max_plans:]]
+    for plan, _ in deferred:
+        logger.warning("render: deferred plan %s: %s", plan.label, reason)
+    return RenderPlans(
+        plans=ordered[:max_plans],
+        deferred=deferred,
+        references=references,
+        rejected=rejected,
     )
 
 

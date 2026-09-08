@@ -38,6 +38,7 @@ from msagent.cli.handlers import skill_review as review_module
 from msagent.cli.theme import theme
 from msagent.skill_evolver import mining as module
 from msagent.skill_evolver.direct_skill_generation import DirectSkillGenerationConfig
+from msagent.skills.factory import Skill
 from msagent.trajectory_recorder.config import reset_config_cache
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -166,26 +167,27 @@ def mine(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     trajectories = module.initializer.get_project_paths(tmp_path).root / "trajectories"
     trajectories.mkdir(parents=True)
 
-    config = DirectSkillGenerationConfig(output_dir=tmp_path / "skills")
-    monkeypatch.setattr(
-        module.DirectSkillGenerationHandler,
-        "_load_config",
-        staticmethod(lambda: config),
-    )
-
-    async def fake_refresh(*, agent: str, working_dir: Path) -> list:
-        return []
-
-    monkeypatch.setattr(module.initializer, "refresh_cached_skills", fake_refresh)
-    monkeypatch.setattr(module.initializer, "load_llm_config", _boom)
-    monkeypatch.setattr(module.initializer.llm_factory, "create", _boom)
-
     state = SimpleNamespace(
         handler=module.SkillMiningHandler(_session(tmp_path)),
         spy=spy,
         trajectories=trajectories,
         root=tmp_path,
+        # A test may replace these before calling handle().
+        config=DirectSkillGenerationConfig(output_dir=tmp_path / "skills"),
+        skills=[],
     )
+    monkeypatch.setattr(
+        module.DirectSkillGenerationHandler,
+        "_load_config",
+        staticmethod(lambda: state.config),
+    )
+
+    async def fake_refresh(*, agent: str, working_dir: Path) -> list:
+        return list(state.skills)
+
+    monkeypatch.setattr(module.initializer, "refresh_cached_skills", fake_refresh)
+    monkeypatch.setattr(module.initializer, "load_llm_config", _boom)
+    monkeypatch.setattr(module.initializer.llm_factory, "create", _boom)
     yield state
     reset_config_cache()
 
@@ -195,6 +197,29 @@ def _copy(trajectories: Path, source: Path, thread_id: str) -> Path:
     target = trajectories / f"{AGENT}_{thread_id}.jsonl"
     shutil.copy(source, target)
     return target
+
+
+def _copy_as(trajectories: Path, thread_id: str) -> Path:
+    """The signals fixture recorded under another thread id (every event rewritten)."""
+    lines: list[str] = []
+    for raw in SIGNALS.read_text(encoding="utf-8").splitlines():
+        if not raw.strip():
+            continue
+        event = json.loads(raw)
+        event["thread_id"] = thread_id
+        lines.append(json.dumps(event, ensure_ascii=False))
+    target = trajectories / f"{AGENT}_{thread_id}.jsonl"
+    target.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return target
+
+
+def _library_skill(root: Path, name: str, category: str = "default") -> Skill:
+    """A library skill with a real SKILL.md the update plan can read."""
+    skill_dir = root / "library" / category / name
+    skill_dir.mkdir(parents=True)
+    path = skill_dir / "SKILL.md"
+    path.write_text(f"---\nname: {name}\ndescription: Use when testing.\n---\nold body\n", encoding="utf-8")
+    return Skill(name=name, description="Use when testing.", category=category, path=path)
 
 
 def _write_toolless(trajectories: Path, thread_id: str) -> Path:
@@ -385,6 +410,22 @@ async def test_dry_run_reports_incidents_and_the_gate_reason(mine) -> None:
     # loop share the bash chain, so the score is 2.60 rather than 3.80.
     assert any("5 episodes, 3 incidents" in line for line in mine.spy.info)
     assert "2.60" in text
+
+
+@pytest.mark.asyncio
+async def test_dry_run_reports_call_bound_with_max_plans(mine) -> None:
+    _copy(mine.trajectories, SIGNALS, SIGNALS_THREAD)
+    mine.config = DirectSkillGenerationConfig(output_dir=mine.root / "skills", max_plans=2)
+
+    await mine.handler.handle(["--dry-run"])
+
+    assert any("1 threads would reach the LLM (up to 6 LLM calls)" in line for line in mine.spy.info)
+
+
+def test_llm_call_bound() -> None:
+    assert module.llm_call_bound(0, 3) == 0
+    assert module.llm_call_bound(1, 1) == 4
+    assert module.llm_call_bound(5, 3) == 40
 
 
 @pytest.mark.asyncio
@@ -732,15 +773,33 @@ GENERATED_SKILL = "\n".join(
 )
 
 
-def _classify_reply(*, refs: list[str], verdict: str = "save") -> str:
-    candidate = {
+SECOND_NAME = "kernel-profile-first"
+SECOND_SKILL = GENERATED_SKILL.replace(f"name: {GENERATED_NAME}", f"name: {SECOND_NAME}")
+
+
+def _revised(name: str) -> str:
+    """GENERATED_SKILL under the name of the library skill it updates."""
+    return GENERATED_SKILL.replace(f"name: {GENERATED_NAME}", f"name: {name}")
+
+
+def _candidate(refs: list[str], **overrides) -> dict:
+    data = {
         "title": "Generated source debugging",
         "rule": "Regenerate sources before type checking.",
         "evidence_refs": list(refs),
         "future_applicability": "high",
         "target": {"action": "create", "existing_skill": None},
     }
-    return json.dumps({"verdict": verdict, "candidates": [candidate]})
+    data.update(overrides)
+    return data
+
+
+def _update(refs: list[str], existing: str, **overrides) -> dict:
+    return _candidate(refs, target={"action": "update", "existing_skill": existing}, **overrides)
+
+
+def _classify_reply(*candidates: dict, verdict: str = "save") -> str:
+    return json.dumps({"verdict": verdict, "candidates": list(candidates)})
 
 
 class _FakeLLM:
@@ -755,6 +814,20 @@ class _FakeLLM:
         if not self.replies:
             raise RuntimeError("fake LLM called more often than scripted")
         return AIMessage(content=self.replies.pop(0))
+
+
+class _FlakyLLM(_FakeLLM):
+    """The ``fail_at``-th call (1-based) raises instead of answering: a transport error."""
+
+    def __init__(self, *replies: str, fail_at: int) -> None:
+        super().__init__(*replies)
+        self.fail_at = fail_at
+
+    async def ainvoke(self, payload: list[tuple[str, str]]):
+        if len(self.payloads) + 1 == self.fail_at:
+            self.payloads.append(list(payload))
+            raise RuntimeError("transport down")
+        return await super().ainvoke(payload)
 
 
 @pytest.fixture
@@ -776,8 +849,8 @@ def scripted(mine, monkeypatch: pytest.MonkeyPatch):
 
     monkeypatch.setattr(module.initializer, "load_llm_config", fake_load_llm_config)
 
-    def script(*replies):
-        llm = _FakeLLM(*replies)
+    def script(*replies, fail_at: int | None = None):
+        llm = _FakeLLM(*replies) if fail_at is None else _FlakyLLM(*replies, fail_at=fail_at)
         monkeypatch.setattr(module.initializer.llm_factory, "create", lambda _c: llm)
         mine.llm = llm
         return llm
@@ -789,7 +862,7 @@ def scripted(mine, monkeypatch: pytest.MonkeyPatch):
 @pytest.mark.asyncio
 async def test_real_run_writes_one_proposal_per_thread(scripted) -> None:
     _copy(scripted.trajectories, SIGNALS, SIGNALS_THREAD)
-    scripted.script(_classify_reply(refs=["ev1", "ev2"]), GENERATED_SKILL)
+    scripted.script(_classify_reply(_candidate(["ev1", "ev2"])), GENERATED_SKILL)
 
     await scripted.handler.handle([])
 
@@ -808,7 +881,7 @@ async def test_real_run_writes_one_proposal_per_thread(scripted) -> None:
     )
     assert provenance["model"] == "fake-model"
     assert provenance["thread_ids"][0] == SIGNALS_THREAD
-    assert provenance["provenance_version"] == 2
+    assert provenance["provenance_version"] == 3
     assert set(provenance["candidates"][0]["evidence_refs"]) <= set(provenance["evidence_shown"])
     assert provenance["render_evidence"] == {"c1": ["ev1", "ev2"]}
     assert any("1 proposals" in line for line in scripted.spy.success)
@@ -816,12 +889,14 @@ async def test_real_run_writes_one_proposal_per_thread(scripted) -> None:
     assert any("incidents" in line for line in scripted.spy.info)
     # Two calls for one thread: classify and render.
     assert len(scripted.llm.payloads) == 2
+    # The default max_plans (3) bounds the run at 2 + 2 * 3 calls per thread.
+    assert any("(up to 8 LLM calls)" in line for line in scripted.spy.info)
 
 
 @pytest.mark.asyncio
 async def test_real_run_writes_nothing_on_a_nothing_verdict(scripted) -> None:
     _copy(scripted.trajectories, SIGNALS, SIGNALS_THREAD)
-    scripted.script(_classify_reply(refs=["ev1", "ev2"], verdict="nothing"))
+    scripted.script(_classify_reply(_candidate(["ev1", "ev2"]), verdict="nothing"))
 
     await scripted.handler.handle([])
 
@@ -830,13 +905,110 @@ async def test_real_run_writes_nothing_on_a_nothing_verdict(scripted) -> None:
 
 
 @pytest.mark.asyncio
+async def test_real_run_render_transport_error_is_a_render_error(scripted) -> None:
+    _copy(scripted.trajectories, SIGNALS, SIGNALS_THREAD)
+    # One scripted reply, but the pipeline needs two: the render call raises,
+    # which is a render error of that plan, not a failed thread.
+    scripted.script(_classify_reply(_candidate(["ev1", "ev2"])))
+
+    await scripted.handler.handle([])
+
+    assert any(line.startswith("plan create: ") and "more often than scripted" in line for line in scripted.spy.error)
+    summary = next(line for line in scripted.spy.error if line.startswith("Mined "))
+    assert "0 proposals" in summary and "0 failed" in summary
+    assert "Plans: 1 render errors, 0 rejected targets, 0 deferred" in scripted.spy.error
+    assert not (scripted.root / "skills" / ".proposals").exists()
+
+
+@pytest.mark.asyncio
 async def test_real_run_reports_a_failing_thread_and_continues(scripted) -> None:
     _copy(scripted.trajectories, SIGNALS, SIGNALS_THREAD)
-    # One scripted reply, but the pipeline needs two: the render call fails.
-    scripted.script(_classify_reply(refs=["ev1", "ev2"]))
+    # No scripted reply at all: the classify call raises, outside any plan.
+    scripted.script()
 
     await scripted.handler.handle([])
 
     assert any(SIGNALS_THREAD in line for line in scripted.spy.error)
     assert any("1 failed" in line for line in scripted.spy.error)
     assert not (scripted.root / "skills" / ".proposals").exists()
+
+
+@pytest.mark.asyncio
+async def test_real_run_two_updates_two_proposals(scripted) -> None:
+    _copy(scripted.trajectories, SIGNALS, SIGNALS_THREAD)
+    scripted.skills = [_library_skill(scripted.root, "alpha"), _library_skill(scripted.root, "beta")]
+    scripted.script(
+        _classify_reply(_update(["ev1"], "alpha", title="Alpha rule"), _update(["ev2"], "beta", title="Beta rule")),
+        _revised("alpha"),
+        _revised("beta"),
+    )
+
+    await scripted.handler.handle([])
+
+    assert len(scripted.llm.payloads) == 3 and scripted.llm.replies == []
+    proposals = scripted.root / "skills" / ".proposals" / SIGNALS_THREAD
+    assert (proposals / "alpha" / "SKILL.md").is_file(), scripted.spy.error
+    assert (proposals / "beta" / "SKILL.md").is_file()
+    assert "Beta rule" not in scripted.llm.payloads[1][0][1]
+    assert "Alpha rule" not in scripted.llm.payloads[2][0][1]
+    assert any("2 proposals" in line for line in scripted.spy.success)
+    assert scripted.spy.error == []
+    assert not any(line.startswith("Plans:") for line in scripted.spy.info)
+
+
+@pytest.mark.asyncio
+async def test_real_run_taken_names_span_threads(scripted) -> None:
+    _copy_as(scripted.trajectories, "thread-a")
+    _copy_as(scripted.trajectories, "thread-b")
+    # Both threads propose the same new name: the second gets a corrective
+    # turn (the name is taken by the first proposal of this run) and renames.
+    scripted.script(
+        _classify_reply(_candidate(["ev1", "ev2"])),
+        GENERATED_SKILL,
+        _classify_reply(_candidate(["ev1", "ev2"])),
+        GENERATED_SKILL,
+        SECOND_SKILL,
+    )
+
+    await scripted.handler.handle([])
+
+    assert len(scripted.llm.payloads) == 5 and scripted.llm.replies == []
+    assert f"'{GENERATED_NAME}' already exists in the skill library" in scripted.llm.payloads[4][-1][1]
+    proposals = scripted.root / "skills" / ".proposals"
+    assert sorted(p.name for p in proposals.glob("*/*")) == [GENERATED_NAME, SECOND_NAME]
+    assert any("2 proposals" in line for line in scripted.spy.success)
+
+
+@pytest.mark.asyncio
+async def test_real_run_first_plan_error_does_not_stop_second(scripted) -> None:
+    _copy(scripted.trajectories, SIGNALS, SIGNALS_THREAD)
+    second = _candidate(["ev1", "ev2"], title="Profile before summary")
+    scripted.script(_classify_reply(_candidate(["ev1", "ev2"]), second), SECOND_SKILL, fail_at=2)
+
+    await scripted.handler.handle([])
+
+    assert len(scripted.llm.payloads) == 3 and scripted.llm.replies == []
+    (plan_error,) = [line for line in scripted.spy.error if line.startswith("plan ")]
+    assert "Generated source debugging" in plan_error and "transport down" in plan_error
+    proposals = scripted.root / "skills" / ".proposals" / SIGNALS_THREAD
+    assert (proposals / SECOND_NAME / "SKILL.md").is_file()
+    assert not (proposals / GENERATED_NAME).exists()
+    summary = next(line for line in scripted.spy.error if line.startswith("Mined "))
+    assert "1 proposals" in summary and "0 failed" in summary
+    assert "Plans: 1 render errors, 0 rejected targets, 0 deferred" in scripted.spy.error
+
+
+@pytest.mark.asyncio
+async def test_real_run_defers_plans_over_max_plans(scripted) -> None:
+    _copy(scripted.trajectories, SIGNALS, SIGNALS_THREAD)
+    scripted.config = DirectSkillGenerationConfig(output_dir=scripted.root / "skills", max_plans=1)
+    second = _candidate(["ev1", "ev2"], title="Profile before summary")
+    scripted.script(_classify_reply(_candidate(["ev1", "ev2"]), second), GENERATED_SKILL)
+
+    await scripted.handler.handle([])
+
+    assert len(scripted.llm.payloads) == 2 and scripted.llm.replies == []
+    assert "Deferred plan: create: Profile before summary — max_plans 1 reached" in scripted.spy.info
+    assert "Plans: 0 render errors, 0 rejected targets, 1 deferred" in scripted.spy.info
+    proposals = scripted.root / "skills" / ".proposals" / SIGNALS_THREAD
+    assert sorted(p.name for p in proposals.iterdir()) == [GENERATED_NAME]

@@ -22,7 +22,7 @@ executable part is a thin, generic pipeline.
 | `/direct-skill-generation` | Analyze the **current** thread (deprecated; see section 17) |
 | `/direct-skill-generation last` | Analyze the most recent **previous** thread (e.g. after a CLI restart) |
 | `/direct-skill-generation <thread-id>` | Analyze an explicit thread |
-| `/skill-mine [--threads N] [--since 7d] [--dry-run] [--thread <id>]` | Mine several recorded threads, one proposal per thread (section 17) |
+| `/skill-mine [--threads N] [--since 7d] [--dry-run] [--thread <id>]` | Mine several recorded threads, up to `max_plans` proposals per thread (section 17) |
 | `/trajectories [list \| show <thread-id>]` | Browse the recorded trajectories (section 17) |
 | `/skill-review [list \| accept <name> \| reject <name>]` | Review, promote or delete a proposal (section 17) |
 
@@ -48,7 +48,7 @@ New files:
 | `src/msagent/skill_evolver/features.py` | Code-only candidate extraction over recorded trajectories: `Episode`, six detectors, `extract_episodes`, `mine_cross_session`, `classify_approval`, `group_incidents`, `evidence_score`, `gate_decision`, `DEFAULT_MIN_EVIDENCE_SCORE`, `FEATURES_VERSION` (section 14) |
 | `src/msagent/skill_evolver/retrieval.py` | Stdlib BM25 over skill descriptions (`SkillDoc`, `BM25Index`) used by the `skill_gap` detector |
 | `src/msagent/skill_evolver/bundle.py`, `classify.py` | Evidence bundle and JSON classification (section 15) |
-| `src/msagent/skill_evolver/render.py` | Render stage: `plan_render`, `render_skill_md` with one corrective LLM call (section 16) |
+| `src/msagent/skill_evolver/render.py` | Render stage: `plan_render` (one `RenderPlan` per target, `RenderPlans`), `render_skill_md` with one corrective LLM call per plan (section 16) |
 | `src/msagent/skill_evolver/validator.py` | Code validation of a rendered `SKILL.md`: `validate_skill_md`, `ValidationResult`, `skill_name` (section 16) |
 | `src/msagent/skill_evolver/writer.py` | Proposal writer: `build_provenance`, `write_proposal` into `.proposals/` (section 16) |
 | `tests/fixtures/trajectories/skill_evolver_signals.jsonl` | Hand-written trajectory exercising every per-trajectory detector |
@@ -294,8 +294,9 @@ revises); from then on the standard discovery path applies (`SkillFactory` scan 
 
 ## 11. Key design decisions
 
-- **Direct LLM calls, no tools.** Two calls per run (classify, render), each with at
-  most one corrective retry: deterministic cost and latency, no headless-interrupt
+- **Direct LLM calls, no tools.** One classify call plus one render call per plan, each
+  with at most one corrective retry, so a thread costs at most `2 + 2 × max_plans` calls
+  (transport retries aside): deterministic cost and latency, no headless-interrupt
   handling; the library inventory is injected as a programmatic `{skill_library}`
   snapshot instead of a tool call.
 - **Evidence, not transcript.** The model sees code-extracted episodes (section 15),
@@ -639,14 +640,20 @@ conditions, guards, prompt contract, isolation).
 The classify verdict is turned into a file by three small modules, all stdlib + pydantic (the
 import-isolation probe in `test_validator.py` covers them):
 
-**`render.py`** — `plan_render(candidates, skills) -> RenderPlan` decides what one render call
-gets: `reference` candidates are only reported (the library already holds the rule); `update`
-candidates must name a catalogue skill by display name or by a bare name that is unique across
-categories, otherwise they are dropped with a WARNING (never silently turned into `create`); the
-existing skill is passed to the model only when every kept update points at the same skill, several
-targets produce a console note and a new skill. `render_skill_md(candidates, *, llm, template,
-existing_skill, expected_name, taken_names, evidence) -> RenderResult(content, validation, calls)`
-fills `{candidates}` and `{existing_skill}` (formatted text or "None. Create a new skill.") in one
+**`render.py`** — `plan_render(candidates, skills, *, max_plans) -> RenderPlans(plans, deferred,
+references, rejected)` splits a thread's kept candidates into render plans and never changes a
+candidate's target: every `create` is its own `RenderPlan(candidates, existing=None)` (no semantic
+merging in this version), every `update` of one library skill shares a
+`RenderPlan(candidates, existing=<Skill>)`, updates of different skills are separate plans. `update`
+and `reference` targets go through one resolver (display name, or a bare name unique across
+categories): a valid `reference` lands in `references` (reported as "already covered", not
+rendered), an unknown or ambiguous target in `rejected` as `PlanRejection(candidate, code, detail)`
+with `invalid_target` / `ambiguous_target` — never silently turned into `create`. Plans keep the
+order of their first candidate; those past `max_plans` (config, default 3) are `deferred` with a
+reason, targets untouched, so every candidate is in exactly one of the four lists.
+`render_skill_md(candidates, *, llm, template, existing_skill, expected_name, taken_names,
+evidence) -> RenderResult(content, validation, calls)` renders **one plan**: it fills
+`{candidates}` and `{existing_skill}` (formatted text or "None. Create a new skill.") in one
 regex pass, calls the duck-typed LLM,
 strips `<think>` blocks and a whole-reply fence, normalises line endings and validates. On errors
 the model gets exactly one corrective turn (`("ai", bad reply)` + the error list); the result of
@@ -694,12 +701,12 @@ exists without its provenance), refuses unsafe names and thread ids (it never wr
 `.proposals/`), decides collisions by directory existence with an atomic `mkdir()` (`-2`, `-3`, …;
 a half-written folder from a crash is skipped, not overwritten), and requires every key of
 `REQUIRED_PROVENANCE_KEYS` with non-empty `thread_ids` and `candidates`.
-`build_provenance(*, thread_ids, bundle, classification, rendered, sources, model,
-prompt_variants, category, target)` produces the **provenance v2** contract
-(`PROVENANCE_VERSION = 2`):
+`build_provenance(*, thread_ids, bundle, candidates, rejected, sources, model,
+prompt_variants, category, target)` produces the **provenance v3** contract
+(`PROVENANCE_VERSION = 3`), scoped to the render plan the proposal came from:
 
 ```json
-{"provenance_version": 2,
+{"provenance_version": 3,
  "thread_ids": ["<analysed thread>", "<threads a shared procedure relies on>"],
  "sources": {"<file name>": "<path of the trajectory>"},
  "episodes": [{"kind": "...", "weight": 0.6, "thread_id": "...", "source": "<file name>",
@@ -724,18 +731,23 @@ prompt_variants, category, target)` produces the **provenance v2** contract
 ```
 
 Three things are told apart: what the detectors **extracted** (`episodes`, every input episode
-with its bundle outcome and every cited event — `id: null` marks an event the model never saw),
-what the classify model was **shown** (`evidence_shown`: id → file, physical line, seq, role and
-the exact text), and what reached the **render** stage (`candidates` are the kept ones,
-`render_evidence` the fragment ids quoted to the renderer per candidate, derived by the same
-`select_render_evidence` call the renderer uses). For every written candidate,
+of the thread with its bundle outcome and every cited event — `id: null` marks an event this
+proposal's candidates do not cite: never shown, or cited only by another plan of the thread),
+what this proposal **rests on** (`evidence_shown`: the fragments its candidates cite, a subset of
+what the classify model saw, id → file, physical line, seq, role and the exact text), and what
+reached its **render** call (`candidates` are exactly the rendered plan, `render_evidence` the
+fragment ids quoted to the renderer per candidate, derived by the same `select_render_evidence`
+call the renderer uses). For every written candidate,
 `evidence_refs → evidence_shown[id] → (source, line)` names the events and the fragments the
-model saw; `sources` resolves the file. Rejected candidates are listed with their reason.
+model saw; `sources` resolves the file. `candidates_rejected` lists the thread's classify
+rejections with their reason; nothing that belongs only to another plan of the thread (its
+rules, its fragment texts) enters a proposal's record.
 
-Compatibility: proposals written before this contract carry no `provenance_version` (**v1**):
-their `candidates[].evidence_refs` are seq numbers, their `episodes[]` rows have `evidence_seq`
-and there is no registry. `/skill-review` reads only `category`, `thread_ids`, `generated_at` and
-`target`, which both versions share, so v1 proposals still list, accept and reject. `features_version`
+Compatibility: **v2** proposals hold every kept candidate of the thread and the whole registry in
+each proposal; proposals written before that carry no `provenance_version` (**v1**): their
+`candidates[].evidence_refs` are seq numbers, their `episodes[]` rows have `evidence_seq` and
+there is no registry. `/skill-review` reads only `category`, `thread_ids`, `generated_at` and
+`target`, which every version shares, so older proposals still list, accept and reject. `features_version`
 3 marks the evidence-item contract of section 14 (2: incidents gate; 1: summed weights). Property
 tests: every `evidence_shown` entry of a written `provenance.json` re-reads to the physical line
 holding that `seq`, including across corrupted lines, and every candidate's refs are a subset of
@@ -765,7 +777,7 @@ registered and working, marked `[deprecated]` in `/help` and printing
 |---|---|
 | `/trajectories [list]` | Table of the project's recorded threads: thread, agent, turns, events, size, mtime, first user message |
 | `/trajectories show <thread-id>` | One thread as markdown (`export.render_markdown`); the id may be a unique prefix |
-| `/skill-mine [--threads N] [--since 7d] [--dry-run] [--thread <id>]` | Mine several threads, one proposal per thread |
+| `/skill-mine [--threads N] [--since 7d] [--dry-run] [--thread <id>]` | Mine several threads, up to `max_plans` proposals per thread |
 | `/skill-review [list]` | Table of the proposals on disk: name, category, action, threads, age, description |
 | `/skill-review accept <name>` | Re-validate and move the folder into `<root>/<category>/<name>/` |
 | `/skill-review reject <name>` | Delete the folder after an explicit confirmation |
@@ -781,15 +793,22 @@ Slash completion needs no change — `Session` derives it from `dispatcher.comma
 `completers/reference.py` is the `@`-file-path completer, not a command table. There is no
 subcommand or flag completion for any command in this CLI.
 
-### 17.1 `/skill-mine`: one proposal per thread
+### 17.1 `/skill-mine`: up to `max_plans` proposals per thread
 
 `handle()` parses, then `_run()` loads the config, resolves the trajectories directory, extracts
 evidence for every selected thread in one `asyncio.to_thread` call, prints the **Threads** table
 and either stops (dry run) or enters the per-thread loop.
 
 `/skill-mine` loops over threads: each thread whose `gate_decision()` passes (section 14) gets
-its own bundle and classify + render pair, so a run costs at most `2 x threads` LLM calls and
-writes at most one proposal per thread. The pool is the agent's newest `CROSS_SESSION_LIMIT` (20)
+its own bundle, one classify call and one render call per plan (each with one corrective retry),
+so a run costs at most `threads × (2 + 2 × max_plans)` LLM calls (`llm_call_bound`) and writes at
+most `max_plans` proposals per thread. Plans are rendered, validated and written one by one: a
+plan that fails (twice invalid, or a transport error) is a render error of that plan and the
+next plan still runs; an exception outside the plan loop (classify) fails the thread. Names a
+new skill may not reuse (`taken`) are the library plus every create proposal written earlier in
+the run, across threads. The summary line keeps its shape and, when anything besides clean
+proposals happened, a second line reports `Plans: R render errors, Q rejected targets, D
+deferred`. The pool is the agent's newest `CROSS_SESSION_LIMIT` (20)
 trajectories and each target goes **first** into `_collect_episodes`, so the kept
 `repeated_procedure` episodes belong to that thread; `ThreadStats.supporting` holds the pool
 trajectories their evidence cites (the second session of each shared procedure) and the bundle
@@ -843,7 +862,7 @@ Two tables, because one cannot carry both "why nothing fired" and "what fired":
   any clipping (5 tool names, 8 seqs, then `… +k`).
 
 The dry run ends on one line: `Dry run: N threads, E episodes, K incidents, total evidence score
-S; P threads would reach the LLM (up to 2P LLM calls). Nothing was written and no LLM was
+S; P threads would reach the LLM (up to P × (2 + 2 × max_plans) LLM calls). Nothing was written and no LLM was
 created.`
 
 Colour comes from column-level styles, never inline markup, and every data-derived cell is passed

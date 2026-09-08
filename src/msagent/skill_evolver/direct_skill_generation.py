@@ -30,8 +30,10 @@ from __future__ import annotations
 import asyncio
 import math
 import re
-from dataclasses import dataclass
+from collections.abc import Collection
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import yaml
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, SystemMessage
@@ -48,6 +50,7 @@ from msagent.core.logging import get_logger
 from msagent.skill_evolver.bundle import EvidenceBundle, build_evidence_bundle
 from msagent.skill_evolver.exgraph_context import attach_stored_graph
 from msagent.skill_evolver.classify import (
+    Candidate,
     classify,
     strip_code_fence,
     strip_think_blocks,
@@ -62,6 +65,7 @@ from msagent.skill_evolver.features import (
 )
 from msagent.skill_evolver.render import (
     RenderPlan,
+    RenderPlans,
     format_existing_skill,
     plan_render,
     render_skill_md,
@@ -84,6 +88,9 @@ logger = get_logger(__name__)
 
 DEFAULT_VARIANT = "default"
 DEFAULT_CATEGORY = "default"
+# Most render plans (SKILL.md proposals) per thread; each costs up to two
+# LLM calls (render.plan_render defers the rest).
+DEFAULT_MAX_PLANS = 3
 # The evidence threshold (DEFAULT_MIN_EVIDENCE_SCORE) lives in features next
 # to gate_decision, which applies it; it is imported above to stay a name of
 # this module.
@@ -143,6 +150,20 @@ def _parse_min_evidence_score(raw: object) -> float:
     return value
 
 
+def _parse_max_plans(raw: object) -> int:
+    """Validate the configured plan ceiling; values below 1 or unparseable fall back."""
+    if raw is None:
+        return DEFAULT_MAX_PLANS
+    try:
+        value = int(raw)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        value = 0
+    if value < 1:
+        logger.warning("Invalid max_plans %r; using %s", raw, DEFAULT_MAX_PLANS)
+        return DEFAULT_MAX_PLANS
+    return value
+
+
 @dataclass(frozen=True, slots=True)
 class DirectSkillGenerationConfig:
     """Settings loaded from ~/.msagent/config/config.skill.evolver.yml."""
@@ -161,6 +182,70 @@ class DirectSkillGenerationConfig:
     # at or below the default); a thread without a recorded trajectory is
     # refused before that.
     min_evidence_score: float = DEFAULT_MIN_EVIDENCE_SCORE
+    # Ceiling of render plans per thread (render.plan_render); plans past it
+    # are reported as deferred and not rendered.
+    max_plans: int = DEFAULT_MAX_PLANS
+
+
+@dataclass(frozen=True, slots=True)
+class PlanContext:
+    """What every render plan of one thread shares: provenance inputs and the output root."""
+
+    thread_id: str
+    thread_ids: list[str]
+    bundle: EvidenceBundle
+    # The thread's classify rejections, recorded in every proposal's provenance.
+    rejected: list[tuple[Candidate, str]]
+    sources: dict[str, str]
+    model: str
+    prompt_variants: dict[str, str]
+    category: str
+    output_root: Path
+
+
+@dataclass(frozen=True, slots=True)
+class PlanOutcome:
+    """One plan's result: the written proposal, or the validation errors of the last try."""
+
+    plan: RenderPlan
+    calls: int
+    skill_path: Path | None = None
+    name: str | None = None
+    errors: list[str] = field(default_factory=list)
+
+    @property
+    def written(self) -> bool:
+        return self.skill_path is not None
+
+
+@dataclass(slots=True)
+class PlanTally:
+    """Counters over the render plans of one thread (or, summed, of a run)."""
+
+    # Plans that ran: proposals + render_errors.
+    plans: int = 0
+    proposals: int = 0
+    # A double validation failure or an exception inside the plan.
+    render_errors: int = 0
+    # Candidates whose target was unknown or ambiguous.
+    rejected: int = 0
+    deferred: int = 0
+
+    @property
+    def flagged(self) -> bool:
+        """Whether anything besides clean proposals happened."""
+        return bool(self.render_errors or self.rejected or self.deferred)
+
+    def add(self, other: PlanTally) -> None:
+        self.plans += other.plans
+        self.proposals += other.proposals
+        self.render_errors += other.render_errors
+        self.rejected += other.rejected
+        self.deferred += other.deferred
+
+    def describe(self) -> str:
+        """The plan-level part of a summary line."""
+        return f"{self.render_errors} render errors, {self.rejected} rejected targets, {self.deferred} deferred"
 
 
 def _collect_episodes(
@@ -297,68 +382,65 @@ class DirectSkillGenerationHandler:
             console.print("")
             return
 
-        plan = plan_render(result.candidates, skills)
-        for candidate, reason in plan.dropped:
-            console.print_warning(escape(f"Dropped '{candidate.title}': {reason}"))
-        for note in plan.notes:
-            console.print_info(escape(note))
-        if not plan.accepted:
+        plans = plan_render(result.candidates, skills, max_plans=cfg.max_plans)
+        warnings, notes = self._report_plans(plans)
+        for line in warnings:
+            console.print_warning(escape(line))
+        for line in notes:
+            console.print_info(escape(line))
+        tally = PlanTally(rejected=len(plans.rejected), deferred=len(plans.deferred))
+        if not plans.plans:
             console.print_info("Nothing to save: no candidate left to render")
             console.print("")
             return
 
-        existing_text: str | None = None
-        expected_name: str | None = None
-        taken_names: set[str] = set()
-        if plan.existing is None:
-            taken_names = {s.name for s in skills} | {s.display_name for s in skills}
-        else:
-            read = plan.existing.path.read_text
-            text = await asyncio.to_thread(read, encoding="utf-8")
-            existing_text = format_existing_skill(plan.existing.display_name, text)
-            expected_name = plan.existing.name
-        with self._status("Rendering SKILL.md..."):
-            rendered = await render_skill_md(
-                plan.accepted,
-                llm=llm,
-                template=render_template,
-                existing_skill=existing_text,
-                expected_name=expected_name,
-                taken_names=taken_names,
-                evidence=bundle.shown,
-            )
-        if not rendered.ok:
-            console.print_error(_REJECTED)
-            for error in rendered.validation.errors:
-                console.print_error(escape(f"  - {error}"))
-            console.print("")
-            return
-
-        name = skill_name(rendered.content)
-        provenance = build_provenance(
+        output_root = cfg.output_dir or (Path(ctx.working_dir) / "skills")
+        library_dir = output_root / cfg.category
+        taken = {s.name for s in skills} | {s.display_name for s in skills}
+        context = PlanContext(
+            thread_id=thread_id,
             thread_ids=self._cited_threads(current, episodes),
             bundle=bundle,
-            classification=result,
-            rendered=plan.accepted,
+            rejected=result.rejected,
             sources={traj.source: str(traj.path) for traj in trajectories},
             model=llm_config.model,
             prompt_variants={"classify": classify_source, "render": render_source},
             category=cfg.category,
-            target=self._target_record(plan),
+            output_root=output_root,
         )
-        output_root = cfg.output_dir or (Path(ctx.working_dir) / "skills")
-        skill_path = await asyncio.to_thread(
-            write_proposal,
-            rendered.content,
-            root=output_root,
-            name=name,
-            provenance=provenance,
-            thread_id=thread_id,
-        )
-        console.print_success(escape(f"Skill proposal saved to {skill_path}"))
-        library_dir = output_root / cfg.category
-        hint = self._activation_hint(skill_path, name, plan, library_dir)
-        console.print(f"[muted]{escape(hint)}[/muted]")
+        total = len(plans.plans)
+        for position, plan in enumerate(plans.plans, start=1):
+            label = plan.label
+            tally.plans += 1
+            try:
+                status = f"Rendering SKILL.md (plan {position}/{total}: {escape(label)})..."
+                with self._status(status):
+                    outcome = await self._render_plan(
+                        plan,
+                        llm=llm,
+                        template=render_template,
+                        context=context,
+                        taken=taken,
+                    )
+            except Exception as exc:
+                tally.render_errors += 1
+                console.print_error(escape(f"plan {label}: {exc}"))
+                logger.exception("Rendering plan %s of thread %s failed", label, thread_id)
+                continue
+            if not outcome.written:
+                tally.render_errors += 1
+                console.print_error(escape(f"plan {label}: {_REJECTED}"))
+                for error in outcome.errors:
+                    console.print_error(escape(f"  - {error}"))
+                continue
+            tally.proposals += 1
+            console.print_success(escape(f"Skill proposal saved to {outcome.skill_path}"))
+            hint = self._activation_hint(outcome.skill_path, outcome.name, plan, library_dir)
+            console.print(f"[muted]{escape(hint)}[/muted]")
+        if tally.flagged or tally.plans > 1:
+            line = f"Plans: {tally.proposals} proposals, {tally.describe()}"
+            report = console.print_error if tally.render_errors else console.print_info
+            report(line)
         sources = f"classify={classify_source}, render={render_source}"
         console.print(f"[muted]Prompts: {escape(sources)}[/muted]")
         console.print("")
@@ -420,6 +502,78 @@ class DirectSkillGenerationHandler:
             supporting.update(episode.facts.get("thread_ids", []))
         supporting.discard(current.thread_id)
         return [current.thread_id, *sorted(supporting)]
+
+    @staticmethod
+    def _report_plans(plans: RenderPlans) -> tuple[list[str], list[str]]:
+        """Warnings (rejected targets) and notes (references, deferred plans) for the console.
+
+        The caller prints both (each handler has its own console).
+        """
+        warnings = [f"Rejected target '{item.candidate.title}': {item.code} — {item.detail}" for item in plans.rejected]
+        notes = [f"already covered by {skill.display_name}: {candidate.title}" for candidate, skill in plans.references]
+        notes.extend(f"Deferred plan: {plan.label} — {reason}" for plan, reason in plans.deferred)
+        return warnings, notes
+
+    @staticmethod
+    async def _render_plan(
+        plan: RenderPlan,
+        *,
+        llm: Any,
+        template: str,
+        context: PlanContext,
+        taken: set[str],
+    ) -> PlanOutcome:
+        """Render one plan and write its proposal; never prints (the handlers do).
+
+        A create checks its name against ``taken`` and, once written, adds
+        the new name to it; an update passes ``expected_name`` instead and
+        leaves ``taken`` alone. Exceptions propagate to the caller.
+        """
+        existing_text: str | None = None
+        expected_name: str | None = None
+        taken_names: Collection[str] = ()
+        if plan.existing is None:
+            taken_names = taken
+        else:
+            read = plan.existing.path.read_text
+            text = await asyncio.to_thread(read, encoding="utf-8")
+            existing_text = format_existing_skill(plan.existing.display_name, text)
+            expected_name = plan.existing.name
+        rendered = await render_skill_md(
+            plan.candidates,
+            llm=llm,
+            template=template,
+            existing_skill=existing_text,
+            expected_name=expected_name,
+            taken_names=taken_names,
+            evidence=context.bundle.shown,
+        )
+        if not rendered.ok:
+            return PlanOutcome(plan, rendered.calls, errors=list(rendered.validation.errors))
+
+        name = skill_name(rendered.content)
+        provenance = build_provenance(
+            thread_ids=context.thread_ids,
+            bundle=context.bundle,
+            candidates=plan.candidates,
+            rejected=context.rejected,
+            sources=context.sources,
+            model=context.model,
+            prompt_variants=context.prompt_variants,
+            category=context.category,
+            target=DirectSkillGenerationHandler._target_record(plan),
+        )
+        skill_path = await asyncio.to_thread(
+            write_proposal,
+            rendered.content,
+            root=context.output_root,
+            name=name,
+            provenance=provenance,
+            thread_id=context.thread_id,
+        )
+        if plan.existing is None:
+            taken.add(name)
+        return PlanOutcome(plan, rendered.calls, skill_path=skill_path, name=name)
 
     @staticmethod
     def _target_record(plan: RenderPlan) -> dict[str, str | None]:
@@ -522,12 +676,14 @@ class DirectSkillGenerationHandler:
         raw_output_dir = data.get("output_dir")
         output_dir = Path(str(raw_output_dir)).expanduser() if raw_output_dir else None
         min_evidence_score = _parse_min_evidence_score(data.get("min_evidence_score"))
+        max_plans = _parse_max_plans(data.get("max_plans"))
         return DirectSkillGenerationConfig(
             active=active,
             prompt_file=prompt_file,
             category=category or DEFAULT_CATEGORY,
             output_dir=output_dir,
             min_evidence_score=min_evidence_score,
+            max_plans=max_plans,
         )
 
     # ----------------------------------------------------------------- prompts

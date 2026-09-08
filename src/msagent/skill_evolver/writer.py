@@ -25,17 +25,21 @@ dot-directories, and the extra ``<thread>`` level keeps the files below the
 depth at which the agent's skill sources are enumerated, so a proposal
 reaches the library only when a human moves it. Stdlib only.
 
-Provenance contract (``provenance_version`` PROVENANCE_VERSION) tells three
-things apart for every proposal: the episodes the detectors extracted (with
-their bundle outcome: shown, trimmed, excluded), the fragments the classify
-model was actually shown (``evidence_shown``, id -> file, line, seq, text),
-and what reached the render stage (``render_evidence``, candidate id -> the
-fragment ids quoted to it). Every kept candidate joins its events through
-``evidence_refs`` -> ``evidence_shown``; rejected candidates are listed with
-their reason. Proposals written before this contract carry no
-``provenance_version`` (v1): their ``candidates[].evidence_refs`` are seqs
-and they have no registry; ``/skill-review`` reads only ``category``,
-``thread_ids``, ``generated_at`` and ``target``, which both versions share.
+Provenance contract (``provenance_version`` PROVENANCE_VERSION) is scoped to
+the render plan a proposal came from and tells three things apart: the
+episodes the detectors extracted for the thread (with their bundle outcome:
+shown, trimmed, excluded; an evidence item's ``id`` is null when this
+proposal's candidates do not cite it), the fragments those candidates cite
+(``evidence_shown``, id -> file, line, seq, text; a subset of what the
+classify model saw), and what reached this render call (``candidates`` are
+exactly the rendered plan, ``render_evidence`` maps a candidate id to the
+fragment ids quoted to it). Every candidate joins its events through
+``evidence_refs`` -> ``evidence_shown``; ``candidates_rejected`` lists the
+thread's classify rejections with their reason. Earlier versions: v2 held
+every kept candidate of the thread and the whole registry in each proposal;
+v1 (no ``provenance_version``) has seqs in ``candidates[].evidence_refs`` and
+no registry. ``/skill-review`` reads only ``category``, ``thread_ids``,
+``generated_at`` and ``target``, which every version shares.
 """
 
 from __future__ import annotations
@@ -48,7 +52,7 @@ from pathlib import Path
 from typing import Any
 
 from msagent.skill_evolver.bundle import EvidenceBundle
-from msagent.skill_evolver.classify import Candidate, Classification
+from msagent.skill_evolver.classify import Candidate
 from msagent.skill_evolver.features import FEATURES_VERSION
 from msagent.skill_evolver.render import select_render_evidence
 from msagent.skill_evolver.validator import NAME_RE
@@ -56,9 +60,10 @@ from msagent.skill_evolver.validator import NAME_RE
 PROPOSALS_DIR = ".proposals"
 SKILL_FILE = "SKILL.md"
 PROVENANCE_FILE = "provenance.json"
-# Version of the provenance.json contract; 1 (unversioned) predates the
-# evidence registry, see the module docstring.
-PROVENANCE_VERSION = 2
+# Version of the provenance.json contract: 1 (unversioned) predates the
+# evidence registry, 2 recorded the whole thread in every proposal, 3 is
+# scoped to the rendered plan; see the module docstring.
+PROVENANCE_VERSION = 3
 REQUIRED_PROVENANCE_KEYS: frozenset[str] = frozenset(
     {
         "provenance_version",
@@ -87,8 +92,8 @@ def build_provenance(
     *,
     thread_ids: Sequence[str],
     bundle: EvidenceBundle,
-    classification: Classification,
-    rendered: Sequence[Candidate],
+    candidates: Sequence[Candidate],
+    rejected: Sequence[tuple[Candidate, str]],
     sources: Mapping[str, str],
     model: str,
     prompt_variants: Mapping[str, str],
@@ -96,11 +101,12 @@ def build_provenance(
     target: Mapping[str, Any],
     generated_at: str | None = None,
 ) -> dict[str, Any]:
-    """The JSON record that says where a proposal came from.
+    """The JSON record that says where one proposal came from.
 
+    ``candidates`` are exactly the candidates rendered into this SKILL.md
+    (one plan) and ``rejected`` the thread's classify rejections with why.
     ``thread_ids`` keep their order (the analysed thread first) minus
     duplicates; ``sources`` maps every cited file name to its path;
-    ``rendered`` are the kept candidates that reached the render stage;
     ``category`` is the library folder a new skill is meant for and
     ``target`` names the skill an update revises. ``generated_at`` defaults
     to now (UTC, ISO 8601).
@@ -109,7 +115,11 @@ def build_provenance(
     for thread_id in thread_ids:
         if thread_id not in ordered:
             ordered.append(thread_id)
-    shown_ids = {fragment.ref: fragment.id for fragment in bundle.shown.values()}
+    cited = {ref for candidate in candidates for ref in candidate.evidence_refs}
+    # Only what this proposal's candidates cite: a fragment shown to the
+    # classifier but cited by another plan of the thread is not evidence here.
+    shown = {fid: fragment for fid, fragment in bundle.shown.items() if fid in cited}
+    shown_ids = {fragment.ref: fragment.id for fragment in shown.values()}
     episode_rows: list[dict[str, Any]] = []
     for outcome in bundle.episodes:
         episode = outcome.episode
@@ -142,7 +152,7 @@ def build_provenance(
             "required": fragment.required,
             "text": fragment.text,
         }
-        for fragment in bundle.shown.values()
+        for fragment in shown.values()
     }
     return {
         "provenance_version": PROVENANCE_VERSION,
@@ -150,14 +160,14 @@ def build_provenance(
         "sources": dict(sources),
         "episodes": episode_rows,
         "evidence_shown": evidence_shown,
-        "candidates": [candidate.model_dump() for candidate in classification.candidates],
+        "candidates": [candidate.model_dump() for candidate in candidates],
         "candidates_rejected": [
             {"title": candidate.title, "reason": reason, "evidence_refs": list(candidate.evidence_refs)}
-            for candidate, reason in classification.rejected
+            for candidate, reason in rejected
         ],
         "render_evidence": {
-            candidate.candidate_id: [fragment.id for fragment in select_render_evidence(candidate, bundle.shown)]
-            for candidate in rendered
+            candidate.candidate_id: [fragment.id for fragment in select_render_evidence(candidate, shown)]
+            for candidate in candidates
         },
         "model": model,
         "prompt_variants": dict(prompt_variants),

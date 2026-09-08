@@ -3,3 +3,4 @@ prompt_file: prompt_v1.md        # prompt file inside each stage folder (prompts
 # category: default             # library category a proposal is meant for (recorded in provenance.json; nothing is written there automatically)
 # output_dir: ~/.msagent/skills # root that receives .proposals/<thread>/<name>/; by default: <working_dir>/skills
 # min_evidence_score: 1.0      # code-computed evidence (features.evidence_score) a session needs before the LLM is called
+# max_plans: 3                 # most SKILL.md proposals rendered per thread (each costs up to two LLM calls); extra plans are listed as deferred

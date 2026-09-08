@@ -28,7 +28,7 @@ from typing import Any
 import pytest
 
 from msagent.skill_evolver.bundle import BundleEpisode, EvidenceBundle, ShownFragment, build_evidence_bundle
-from msagent.skill_evolver.classify import Candidate, Classification
+from msagent.skill_evolver.classify import Candidate
 from msagent.skill_evolver.features import FEATURES_VERSION, Episode, EvidenceItem, extract_episodes
 from msagent.skill_evolver.writer import (
     PROPOSALS_DIR,
@@ -126,8 +126,8 @@ def _provenance(**overrides: Any) -> dict[str, Any]:
     data = build_provenance(
         thread_ids=[THREAD_ID],
         bundle=_bundle(),
-        classification=Classification("save", [candidate], []),
-        rendered=[candidate],
+        candidates=[candidate],
+        rejected=[],
         sources={SOURCE: f"/trajectories/{SOURCE}"},
         model="fake-model",
         prompt_variants={"classify": "classify/prompt_v1.md", "render": "render/prompt_v1.md"},
@@ -186,8 +186,8 @@ def test_build_provenance_maps_episodes_candidates_and_evidence() -> None:
     provenance = build_provenance(
         thread_ids=[THREAD_ID, "thread-other", THREAD_ID],
         bundle=bundle,
-        classification=Classification("save", [kept], [(rejected, "evidence not shown in the bundle: ['ev9']")]),
-        rendered=[kept],
+        candidates=[kept],
+        rejected=[(rejected, "evidence not shown in the bundle: ['ev9']")],
         sources={SOURCE: "/t/a.jsonl", "thread-other.jsonl": "/t/b.jsonl"},
         model="fake-model",
         prompt_variants={"classify": "c", "render": "r"},
@@ -196,7 +196,7 @@ def test_build_provenance_maps_episodes_candidates_and_evidence() -> None:
         generated_at="2026-09-04T10:00:00+00:00",
     )
 
-    assert provenance["provenance_version"] == PROVENANCE_VERSION == 2
+    assert provenance["provenance_version"] == PROVENANCE_VERSION == 3
     assert provenance["features_version"] == FEATURES_VERSION == 3
     assert provenance["thread_ids"] == [THREAD_ID, "thread-other"]
     assert provenance["sources"] == {SOURCE: "/t/a.jsonl", "thread-other.jsonl": "/t/b.jsonl"}
@@ -273,6 +273,60 @@ def test_build_provenance_stamps_utc_time() -> None:
     assert stamp.utcoffset().total_seconds() == 0
 
 
+def _two_plan_bundle() -> EvidenceBundle:
+    """One shown episode over seq 4..7 as fragments ev1..ev4."""
+    shown = {
+        "ev1": _fragment("ev1", 4, 'tool.start bash: {"cmd": "make"}'),
+        "ev2": _fragment("ev2", 5, "tool.error bash (error): exit 2"),
+        "ev3": _fragment("ev3", 6, "tool.start pytest: only-b-sees-this"),
+        "ev4": _fragment("ev4", 7, "tool.result pytest (ok): nobody-cites-this"),
+    }
+    return EvidenceBundle("(text)", shown, [BundleEpisode(_episode([4, 5, 6, 7]), "shown")])
+
+
+def _scoped(candidates: list[Candidate]) -> dict[str, Any]:
+    return build_provenance(
+        thread_ids=[THREAD_ID],
+        bundle=_two_plan_bundle(),
+        candidates=candidates,
+        rejected=[],
+        sources={SOURCE: "/t/a.jsonl"},
+        model="fake-model",
+        prompt_variants={"classify": "c", "render": "r"},
+        category="default",
+        target={"action": "create", "existing_skill": None, "existing_path": None},
+    )
+
+
+def test_build_provenance_is_scoped_to_the_rendered_plan() -> None:
+    a = _candidate(candidate_id="c1", evidence_refs=["ev1", "ev2"])
+    b = _candidate(title="Other", rule="Only B says so.", candidate_id="c2", evidence_refs=["ev3"])
+
+    for_a = _scoped([a])
+    for_b = _scoped([b])
+
+    assert set(for_a["evidence_shown"]) == {"ev1", "ev2"}
+    assert [c["candidate_id"] for c in for_a["candidates"]] == ["c1"]
+    assert for_a["render_evidence"] == {"c1": ["ev1", "ev2"]}
+    # The episode row stays complete; events this plan does not cite have no id.
+    assert [i["id"] for i in for_a["episodes"][0]["evidence"]] == ["ev1", "ev2", None, None]
+    dumped = json.dumps(for_a, ensure_ascii=False)
+    assert "Only B says so." not in dumped and "only-b-sees-this" not in dumped
+
+    assert set(for_b["evidence_shown"]) == {"ev3"}
+    assert [c["candidate_id"] for c in for_b["candidates"]] == ["c2"]
+    assert for_b["render_evidence"] == {"c2": ["ev3"]}
+    assert [i["id"] for i in for_b["episodes"][0]["evidence"]] == [None, None, "ev3", None]
+    assert '"cmd": "make"' not in json.dumps(for_b, ensure_ascii=False)
+
+
+def test_build_provenance_ignores_refs_outside_the_registry() -> None:
+    provenance = _scoped([_candidate(candidate_id="c1", evidence_refs=["ev1", "ev9"])])
+
+    assert set(provenance["evidence_shown"]) == {"ev1"}
+    assert provenance["render_evidence"] == {"c1": ["ev1"]}
+
+
 # -------------------------------------------------------------------- writer
 
 
@@ -286,7 +340,7 @@ def test_write_proposal_writes_skill_and_provenance(tmp_path: Path) -> None:
     provenance = json.loads((path.parent / "provenance.json").read_text(encoding="utf-8"))
     assert REQUIRED_PROVENANCE_KEYS <= set(provenance)
     assert provenance["features_version"] == 3
-    assert provenance["provenance_version"] == 2
+    assert provenance["provenance_version"] == 3
     assert sorted(p.name for p in path.parent.iterdir()) == ["SKILL.md", "provenance.json"]
     assert not (root / "default").exists()
 
@@ -430,12 +484,11 @@ def test_provenance_shown_fragments_resolve_to_source_lines(tmp_path: Path, fixt
     cited = sorted(bundle.shown)[:2]
     kept = _candidate(evidence_refs=cited, applies_when="the tool fails on the first attempt")
     rejected = _candidate(title="Fabricated", evidence_refs=["ev999"], candidate_id="")
-    classification = Classification("save", [kept], [(rejected, "evidence not shown in the bundle: ['ev999']")])
     provenance = build_provenance(
         thread_ids=[trajectory.thread_id],
         bundle=bundle,
-        classification=classification,
-        rendered=[kept],
+        candidates=[kept],
+        rejected=[(rejected, "evidence not shown in the bundle: ['ev999']")],
         sources={trajectory.source: str(trajectory.path)},
         model="fake-model",
         prompt_variants={"classify": "c", "render": "r"},
@@ -448,11 +501,12 @@ def test_provenance_shown_fragments_resolve_to_source_lines(tmp_path: Path, fixt
     )
 
     stored = json.loads((path.parent / "provenance.json").read_text(encoding="utf-8"))
-    assert stored["provenance_version"] == 2
+    assert stored["provenance_version"] == 3
     assert stored["thread_ids"] == [trajectory.thread_id]
     assert stored["sources"] == {source.name: str(source)}
     shown = stored["evidence_shown"]
-    assert set(shown) == set(bundle.shown)
+    # Scoped to what the rendered candidate cites, not the whole registry.
+    assert set(shown) == set(cited) <= set(bundle.shown)
     for fragment_id, entry in shown.items():
         assert entry["source"] == source.name
         assert _seq_at(source, entry["line"]) == entry["seq"]
@@ -462,8 +516,12 @@ def test_provenance_shown_fragments_resolve_to_source_lines(tmp_path: Path, fixt
         assert episode["thread_id"] == trajectory.thread_id
         assert episode["bundle_status"] == "shown"
         for item in episode["evidence"]:
+            if item["id"] is None:
+                continue
             assert item["id"] in shown
             assert (shown[item["id"]]["source"], shown[item["id"]]["line"]) == (item["source"], item["line"])
+    resolved = {item["id"] for episode in stored["episodes"] for item in episode["evidence"]} - {None}
+    assert resolved == set(cited)
     (candidate,) = stored["candidates"]
     assert candidate["candidate_id"] == "c1"
     assert candidate["evidence_refs"] == cited

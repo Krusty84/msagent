@@ -1,0 +1,11 @@
+# Experience graph. Off on merge so Skill Evolver behaviour is unchanged.
+# Opt in: enabled: true  — or MSAGENT_EXGRAPH_ENABLED=1
+# Force off: MSAGENT_EXGRAPH_DISABLED=1 (wins over everything)
+version: "1.0"
+enabled: false
+outcome:
+  policy: v1
+output:
+  directory: exgraph
+skills:
+  enabled: true

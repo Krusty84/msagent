@@ -44,6 +44,7 @@ from msagent.cli.theme import console, theme
 from msagent.core.constants import SKILL_EVOLVER_CONFIG_FOLDER_NAME
 from msagent.core.logging import get_logger
 from msagent.skill_evolver.bundle import build_evidence_bundle
+from msagent.skill_evolver.exgraph_context import attach_stored_graph
 from msagent.skill_evolver.classify import classify
 from msagent.skill_evolver.direct_skill_generation import (
     CROSS_SESSION_LIMIT,
@@ -723,6 +724,11 @@ class SkillMiningHandler:
         current = stats.trajectory
         thread_id = stats.thread_id
         bundle_text, valid_seq = build_evidence_bundle(stats.episodes, [current])
+        work = Path(self.session.context.working_dir)
+        state = initializer.get_project_paths(work).root
+        bundle_text = attach_stored_graph(
+            bundle_text, current, working_dir=work, state_dir=state,
+        )
         llm = await llm_slot.get()
         library = DirectSkillGenerationHandler._skill_library_snapshot(skills)
         with self._status("Classifying evidence..."):

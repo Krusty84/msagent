@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 CONFIG_FILE_NAME = "config.exgraph.yml"
 ENV_CONFIG_PATH = "MSAGENT_EXGRAPH_CONFIG"
 ENV_DISABLED = "MSAGENT_EXGRAPH_DISABLED"
+ENV_ENABLED = "MSAGENT_EXGRAPH_ENABLED"
 _TRUTHY = {"1", "true", "yes", "on"}
 
 
@@ -57,7 +58,10 @@ class SkillScanConfig(BaseModel):
 
 class ExgraphConfig(BaseModel):
     version: str = Field(default="1.0")
-    enabled: bool = Field(default=True)
+    enabled: bool = Field(
+        default=False,
+        description="Off by default so a merge into skill-evolver does not change mining",
+    )
     outcome: OutcomeConfig = Field(default_factory=OutcomeConfig)
     output: OutputConfig = Field(default_factory=OutputConfig)
     skills: SkillScanConfig = Field(default_factory=SkillScanConfig)
@@ -71,14 +75,24 @@ _cache_lock = threading.Lock()
 _cached_config: ExgraphConfig | None = None
 
 
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in _TRUTHY
+
+
 def _env_disabled() -> bool:
-    return os.environ.get(ENV_DISABLED, "").strip().lower() in _TRUTHY
+    return _env_flag(ENV_DISABLED)
+
+
+def _env_enabled() -> bool:
+    return _env_flag(ENV_ENABLED)
 
 
 def is_exgraph_enabled(*, force_reload: bool = False) -> bool:
-    """Live kill switch. ``MSAGENT_EXGRAPH_DISABLED=1`` always wins over YAML."""
+    """Live switch. Disabled wins; ENABLED opts in; else YAML (default off)."""
     if _env_disabled():
         return False
+    if _env_enabled():
+        return True
     return load_exgraph_config(force_reload=force_reload).enabled
 
 
@@ -119,8 +133,9 @@ def _load_from_disk() -> ExgraphConfig:
 def load_exgraph_config(*, force_reload: bool = False) -> ExgraphConfig:
     """Load the experience-graph configuration (cached per process).
 
-    The env kill switch is applied on every call so flipping
-    ``MSAGENT_EXGRAPH_DISABLED`` does not require a process restart.
+    Env flags are applied on every call so flipping
+    ``MSAGENT_EXGRAPH_DISABLED`` / ``MSAGENT_EXGRAPH_ENABLED``
+    does not require a process restart. Disabled always wins.
     """
     global _cached_config
     with _cache_lock:
@@ -129,6 +144,8 @@ def load_exgraph_config(*, force_reload: bool = False) -> ExgraphConfig:
         config = _cached_config
         if _env_disabled():
             return config.model_copy(update={"enabled": False})
+        if _env_enabled():
+            return config.model_copy(update={"enabled": True})
         return config
 
 

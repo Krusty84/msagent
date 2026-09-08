@@ -22,6 +22,21 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
+from msagent.exgraph.config import ENV_DISABLED, ENV_ENABLED, reset_config_cache
+
+
+@pytest.fixture(autouse=True)
+def _exgraph_opt_in(monkeypatch):
+    """Exgraph tests run opted-in. Product default remains off."""
+    monkeypatch.setenv(ENV_ENABLED, "1")
+    monkeypatch.delenv(ENV_DISABLED, raising=False)
+    reset_config_cache()
+    yield
+    reset_config_cache()
+
+
 from msagent.exgraph.cases import build_from_path, label_outcome
 from msagent.exgraph.export import render_markdown
 from msagent.exgraph.schema import case_id, step_id, task_anchor_id, thread_id

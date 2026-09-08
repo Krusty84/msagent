@@ -1,4 +1,4 @@
-# ExGraph P1.1 testing
+# ExGraph P1.2 testing
 
 Single zip: `exgraph-p1.1.zip`. See `APPLY.md`.
 Do not layer older zips on top of this one.
@@ -46,3 +46,5 @@ Create `artifacts/` first if you want those files next to the repo.
 P1.2 (not in this zip): `/skill-mine` with graph on vs
 `MSAGENT_EXGRAPH_DISABLED=1` on a real project, score the written
 `SKILL.md`.
+
+Default config is off. Intensive tests set `MSAGENT_EXGRAPH_ENABLED=1`.

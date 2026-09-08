@@ -23,6 +23,21 @@ from pathlib import Path
 
 import pytest
 
+from msagent.exgraph.config import ENV_DISABLED, ENV_ENABLED, reset_config_cache
+
+
+@pytest.fixture(autouse=True)
+def _exgraph_opt_in(monkeypatch):
+    """Exgraph tests run opted-in. Product default remains off."""
+    monkeypatch.setenv(ENV_ENABLED, "1")
+    monkeypatch.delenv(ENV_DISABLED, raising=False)
+    reset_config_cache()
+    yield
+    reset_config_cache()
+
+
+import pytest
+
 from msagent.skill_evolver.bundle import build_evidence_bundle
 from msagent.skill_evolver.exgraph_context import attach_stored_graph
 

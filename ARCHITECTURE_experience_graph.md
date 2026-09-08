@@ -1,6 +1,6 @@
 # Experience Graph — Architecture
 
-Status: P0 + P0.5 + P1 + **P1.1** (`src/msagent/exgraph/`), schema version 2.
+Status: P0 + P0.5 + P1 + P1.1 + **P1.2** (`src/msagent/exgraph/`), schema version 2.
 Branch: `feature/experience-graph`.
 
 ## 1. Purpose
@@ -97,10 +97,17 @@ P1.1 appendix contains **only relations**:
 It does **not** repeat episode kinds. Cap 1000 characters. No `Evidence:`
 seqs.
 
-## 7. Kill switch
+## 7. Default off (P1.2 merge)
 
-`MSAGENT_EXGRAPH_DISABLED=1` (`true`/`yes`/`on`) or YAML `enabled: false`.
-Checked live on CLI build, `remember_thread`, the evolver hook, and the
+Shipped YAML and the pydantic default are `enabled: false`. A merge into
+`extract-session-history-generate-skill-md-and-other` does not change
+Skill Evolver unless someone opts in.
+
+- `MSAGENT_EXGRAPH_ENABLED=1` turns the graph on for that process.
+- `MSAGENT_EXGRAPH_DISABLED=1` (`true`/`yes`/`on`) always wins.
+- Exgraph unit/intensive tests opt in via fixture; other tests do not.
+
+Checked live on CLI `build`, `remember_thread`, the evolver hook, and the
 appendix. Inspection `show`/`export` of an existing shard still works.
 
 ## 8. Later (not this zip)

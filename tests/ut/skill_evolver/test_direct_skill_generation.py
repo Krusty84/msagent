@@ -20,9 +20,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
-from functools import partial
-import logging
+import re
 import shutil
 from pathlib import Path
 from types import SimpleNamespace
@@ -31,20 +31,25 @@ from typing import Any
 import pytest
 import yaml
 from langchain_core.messages import AIMessage, HumanMessage
+from rich.markup import escape
 
 # The handlers package must be initialized before the module is imported directly:
 # handlers/__init__ re-exports the handler while the handler imports session_history
 # from that same package (a pre-existing import cycle that the CLI never triggers).
 import msagent.cli.handlers  # noqa: F401
+from msagent.core.constants import CONFIG_SKILL_EVOLVER_FILE_NAME
 from msagent.skill_evolver import direct_skill_generation as module
+from msagent.skill_evolver.budget import ContextBudget
 from msagent.skill_evolver.bundle import build_evidence_bundle
 from msagent.skill_evolver.classify import Candidate
+from msagent.skill_evolver.config import SkillEvolverConfig, SkillEvolverConfigError, effective_rules
 from msagent.skill_evolver.direct_skill_generation import (
     DirectSkillGenerationConfig,
     DirectSkillGenerationHandler,
     PlanContext,
 )
 from msagent.skill_evolver.features import extract_episodes
+from msagent.skill_evolver.prompts import PromptText, StagePrompts, prompt_sha256
 from msagent.skill_evolver.render import NO_EXISTING_SKILL, RenderPlan, RenderPlans
 from msagent.skill_evolver.retrieval import BM25Index
 from msagent.skills.factory import Skill, SkillFactory
@@ -57,8 +62,13 @@ FIXTURE = REPO_ROOT / "tests" / "fixtures" / "trajectories" / "skill_evolver_sig
 THREAD_ID = "thread-signals"
 AGENT = "Profiler"
 
-CLASSIFY_TEMPLATE = "Library:\n{skill_library}\n\nBundle:\n{evidence_bundle}\n"
-RENDER_TEMPLATE = "Candidates:\n{candidates}\n\nExisting:\n{existing_skill}\n"
+CLASSIFY_TEMPLATE = "Library:\n{skill_library}\n\nPolicy:\n{selection_policy}\n\nBundle:\n{evidence_bundle}\n"
+RENDER_TEMPLATE = "Policy:\n{render_policy}\n\nCandidates:\n{candidates}\n\nExisting:\n{existing_skill}\n"
+REVIEW_TEMPLATE = (
+    "Policy:\n{review_policy}\n\nSkill:\n{skill_md}\n\nCandidates:\n{candidates}\n\n"
+    "Evidence:\n{evidence}\n\nExisting:\n{existing_skill}\n"
+)
+REVIEW_PASS = json.dumps({"verdict": "pass", "issues": []})
 SKILL_NAME = "generated-source-debugging"
 VALID_SKILL = "\n".join(
     [
@@ -110,10 +120,12 @@ class _ConsoleSpy:
         self.success: list[str] = []
         self.warning: list[str] = []
         self.error: list[str] = []
+        # Muted lines (markup included), e.g. "[muted]Gate: pass (...)[/muted]".
+        self.plain: list[str] = []
         self.console = SimpleNamespace(status=lambda *_args, **_kwargs: _NullStatus())
 
-    def print(self, *_args, **_kwargs) -> None:
-        pass
+    def print(self, *args, **_kwargs) -> None:
+        self.plain.extend(str(arg) for arg in args)
 
     def print_info(self, content: str) -> None:
         self.info.append(content)
@@ -167,14 +179,14 @@ def pipeline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_llm_cls):
         return THREAD_ID, [HumanMessage(content="профилируй")]
 
     async def fake_stage_prompt(self, _root, _cfg, stage):
-        templates = {"classify": CLASSIFY_TEMPLATE, "render": RENDER_TEMPLATE}
+        templates = {"classify": CLASSIFY_TEMPLATE, "render": RENDER_TEMPLATE, "review": REVIEW_TEMPLATE}
         return templates[stage], f"packaged/{stage}/prompt_v1.md"
 
     async def fake_load_skills(self):
         return list(state.skills)
 
     async def fake_load_llm_config(_model, _working_dir):
-        return SimpleNamespace(model="fake-model", context_window=1000)
+        return SimpleNamespace(model="fake-model", context_window=128_000)
 
     monkeypatch.setattr(module, "load_history", fake_load_history)
     monkeypatch.setattr(DirectSkillGenerationHandler, "_load_config", staticmethod(lambda: state.config))
@@ -190,7 +202,15 @@ def pipeline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_llm_cls):
 
 
 def _classify_reply(*candidates: dict[str, Any], verdict: str = "save") -> str:
-    return json.dumps({"verdict": verdict, "candidates": list(candidates)})
+    """A contract-2 reply; the signals fixture always renders E1, so its default decision is valid."""
+    if candidates:
+        decision = {"decision": "accept", "reason_code": "accepted"}
+    else:
+        decision = {"decision": "reject", "reason_code": "routine_activity"}
+    decisions = [{"episode_ids": ["E1"], **decision, "explanation": "scripted", "evidence_refs": []}]
+    return json.dumps(
+        {"contract_version": 2, "verdict": verdict, "candidates": list(candidates), "decisions": decisions}
+    )
 
 
 def _candidate(refs: list[str], **overrides: Any) -> dict[str, Any]:
@@ -294,7 +314,7 @@ def _trajectory(thread_id: str, names: list[str]) -> Trajectory:
 async def test_handle_writes_proposal_not_library(pipeline: _Pipeline, tmp_path: Path) -> None:
     refs = _valid_refs()
     stated = _candidate(refs, applies_when="the generated sources are older than the schema")
-    pipeline.script(_classify_reply(stated), VALID_SKILL)
+    pipeline.script(_classify_reply(stated), VALID_SKILL, REVIEW_PASS)
 
     await pipeline.handler.handle([])
 
@@ -304,24 +324,41 @@ async def test_handle_writes_proposal_not_library(pipeline: _Pipeline, tmp_path:
     assert not (tmp_path / "skills" / "default").exists()
     assert pipeline.spy.success == [f"Skill proposal saved to {proposal}"]
     assert pipeline.spy.error == [] and pipeline.spy.warning == []
-    assert len(pipeline.llm.payloads) == 2
+    # Three calls: classify, render, quality review.
+    assert len(pipeline.llm.payloads) == 3
     classify_instruction = pipeline.llm.payloads[0][0][1]
     render_instruction = pipeline.llm.payloads[1][0][1]
     assert "[ev1]" in classify_instruction and "Evidence: seq" not in classify_instruction
     assert "The skill library is currently empty." in classify_instruction
+    assert "# Selection policy: strict_knowledge" in classify_instruction
+    assert "{selection_policy}" not in classify_instruction
     assert "Regenerate sources before type checking." in render_instruction
     assert "   When: the generated sources are older than the schema" in render_instruction
 
     provenance = json.loads((proposal.parent / "provenance.json").read_text(encoding="utf-8"))
-    assert provenance["provenance_version"] == 3
+    assert provenance["provenance_version"] == 4
     assert provenance["thread_ids"] == [THREAD_ID]
     assert provenance["model"] == "fake-model"
     assert provenance["prompt_variants"] == {
         "classify": "packaged/classify/prompt_v1.md",
         "render": "packaged/render/prompt_v1.md",
+        "review": "packaged/review/prompt_v1.md",
     }
-    assert provenance["features_version"] == 3
+    assert provenance["prompt_hashes"] == {
+        "classify": prompt_sha256(CLASSIFY_TEMPLATE),
+        "render": prompt_sha256(RENDER_TEMPLATE),
+        "review": prompt_sha256(REVIEW_TEMPLATE),
+    }
+    assert provenance["features_version"] == 4
     assert provenance["category"] == "default"
+    assert provenance["policy"] == {
+        "requested": "strict_knowledge",
+        "selection": "strict_knowledge",
+        "source": "config",
+    }
+    assert provenance["demo"] is False
+    assert provenance["quality_review"]["verdict"] == "pass" and provenance["quality_review"]["corrected"] is False
+    assert provenance["verification"] == {"level": "evidence_supported", "note": "not executed by generator"}
     assert provenance["target"] == {"action": "create", "existing_skill": None, "existing_path": None}
     source = pipeline.trajectories_dir / f"{AGENT}_{THREAD_ID}.jsonl"
     assert provenance["sources"] == {source.name: str(source)}
@@ -369,7 +406,7 @@ async def test_handle_long_correction_phrase_is_in_provenance(pipeline: _Pipelin
     bundle = build_evidence_bundle(extract_episodes(trajectory), [trajectory])
     (correction,) = [f for f in bundle.shown.values() if f.role == "correction"]
     assert phrase in correction.text
-    pipeline.script(_classify_reply(_candidate([correction.id])), VALID_SKILL)
+    pipeline.script(_classify_reply(_candidate([correction.id])), VALID_SKILL, REVIEW_PASS)
 
     await pipeline.handler.handle([])
 
@@ -390,7 +427,7 @@ async def test_handle_bundle_exclusion_creates_no_llm(
 ) -> None:
     # A budget too small for any episode's required evidence excludes them
     # all; their weight must not carry the thread to the LLM.
-    monkeypatch.setattr(module, "build_evidence_bundle", partial(build_evidence_bundle, max_chars=1))
+    pipeline.config = DirectSkillGenerationConfig(bundle_max_chars=1)
 
     def boom(_config):
         raise AssertionError("the LLM must not be created")
@@ -414,7 +451,7 @@ async def test_handle_bundle_exclusion_creates_no_llm(
 async def test_proposal_invisible_to_skill_scanners(pipeline: _Pipeline, tmp_path: Path) -> None:
     from msagent.agents.factory import AgentFactory
 
-    pipeline.script(_classify_reply(_candidate(_valid_refs())), VALID_SKILL)
+    pipeline.script(_classify_reply(_candidate(_valid_refs())), VALID_SKILL, REVIEW_PASS)
     await pipeline.handler.handle([])
     skills_root = tmp_path / "skills"
     assert (skills_root / ".proposals").is_dir()
@@ -430,18 +467,25 @@ async def test_handle_update_passes_existing_text(pipeline: _Pipeline, tmp_path:
     pipeline.skills = [skill]
     target = {"action": "update", "existing_skill": "real"}
     revised = VALID_SKILL.replace(f"name: {SKILL_NAME}", "name: real")
-    pipeline.script(_classify_reply(_candidate(_valid_refs(), target=target)), revised)
+    pipeline.script(_classify_reply(_candidate(_valid_refs(), target=target)), revised, REVIEW_PASS)
 
     await pipeline.handler.handle([])
 
     proposal = tmp_path / "skills" / ".proposals" / THREAD_ID / "real" / "SKILL.md"
     assert proposal.is_file(), (pipeline.spy.error, pipeline.spy.warning)
     assert original in pipeline.llm.payloads[1][0][1]
+    # The reviewer sees the existing skill too.
+    assert original in pipeline.llm.payloads[2][0][1]
     assert "- real: Use when testing." in pipeline.llm.payloads[0][0][1]
     assert skill.path.read_text(encoding="utf-8") == original
     provenance = json.loads((proposal.parent / "provenance.json").read_text(encoding="utf-8"))
-    assert provenance["provenance_version"] == 3
-    assert provenance["target"] == {"action": "update", "existing_skill": "real", "existing_path": str(skill.path)}
+    assert provenance["provenance_version"] == 4
+    assert provenance["target"] == {
+        "action": "update",
+        "existing_skill": "real",
+        "existing_path": str(skill.path),
+        "base_sha256": hashlib.sha256(original.encode("utf-8")).hexdigest(),
+    }
     assert [c["candidate_id"] for c in provenance["candidates"]] == ["c1"]
     assert pipeline.spy.success == [f"Skill proposal saved to {proposal}"]
     assert pipeline.spy.error == []
@@ -504,7 +548,7 @@ async def test_handle_fabricated_refs_dropped(pipeline: _Pipeline, tmp_path: Pat
     ]
     assert pipeline.spy.info == [
         module._DEPRECATION_HINT,
-        f"Nothing to save: no durable learning found in thread {THREAD_ID}",
+        f"Nothing to save: no candidate with valid evidence refs in thread {THREAD_ID} (invalid_evidence)",
     ]
     assert len(pipeline.llm.payloads) == 1
     assert not (tmp_path / "skills").exists()
@@ -537,7 +581,7 @@ async def test_handle_reference_only(pipeline: _Pipeline, tmp_path: Path) -> Non
     assert len(pipeline.llm.payloads) == 1
     assert pipeline.spy.info == [
         module._DEPRECATION_HINT,
-        "already covered by real: Generated source debugging",
+        "reference real: Generated source debugging (classifier's claim; skill text read, coverage not verified)",
         "Nothing to save: no candidate left to render",
     ]
     assert not (tmp_path / "skills" / ".proposals").exists()
@@ -616,13 +660,15 @@ async def test_handle_update_a_and_update_b_two_proposals(pipeline: _Pipeline, t
     pipeline.script(
         _classify_reply(_update(refs[:1], "alpha", title="Alpha rule"), _update(refs[1:], "beta", title="Beta rule")),
         _revised("alpha"),
+        REVIEW_PASS,
         _revised("beta"),
+        REVIEW_PASS,
     )
 
     await pipeline.handler.handle([])
 
-    assert len(pipeline.llm.payloads) == 3 and pipeline.llm.replies == []
-    first, second = _instruction(pipeline, 1), _instruction(pipeline, 2)
+    assert len(pipeline.llm.payloads) == 5 and pipeline.llm.replies == []
+    first, second = _instruction(pipeline, 1), _instruction(pipeline, 3)
     assert "name: alpha" in first and "Alpha rule" in first
     assert "name: beta" not in first and "Beta rule" not in first
     assert "name: beta" in second and "Beta rule" in second
@@ -650,13 +696,15 @@ async def test_handle_update_and_create_are_separate_plans(pipeline: _Pipeline, 
     pipeline.script(
         _classify_reply(_update(refs, "real", title="Real rule"), _candidate(refs)),
         _revised("real"),
+        REVIEW_PASS,
         VALID_SKILL,
+        REVIEW_PASS,
     )
 
     await pipeline.handler.handle([])
 
-    assert len(pipeline.llm.payloads) == 3 and pipeline.llm.replies == []
-    update, create = _instruction(pipeline, 1), _instruction(pipeline, 2)
+    assert len(pipeline.llm.payloads) == 5 and pipeline.llm.replies == []
+    update, create = _instruction(pipeline, 1), _instruction(pipeline, 3)
     assert "old body" in update and "Real rule" in update
     assert "Generated source debugging" not in update
     assert NO_EXISTING_SKILL in create and "Generated source debugging" in create
@@ -669,11 +717,11 @@ async def test_handle_update_and_create_are_separate_plans(pipeline: _Pipeline, 
 async def test_handle_two_creates_two_proposals(pipeline: _Pipeline, tmp_path: Path) -> None:
     refs = _valid_refs()
     second = _candidate(refs, title="Profile before summary", rule="Collect a kernel profile before summarising.")
-    pipeline.script(_classify_reply(_candidate(refs), second), VALID_SKILL, SECOND_SKILL)
+    pipeline.script(_classify_reply(_candidate(refs), second), VALID_SKILL, REVIEW_PASS, SECOND_SKILL, REVIEW_PASS)
 
     await pipeline.handler.handle([])
 
-    assert len(pipeline.llm.payloads) == 3 and pipeline.llm.replies == []
+    assert len(pipeline.llm.payloads) == 5 and pipeline.llm.replies == []
     assert _proposal(tmp_path, SKILL_NAME).is_file()
     assert _proposal(tmp_path, SECOND_NAME).is_file()
     assert len(pipeline.spy.success) == 2
@@ -684,12 +732,14 @@ async def test_handle_two_creates_two_proposals(pipeline: _Pipeline, tmp_path: P
 async def test_handle_second_create_cannot_reuse_first_name(pipeline: _Pipeline, tmp_path: Path) -> None:
     refs = _valid_refs()
     second = _candidate(refs, title="Profile before summary")
-    pipeline.script(_classify_reply(_candidate(refs), second), VALID_SKILL, VALID_SKILL, SECOND_SKILL)
+    pipeline.script(
+        _classify_reply(_candidate(refs), second), VALID_SKILL, REVIEW_PASS, VALID_SKILL, SECOND_SKILL, REVIEW_PASS
+    )
 
     await pipeline.handler.handle([])
 
-    assert len(pipeline.llm.payloads) == 4 and pipeline.llm.replies == []
-    correction = pipeline.llm.payloads[3][-1][1]
+    assert len(pipeline.llm.payloads) == 6 and pipeline.llm.replies == []
+    correction = pipeline.llm.payloads[4][-1][1]
     assert f"'{SKILL_NAME}' already exists in the skill library" in correction
     assert _proposal(tmp_path, SKILL_NAME).is_file() and _proposal(tmp_path, SECOND_NAME).is_file()
     assert pipeline.spy.error == []
@@ -699,11 +749,11 @@ async def test_handle_second_create_cannot_reuse_first_name(pipeline: _Pipeline,
 async def test_handle_first_plan_fails_second_written(pipeline: _Pipeline, tmp_path: Path) -> None:
     refs = _valid_refs()
     second = _candidate(refs, title="Profile before summary")
-    pipeline.script(_classify_reply(_candidate(refs), second), INVALID_SKILL, INVALID_SKILL, SECOND_SKILL)
+    pipeline.script(_classify_reply(_candidate(refs), second), INVALID_SKILL, INVALID_SKILL, SECOND_SKILL, REVIEW_PASS)
 
     await pipeline.handler.handle([])
 
-    assert len(pipeline.llm.payloads) == 4 and pipeline.llm.replies == []
+    assert len(pipeline.llm.payloads) == 5 and pipeline.llm.replies == []
     assert pipeline.spy.error[0] == f"plan create: Generated source debugging: {module._REJECTED}"
     assert not _proposal(tmp_path, SKILL_NAME).exists()
     assert _proposal(tmp_path, SECOND_NAME).is_file()
@@ -716,11 +766,11 @@ async def test_handle_plans_over_limit_deferred(pipeline: _Pipeline, tmp_path: P
     pipeline.config = DirectSkillGenerationConfig(max_plans=1)
     refs = _valid_refs()
     second = _candidate(refs, title="Profile before summary")
-    pipeline.script(_classify_reply(_candidate(refs), second), VALID_SKILL)
+    pipeline.script(_classify_reply(_candidate(refs), second), VALID_SKILL, REVIEW_PASS)
 
     await pipeline.handler.handle([])
 
-    assert len(pipeline.llm.payloads) == 2 and pipeline.llm.replies == []
+    assert len(pipeline.llm.payloads) == 3 and pipeline.llm.replies == []
     assert "Deferred plan: create: Profile before summary — max_plans 1 reached" in pipeline.spy.info
     assert _proposal(tmp_path, SKILL_NAME).is_file()
     assert not _proposal(tmp_path, SECOND_NAME).exists()
@@ -730,9 +780,21 @@ async def test_handle_plans_over_limit_deferred(pipeline: _Pipeline, tmp_path: P
 # ------------------------------------------------------------ plan helpers
 
 
+def _prompts() -> StagePrompts:
+    """The fake templates as the pipeline's prompt record (honest hashes of the fake text)."""
+    texts = {"classify": CLASSIFY_TEMPLATE, "render": RENDER_TEMPLATE, "review": REVIEW_TEMPLATE}
+    return StagePrompts(
+        **{
+            stage: PromptText(stage, text, f"packaged/{stage}/prompt_v1.md", prompt_sha256(text), 2)
+            for stage, text in texts.items()
+        }
+    )
+
+
 def _plan_context(tmp_path: Path) -> tuple[PlanContext, list[str]]:
     trajectory = load_trajectory(FIXTURE)
     bundle = build_evidence_bundle(extract_episodes(trajectory), [trajectory])
+    prompts = _prompts()
     context = PlanContext(
         thread_id=THREAD_ID,
         thread_ids=[THREAD_ID],
@@ -740,11 +802,25 @@ def _plan_context(tmp_path: Path) -> tuple[PlanContext, list[str]]:
         rejected=[],
         sources={trajectory.source: str(trajectory.path)},
         model="fake-model",
-        prompt_variants={"classify": "c", "render": "r"},
+        prompt_variants=prompts.variants(),
         category="default",
         output_root=tmp_path / "skills",
+        prompt_hashes=prompts.hashes(),
+        requested=DirectSkillGenerationConfig().as_record(),
     )
     return context, sorted(bundle.shown)[:2]
+
+
+def _render_kwargs(tmp_path: Path, llm: Any, context: PlanContext, taken: set[str]) -> dict[str, Any]:
+    """The keyword arguments of the per-plan function with an unlimited context budget and default rules."""
+    return {
+        "llm": llm,
+        "prompts": _prompts(),
+        "context": context,
+        "taken": taken,
+        "budget": ContextBudget.for_window(None),
+        "rules": effective_rules(DirectSkillGenerationConfig(), working_dir=tmp_path),
+    }
 
 
 def _plan(refs: list[str], existing: Skill | None = None, **overrides: Any) -> RenderPlan:
@@ -758,15 +834,17 @@ def _plan(refs: list[str], existing: Skill | None = None, **overrides: Any) -> R
 @pytest.mark.asyncio
 async def test_render_plan_create_adds_name_to_taken(tmp_path: Path, fake_llm_cls) -> None:
     context, refs = _plan_context(tmp_path)
-    llm = fake_llm_cls(VALID_SKILL)
+    llm = fake_llm_cls(VALID_SKILL, REVIEW_PASS)
     taken = {"other"}
 
     outcome = await DirectSkillGenerationHandler._render_plan(
-        _plan(refs), llm=llm, template=RENDER_TEMPLATE, context=context, taken=taken
+        _plan(refs), **_render_kwargs(tmp_path, llm, context, taken)
     )
 
     assert outcome.written and outcome.name == SKILL_NAME
-    assert outcome.calls == 1 and outcome.errors == []
+    # Render plus one quality review.
+    assert outcome.calls == 2 and outcome.errors == [] and outcome.rejection is None
+    assert outcome.review["verdict"] == "pass" and outcome.review["corrected"] is False
     assert outcome.skill_path == tmp_path / "skills" / ".proposals" / THREAD_ID / SKILL_NAME / "SKILL.md"
     assert taken == {"other", SKILL_NAME}
     assert _provenance_of(outcome.skill_path)["target"]["action"] == "create"
@@ -776,18 +854,23 @@ async def test_render_plan_create_adds_name_to_taken(tmp_path: Path, fake_llm_cl
 async def test_render_plan_update_reads_existing_and_leaves_taken(tmp_path: Path, fake_llm_cls) -> None:
     context, refs = _plan_context(tmp_path)
     skill = _library_skill(tmp_path, "real")
-    llm = fake_llm_cls(_revised("real"))
+    llm = fake_llm_cls(_revised("real"), REVIEW_PASS)
     taken: set[str] = set()
 
     outcome = await DirectSkillGenerationHandler._render_plan(
-        _plan(refs, existing=skill), llm=llm, template=RENDER_TEMPLATE, context=context, taken=taken
+        _plan(refs, existing=skill), **_render_kwargs(tmp_path, llm, context, taken)
     )
 
-    assert outcome.written and outcome.name == "real"
+    assert outcome.written and outcome.name == "real" and outcome.calls == 2
     assert "old body" in llm.payloads[0][0][1]
     assert taken == set()
     target = _provenance_of(outcome.skill_path)["target"]
-    assert target == {"action": "update", "existing_skill": "real", "existing_path": str(skill.path)}
+    assert target == {
+        "action": "update",
+        "existing_skill": "real",
+        "existing_path": str(skill.path),
+        "base_sha256": hashlib.sha256(skill.path.read_bytes()).hexdigest(),
+    }
 
 
 @pytest.mark.asyncio
@@ -797,10 +880,11 @@ async def test_render_plan_invalid_twice_returns_errors_without_writing(tmp_path
     taken = {"other"}
 
     outcome = await DirectSkillGenerationHandler._render_plan(
-        _plan(refs), llm=llm, template=RENDER_TEMPLATE, context=context, taken=taken
+        _plan(refs), **_render_kwargs(tmp_path, llm, context, taken)
     )
 
-    assert not outcome.written and outcome.calls == 2
+    # Two render calls, no review: the validator refused both replies.
+    assert not outcome.written and outcome.calls == 2 and outcome.rejection is None and outcome.review is None
     assert any("missing section '## Inputs'" in error for error in outcome.errors)
     assert taken == {"other"}
     assert not (tmp_path / "skills").exists()
@@ -819,10 +903,13 @@ def test_report_plans_lines(tmp_path: Path) -> None:
         rejected=[PlanRejection(Candidate.model_validate(_candidate(refs, title="Lost")), "invalid_target", "why")],
     )
 
-    warnings, notes = DirectSkillGenerationHandler._report_plans(plans)
+    warnings, notes = DirectSkillGenerationHandler._report_plans(plans, ["unverified"])
 
     assert warnings == ["Rejected target 'Lost': invalid_target — why"]
-    assert notes == ["already covered by profiler/real: Seen", "Deferred plan: create: Kept — max_plans 1 reached"]
+    assert notes == [
+        "reference profiler/real: Seen (classifier's claim; skill text unreadable, coverage not verified)",
+        "Deferred plan: create: Kept — max_plans 1 reached",
+    ]
 
 
 @pytest.mark.asyncio
@@ -849,15 +936,26 @@ def test_collect_episodes_cross_session_cites_current_thread() -> None:
     assert episode.kind == "repeated_procedure"
     assert episode.thread_id == "thread-a"
     assert episode.tool_sequence == ["bash", "read_file", "grep"]
-    assert episode.evidence_seq == [2, 4, 6]
+    assert episode.evidence_seq == [1, 2, 3, 4, 5, 6, 7]
     assert episode.facts["thread_ids"] == ["thread-a", "thread-b"]
-    # The supporting session's steps are required evidence, so the bundle
-    # must index that trajectory too.
-    assert [(i.ref.source, i.ref.seq, i.required) for i in episode.evidence[3:]] == [
+    # Owner steps interleaved with their optional results, then the
+    # supporting session's steps (required evidence, so the bundle must
+    # index that trajectory too), then the owner's task context.
+    assert [(i.ref.source, i.role, i.ref.seq, i.required) for i in episode.evidence[:6]] == [
+        ("thread-a.jsonl", "step", 2, True),
+        ("thread-a.jsonl", "result", 3, False),
+        ("thread-a.jsonl", "step", 4, True),
+        ("thread-a.jsonl", "result", 5, False),
+        ("thread-a.jsonl", "step", 6, True),
+        ("thread-a.jsonl", "result", 7, False),
+    ]
+    assert [(i.ref.source, i.ref.seq, i.required) for i in episode.evidence[6:9]] == [
         ("thread-b.jsonl", 2, True),
         ("thread-b.jsonl", 4, True),
         ("thread-b.jsonl", 6, True),
     ]
+    task = episode.evidence[9]
+    assert (task.ref.source, task.ref.seq, task.role, task.required) == ("thread-a.jsonl", 1, "task", False)
     assert module._supporting([other], episodes) == [other]
     assert module._collect_episodes(current, [], skill_index=BM25Index([])) == []
     assert module._supporting([other], []) == []
@@ -881,23 +979,26 @@ async def test_load_stage_prompt_prefers_user_root_then_packaged(tmp_path: Path)
     handler = DirectSkillGenerationHandler(_session(tmp_path))
     root = tmp_path / "prompts"
     (root / "render").mkdir(parents=True)
-    (root / "render" / "prompt_v1.md").write_text("user render {candidates} {existing_skill}", encoding="utf-8")
-    cfg = DirectSkillGenerationConfig(prompt_file="prompt_v1.md")
+    (root / "render" / "prompt_v2.md").write_text(
+        "## description: x\n## contract_version: 2\nuser render {candidates} {existing_skill} {render_policy}\n",
+        encoding="utf-8",
+    )
+    cfg = DirectSkillGenerationConfig()
 
     text, source = await handler._load_stage_prompt(root, cfg, "render")
-    assert text.startswith("user render")
-    assert source == str(root / "render" / "prompt_v1.md")
+    assert "user render" in text
+    assert source == str(root / "render" / "prompt_v2.md")
 
     text, source = await handler._load_stage_prompt(root, cfg, "classify")
-    assert "{evidence_bundle}" in text and "{skill_library}" in text
-    assert Path(source).parts[-2:] == ("classify", "prompt_v1.md")
+    assert "{evidence_bundle}" in text and "{skill_library}" in text and "{selection_policy}" in text
+    assert Path(source).parts[-2:] == ("classify", "prompt_v2.md")
 
     with pytest.raises(ValueError, match="Unknown prompt stage"):
         await handler._load_stage_prompt(root, cfg, "default")
 
 
 @pytest.mark.asyncio
-async def test_load_stage_prompt_missing_file_falls_back_to_glob(tmp_path: Path, monkeypatch) -> None:
+async def test_load_stage_prompt_missing_file_is_an_error(tmp_path: Path, monkeypatch) -> None:
     spy = _ConsoleSpy()
     monkeypatch.setattr(module, "console", spy)
     handler = DirectSkillGenerationHandler(_session(tmp_path))
@@ -905,20 +1006,21 @@ async def test_load_stage_prompt_missing_file_falls_back_to_glob(tmp_path: Path,
     (root / "classify").mkdir(parents=True)
     (root / "classify" / "a.md").write_text("A", encoding="utf-8")
     (root / "classify" / "b.md").write_text("B", encoding="utf-8")
+    cfg = DirectSkillGenerationConfig(classify_prompt="missing.md")
 
-    text, source = await handler._load_stage_prompt(root, DirectSkillGenerationConfig(prompt_file="missing.md"), "classify")
+    with pytest.raises(ValueError, match="prompt file not found"):
+        await handler._load_stage_prompt(root, cfg, "classify")
 
-    assert text == "A\n\nB"
-    assert source == str(root / "classify")
-    assert len(spy.warning) == 1 and "missing.md" in spy.warning[0]
+    assert spy.warning == []
 
 
 def test_packaged_render_prompt_is_resolved_by_default_config() -> None:
     cfg = DirectSkillGenerationHandler._load_config()
     packaged = REPO_ROOT / "resources" / "configs" / "default" / "skill-evolver" / "prompts"
 
+    assert module.STAGES == ("classify", "render", "review")
     for stage in module.STAGES:
-        assert (packaged / stage / cfg.prompt_file).is_file()
+        assert (packaged / stage / cfg.prompt_for(stage)).is_file()
 
 
 # ----------------------------------------------------------- legacy replay
@@ -967,21 +1069,21 @@ async def test_generate_skill_md_reports_middle_omissions(legacy_handler, monkey
 # ------------------------------------------------------------------- config
 
 
-def test_load_config_reads_valid_packaged_default(caplog: pytest.LogCaptureFixture) -> None:
-    with caplog.at_level(logging.WARNING):
-        cfg = DirectSkillGenerationHandler._load_config()
+def test_load_config_reads_valid_packaged_default() -> None:
+    cfg = DirectSkillGenerationHandler._load_config()
 
-    assert cfg.active == "default"
-    assert cfg.prompt_file == "prompt_v1.md"
-    assert "Unsafe variant name" not in caplog.text
+    assert cfg.schema_version == 2
+    assert cfg.prompt_for("classify") == "prompt_v2.md"
+    assert cfg.legacy_format is False
+    assert cfg.source == "packaged"
 
 
 def test_packaged_config_active_passes_variant_validation() -> None:
     config_path = REPO_ROOT / "resources" / "configs" / "default" / "config.skill.evolver.yml"
     data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
 
-    assert module._VARIANT_NAME_PATTERN.fullmatch(str(data["active"]))
-    assert module._VARIANT_NAME_PATTERN.fullmatch(str(data["prompt_file"]))
+    assert data["schema_version"] == 2
+    SkillEvolverConfig.model_validate(data)
 
 
 def test_packaged_prompt_matches_single_call_pipeline() -> None:
@@ -1015,55 +1117,159 @@ def test_load_config_default_max_plans() -> None:
 def _write_user_config(text: str) -> None:
     config_dir = module.initializer.app_paths.config_dir
     config_dir.mkdir(parents=True, exist_ok=True)
-    (config_dir / module.CONFIG_SKILL_EVOLVER_FILE_NAME.name).write_text(text, encoding="utf-8")
+    (config_dir / CONFIG_SKILL_EVOLVER_FILE_NAME.name).write_text(text, encoding="utf-8")
 
 
-@pytest.mark.parametrize(
-    ("raw", "expected", "warns"),
-    [("2.5", 2.5, False), ("0", 0.0, False), ("abc", 1.0, True), ("-1", 1.0, True)],
-)
-def test_load_config_parses_min_evidence_score(
-    raw: str, expected: float, warns: bool, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    warnings: list[tuple] = []
+def _config_problems() -> list[tuple[str, str]]:
+    with pytest.raises(SkillEvolverConfigError) as info:
+        DirectSkillGenerationHandler._load_config()
+    return info.value.problems
 
-    def record(*args, **_kwargs) -> None:
-        warnings.append(args)
 
-    monkeypatch.setattr(module.logger, "warning", record)
+@pytest.mark.parametrize(("raw", "expected"), [("2.5", 2.5), ("0", 0.0)])
+def test_load_config_parses_min_evidence_score(raw: str, expected: float) -> None:
     _write_user_config(f"active: default\nmin_evidence_score: {raw}\n")
 
-    cfg = DirectSkillGenerationHandler._load_config()
-
-    assert cfg.min_evidence_score == expected
-    assert bool(warnings) is warns
-    if warns:
-        assert "min_evidence_score" in warnings[0][0]
+    assert DirectSkillGenerationHandler._load_config().min_evidence_score == expected
 
 
 @pytest.mark.parametrize(
-    ("raw", "expected", "warns"),
-    [("5", 5, False), ("1", 1, False), ("0", 3, True), ("abc", 3, True), ("-2", 3, True)],
+    ("raw", "message"),
+    [
+        ("abc", "must be a finite non-negative number, got 'abc'"),
+        ("-1", "must be a finite non-negative number, got -1"),
+    ],
 )
-def test_load_config_parses_max_plans(raw: str, expected: int, warns: bool, monkeypatch: pytest.MonkeyPatch) -> None:
-    warnings: list[tuple] = []
-    monkeypatch.setattr(module.logger, "warning", lambda *args, **_kwargs: warnings.append(args))
+def test_load_config_rejects_invalid_min_evidence_score(raw: str, message: str) -> None:
+    _write_user_config(f"active: default\nmin_evidence_score: {raw}\n")
+
+    assert _config_problems() == [("min_evidence_score", message)]
+
+
+@pytest.mark.parametrize(("raw", "expected"), [("5", 5), ("1", 1)])
+def test_load_config_parses_max_plans(raw: str, expected: int) -> None:
     _write_user_config(f"active: default\nmax_plans: {raw}\n")
 
-    cfg = DirectSkillGenerationHandler._load_config()
-
-    assert cfg.max_plans == expected
-    assert bool(warnings) is warns
-    if warns:
-        assert "max_plans" in warnings[0][0]
+    assert DirectSkillGenerationHandler._load_config().max_plans == expected
 
 
-def test_load_config_ignores_unsafe_prompt_file(monkeypatch: pytest.MonkeyPatch) -> None:
-    warnings: list[tuple] = []
-    monkeypatch.setattr(module.logger, "warning", lambda *args, **_kwargs: warnings.append(args))
+@pytest.mark.parametrize(
+    ("raw", "message"),
+    [
+        ("0", "must be a positive whole number, got 0"),
+        ("abc", "must be a whole number, got 'abc'"),
+        ("-2", "must be a positive whole number, got -2"),
+    ],
+)
+def test_load_config_rejects_invalid_max_plans(raw: str, message: str) -> None:
+    _write_user_config(f"active: default\nmax_plans: {raw}\n")
+
+    assert _config_problems() == [("max_plans", message)]
+
+
+def test_load_config_rejects_unsafe_prompt_file() -> None:
     _write_user_config("prompt_file: ../../etc/passwd\n")
 
+    assert _config_problems() == [
+        ("prompt_file", "must be a file name without path separators or '..', got '../../etc/passwd'"),
+    ]
+
+
+def test_load_config_v1_user_file_migrates_and_v2_errors_stop() -> None:
+    _write_user_config("active: default\nmin_evidence_score: 2.5\n")
+
     cfg = DirectSkillGenerationHandler._load_config()
 
-    assert cfg.prompt_file is None
-    assert "Unsafe prompt_file" in warnings[0][0]
+    assert cfg.min_evidence_score == 2.5 and cfg.legacy_format is True
+
+    _write_user_config("schema_version: 2\ngate: {min_evidence_score: abc}\n")
+
+    assert _config_problems() == [("gate.min_evidence_score", "must be a finite non-negative number, got 'abc'")]
+
+
+# --------------------------------------------------------------- arguments
+
+
+def test_parse_direct_args() -> None:
+    assert module.parse_direct_args([]) == module.DirectOptions()
+    options = module.parse_direct_args(["last", "--dry-run", "--policy", "reusable_workflow", "--demo"])
+    assert options == module.DirectOptions(target="last", policy="reusable_workflow", demo=True, dry_run=True)
+    assert module.parse_direct_args(["--no-demo", "abc"]) == module.DirectOptions(target="abc", demo=False)
+    for args, message in (
+        (["a", "b"], "unexpected argument 'b'"),
+        (["--bogus"], "unknown argument '--bogus'"),
+        (["--policy"], "--policy requires a value"),
+        (["--policy", "x"], "--policy: expected one of strict_knowledge, reusable_workflow, got 'x'"),
+        (["--demo", "--no-demo"], "--demo and --no-demo cannot be combined"),
+    ):
+        with pytest.raises(module.CliArgsError, match=re.escape(message)):
+            module.parse_direct_args(args)
+
+
+@pytest.mark.asyncio
+async def test_bad_direct_argument_reports_usage_and_stops(pipeline: _Pipeline) -> None:
+    await pipeline.handler.handle(["--bogus"])
+
+    assert pipeline.spy.error == ["unknown argument '--bogus'"]
+    # The usage line is markup-escaped ("\\[last|...").
+    assert any(escape(module.DIRECT_USAGE) in line for line in pipeline.spy.plain)
+    assert pipeline.llm.payloads == []
+
+
+# ------------------------------------------------------- dry run and report
+
+
+@pytest.mark.asyncio
+async def test_direct_dry_run_creates_no_llm_and_no_report(
+    pipeline: _Pipeline, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def boom(_config):
+        raise AssertionError("the LLM must not be created")
+
+    monkeypatch.setattr(module.initializer.llm_factory, "create", boom)
+
+    await pipeline.handler.handle(["--dry-run", "--demo"])
+
+    assert pipeline.spy.error == []
+    assert pipeline.spy.info == [module._DEPRECATION_HINT, module._DRY_RUN_DONE]
+    plain = "\n".join(pipeline.spy.plain)
+    assert "Requested policy: strict_knowledge (config.skill.evolver.yml)" in plain
+    assert "Demo mode: true (--demo)" in plain
+    assert "Effective selection: demo_workflow" in plain
+    assert "Evidence score: " in plain and "Gate: pass (score >= min_evidence_score)" in plain
+    assert "bundle: " in plain and "observed_procedure candidates: " in plain
+    state = module.initializer.get_project_paths(tmp_path).root
+    assert not (state / "skill-evolver").exists()
+    assert not (tmp_path / "skills").exists()
+
+
+@pytest.mark.asyncio
+async def test_direct_run_writes_decision_report_and_prompts_line_lists_review(
+    pipeline: _Pipeline, tmp_path: Path
+) -> None:
+    pipeline.script(_classify_reply(_candidate(_valid_refs())), VALID_SKILL, REVIEW_PASS)
+
+    await pipeline.handler.handle([])
+
+    assert pipeline.spy.error == []
+    decisions = module.initializer.get_project_paths(tmp_path).root / "skill-evolver" / "decisions"
+    (report_path,) = sorted(decisions.glob("*.json"))
+    assert report_path.name.startswith(f"{THREAD_ID}-")
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["report_version"] == 1 and report["command"] == "direct-skill-generation"
+    assert report["thread_id"] == THREAD_ID and report["synthetic"] is False
+    assert report["plans"] == {"rendered": 1, "proposals": 1, "render_errors": 0, "rejected_targets": 0, "deferred": 0}
+    assert report["llm"]["calls_used"] == 3 and report["llm"]["limit"] == 16 and report["llm"]["bound"] == 16
+    assert report["prompts"]["variants"]["review"] == "packaged/review/prompt_v1.md"
+    assert report["gate"]["passes"] is True and report["stop_message"] is None and report["failed"] is None
+    assert report["evidence_text_file"] is None
+    assert not sorted(decisions.glob("*.evidence.md"))
+    plain = pipeline.spy.plain
+    prompts_line = (
+        "Prompts: classify=packaged/classify/prompt_v1.md, render=packaged/render/prompt_v1.md, "
+        "review=packaged/review/prompt_v1.md"
+    )
+    assert any(prompts_line in line for line in plain)
+    assert any("Quality review: passed" in line for line in plain)
+    assert any("Verification: evidence_supported; not executed by generator" in line for line in plain)
+    assert any(line.endswith("Proposal: saved, inactive[/muted]") for line in plain)

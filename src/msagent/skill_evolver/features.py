@@ -26,12 +26,32 @@ been consulted) into :class:`Episode` records whose ``evidence`` items point
 at real events of the source JSONL by :class:`EvidenceRef` (file name and
 physical line — ``seq`` restarts per recorder writer and is display only).
 
-Rules of FEATURES_VERSION 3:
+Rules of FEATURES_VERSION 4:
 
 - Calls are compared inside one *execution context*: a turn group (a turn
   plus the ``resume`` turns that continue it — the only continuation the
   recorder can express) split by subagent. Nothing is matched across a
   following ``dispatch`` turn or between subagents.
+- Context items: ``error_recovery``, ``retry_loop`` and
+  ``repeated_procedure`` cite the user message that opened their turn group
+  as a non-required ``task`` item; ``retry_loop`` and ``repeated_procedure``
+  cite the result or error of their calls. Context never changes weights or
+  anchors. ``Episode.primary_seq`` (the smallest required own seq) is the
+  identity consumers key on; ``evidence_seq`` is display.
+- ``observed_procedure`` (weight 0.0, extracted only when the caller asks
+  for demo evidence): at most OBSERVED_MAX_CHAINS chains per trajectory,
+  each at most OBSERVED_MAX_CALLS consecutive ``ok`` domain calls of one
+  stream, windows cut from the start of a run. A chain needs the group's
+  user message, ``tool.start`` for every call, no ERROR_MARKERS text in any
+  output and a non-empty last output. AI text is never evidence; ``status:
+  ok`` alone is not proof — the observed output is.
+- Every kind has REQUIRED_ROLES; :func:`has_required_evidence` says whether
+  an episode is a usable package. ``gate_decision(demo=True)`` admits a
+  thread with reason ``demo_override`` only when the ordinary rules fail and
+  at least one episode is complete; score and weights stay honest.
+- :func:`expand_episode_context` adds non-required neighbours
+  (``surrounding_events`` calls on each side inside the same stream), the
+  missing results of cited calls and the task; it never invents events.
 - Arguments are compared in normalized form (volatile keys dropped, paths
   and whitespace normalized) and a *work object* — the path or the command
   a call operates on — tells one operation from another.
@@ -66,7 +86,9 @@ import os.path
 import posixpath
 import re
 import shlex
-from dataclasses import dataclass, field
+from collections import Counter
+from collections.abc import Collection
+from dataclasses import dataclass, field, replace
 from typing import Any, Literal, get_args
 
 from msagent.skill_evolver.retrieval import BM25Index
@@ -87,11 +109,12 @@ EpisodeKind = Literal[
     "approval_denied",
     "repeated_procedure",
     "skill_gap",
+    "observed_procedure",
 ]
 EPISODE_KINDS: frozenset[str] = frozenset(get_args(EpisodeKind))
 # Version of the detector rules and weights, recorded in the provenance of
 # every proposal; bump it when a rule or a weight changes.
-FEATURES_VERSION = 3
+FEATURES_VERSION = 4
 
 # Gate threshold when the skill evolver config does not set
 # min_evidence_score; direct_skill_generation re-exports it. The strong
@@ -106,10 +129,53 @@ EPISODE_WEIGHTS: dict[str, float] = {
     "approval_denied": 1.0,
     "repeated_procedure": 1.0,
     "skill_gap": 0.4,
+    # Demo evidence: a confirmed chain of ok calls carries no score at all.
+    "observed_procedure": 0.0,
 }
 # Weight of a user_correction carrying only a weak marker: an observation
 # for the LLM stage that never admits a thread on its own.
 WEAK_CORRECTION_WEIGHT = 0.5
+
+# observed_procedure (demo only): chains selected per trajectory and calls per chain.
+OBSERVED_MAX_CHAINS = 3
+OBSERVED_MAX_CALLS = 5
+
+# Roles an episode must carry as *required* items to be a usable evidence package.
+REQUIRED_ROLES: dict[str, frozenset[str]] = {
+    "error_recovery": frozenset({"error", "fixed_call", "result"}),
+    "user_correction": frozenset({"correction"}),
+    "retry_loop": frozenset({"attempt"}),
+    "approval_denied": frozenset({"approval"}),
+    "repeated_procedure": frozenset({"step"}),
+    "skill_gap": frozenset({"first_call", "user_message"}),
+    "observed_procedure": frozenset({"task", "step", "result"}),
+}
+
+# Output text saying a call did not do its job although its status was ok.
+# Each pattern is compiled on its own (an inline (?i) is per pattern) and
+# matched anywhere; no bare "error" word, which would flag "0 errors".
+ERROR_MARKERS: tuple[str, ...] = (
+    r"Traceback \(most recent call last\)",
+    r"\b[A-Z][A-Za-z0-9_]*(?:Error|Exception)\b",
+    r"(?i)\berror:",
+    r"(?i)\bfatal:",
+    r"\bFAILED\b",
+    r"No such file or directory",
+    r"command not found",
+    r"Permission denied",
+    r"(?i)\b(?:exit code|exit status)\s+[1-9]\d*\b",
+    r"(?i)\bnon-zero exit\b",
+)
+_ERROR_MARKER_RES = tuple(re.compile(pattern) for pattern in ERROR_MARKERS)
+
+# Why the observed_procedure detector left a chain out (DetectorNote.reason).
+DROP_NO_COMPLETED_CALLS = "no_completed_calls"
+DROP_NO_TASK = "no_task_context"
+DROP_MISSING_START = "missing_tool_start"
+DROP_EMPTY_RESULT = "empty_result"
+DROP_ERROR_IN_OUTPUT = "error_in_output"
+DROP_CHAIN_LIMIT = "chain_limit"
+DROP_DUPLICATE = "duplicate_chain"
 
 # Explicit corrective instructions (ru + en), matched case-insensitively as
 # substrings of the user message; with an observed change of the agent's
@@ -195,6 +261,9 @@ ELLIPSIS = "…"
 # Error text keeps its head and its tail: a traceback ends with the exception.
 ERROR_HEAD = 100
 ERROR_TAIL = 180
+# An observed outcome keeps its head and tail too (60 + ELLIPSIS + 139 = VALUE_LIMIT).
+OUTCOME_HEAD = 60
+OUTCOME_TAIL = 139
 # Characters kept on each side of the changed part of an argument value.
 DIFF_CONTEXT = 60
 # Characters kept on each side of the correction marker of a user message.
@@ -205,6 +274,10 @@ GATE_NO_EPISODES = "no episodes"
 GATE_SCORE_REACHED = "score >= min_evidence_score"
 GATE_SCORE_BELOW = "score < min_evidence_score"
 GATE_STRONG_CORRECTION = "strong user correction"
+# Demo mode: the ordinary rules failed but an episode is a complete package.
+GATE_DEMO_OVERRIDE = "demo_override"
+# GateDecision.detail when demo mode could not override a failing gate.
+GATE_DEMO_NOT_APPLICABLE = "no episode has complete required evidence"
 
 
 @dataclass(frozen=True, slots=True)
@@ -260,6 +333,16 @@ class Episode:
         """
         return sorted({item.ref.seq for item in self.evidence if item.ref.source == self.source})
 
+    @property
+    def primary_seq(self) -> int:
+        """Smallest own-thread seq among the *required* items: the event the episode is about.
+
+        Stable when context items (the task, neighbours) are added; exgraph
+        keys Episode nodes by it. Falls back to ``evidence_seq[0]``.
+        """
+        seqs = [item.ref.seq for item in self.evidence if item.required and item.ref.source == self.source]
+        return min(seqs) if seqs else self.evidence_seq[0]
+
     def __post_init__(self) -> None:
         if self.kind not in EPISODE_KINDS:
             raise ValueError(f"unknown episode kind {self.kind!r}")
@@ -299,13 +382,38 @@ class ApprovalVerdict:
 
 
 @dataclass(frozen=True, slots=True)
+class DetectorNote:
+    """Why a detector left a candidate out: a diagnostic for reports and the dry run, never evidence."""
+
+    detector: str
+    reason: str
+    detail: str
+    # Own-thread seqs concerned (display only).
+    seqs: list[int] = field(default_factory=list)
+
+
+@dataclass(frozen=True, slots=True)
 class GateDecision:
-    """Whether a thread's episodes reach the LLM stage, and why."""
+    """Whether a thread's episodes reach the LLM stage, and why.
+
+    ``detail`` is set in demo mode only: which kinds carried complete
+    required evidence, or why the override did not apply.
+    """
 
     incidents: list[list[Episode]]
     score: float
     passes: bool
     reason: str
+    detail: str = ""
+
+    def describe(self) -> str:
+        """``reason`` or ``reason; detail`` — the text the tables and the Gate line print."""
+        return self.reason if not self.detail else f"{self.reason}; {self.detail}"
+
+
+def has_required_evidence(episode: Episode) -> bool:
+    """True when the episode's required items cover every role of REQUIRED_ROLES for its kind."""
+    return REQUIRED_ROLES[episode.kind] <= {item.role for item in episode.evidence if item.required}
 
 
 # ------------------------------------------------------------------ helpers
@@ -375,10 +483,48 @@ def _turn_ref(traj: Trajectory, turn: Turn) -> EvidenceRef:
     return traj.event_ref(seq=turn.seq_start, line=turn.line_start)
 
 
-def _end_item(traj: Trajectory, call: ToolCall, role: str, *, snippet: str | None = None) -> list[EvidenceItem]:
-    """A required item for the end of ``call``, or nothing for an orphan."""
+def _end_item(
+    traj: Trajectory,
+    call: ToolCall,
+    role: str,
+    *,
+    snippet: str | None = None,
+    required: bool = True,
+) -> list[EvidenceItem]:
+    """An item for the end of ``call`` (required by default), or nothing for an orphan."""
     ref = _end(traj, call)
-    return [] if ref is None else [EvidenceItem(ref, role, True, snippet)]
+    return [] if ref is None else [EvidenceItem(ref, role, required, snippet)]
+
+
+def _heads(traj: Trajectory) -> dict[int, Turn]:
+    """Group head of every turn, keyed by ``id(turn)`` (``Turn`` is not hashable)."""
+    return {id(turn): group[0] for group in _groups(traj) for turn in group}
+
+
+def _task_item(traj: Trajectory, head: Turn, *, required: bool) -> list[EvidenceItem]:
+    """The ``task`` item citing the user message that opened a turn group.
+
+    Empty for the prelude and for a head without a message (a synthetic
+    ``unknown`` turn, a message-less dispatch): an earlier group's message is
+    never borrowed.
+    """
+    if head.run_id == PRELUDE_RUN_ID or not (head.user_message or "").strip():
+        return []
+    return [EvidenceItem(_turn_ref(traj, head), "task", required)]
+
+
+def _clip_outcome(text: str) -> str:
+    """The head and the tail of an observed output, cut marked (at most VALUE_LIMIT)."""
+    return _clip_edges(text, head=OUTCOME_HEAD, tail=OUTCOME_TAIL)
+
+
+def _error_marker(text: str) -> str | None:
+    """The first ERROR_MARKERS match in ``text``, or ``None``."""
+    for pattern in _ERROR_MARKER_RES:
+        match = pattern.search(text)
+        if match:
+            return match.group(0)
+    return None
 
 
 def _canonical(value: Any) -> str:
@@ -667,10 +813,11 @@ def _detect_error_recovery(traj: Trajectory) -> list[Episode]:
 
     Required evidence: the error (``tool.error``, or the ``tool.result``
     whose ``output_text`` carries it), the changed call and its result; the
-    failed call's start is context.
+    failed call's start and the group's user message (``task``) are context.
     """
     episodes: list[Episode] = []
     for group in _groups(traj):
+        task = _task_item(traj, group[0], required=False)
         for stream in _streams(group):
             for index, (turn, failed) in enumerate(stream):
                 if failed.status != "error":
@@ -692,6 +839,7 @@ def _detect_error_recovery(traj: Trajectory) -> list[Episode]:
                                     *_end_item(traj, candidate, "result"),
                                     EvidenceItem(_start(traj, candidate), "fixed_call", True),
                                     EvidenceItem(_start(traj, failed), "failed_call", False),
+                                    *task,
                                 ],
                                 [call.name for _, call in between],
                                 {
@@ -822,7 +970,16 @@ def _search_signature(call: ToolCall) -> str:
     return _canonical({key: value for key, value in args.items() if key in SEARCH_KEYS})
 
 
-def _retry_episode(traj: Trajectory, chain: list[_Step], subject: str) -> list[Episode]:
+def _attempt_items(traj: Trajectory, call: ToolCall, *, required: bool) -> list[EvidenceItem]:
+    """One attempt of a retry loop: its start and, unless it is an orphan, its result or error."""
+    if call.status == "error":
+        end = _end_item(traj, call, "error", snippet=_clip_edges(call.error or call.output_text), required=required)
+    else:
+        end = _end_item(traj, call, "result", required=required)
+    return [EvidenceItem(_start(traj, call), "attempt", required), *end]
+
+
+def _retry_episode(traj: Trajectory, chain: list[_Step], subject: str, head: Turn) -> list[Episode]:
     """The retry_loop episode of one (tool, work object) chain, if it qualifies."""
     if len(chain) < RETRY_MIN_ATTEMPTS:
         return []
@@ -844,7 +1001,14 @@ def _retry_episode(traj: Trajectory, chain: list[_Step], subject: str) -> list[E
         _episode(
             "retry_loop",
             traj,
-            [EvidenceItem(_start(traj, call), "attempt", index in (0, last)) for index, call in enumerate(calls)],
+            [
+                *(
+                    item
+                    for index, call in enumerate(calls)
+                    for item in _attempt_items(traj, call, required=index in (0, last))
+                ),
+                *_task_item(traj, head, required=False),
+            ],
             [call.name for call in calls],
             {
                 "tool_name": calls[0].name,
@@ -854,6 +1018,7 @@ def _retry_episode(traj: Trajectory, chain: list[_Step], subject: str) -> list[E
                 "args_variants": list(variants.values()),
                 "statuses": [call.status for call in calls],
                 "run_id": chain[0][0].run_id,
+                "outcome": _clip_outcome(calls[-1].error or calls[-1].output_text),
             },
             [_anchor(turn.run_id, call.seq_start) for turn, call in chain],
         ),
@@ -871,8 +1036,9 @@ def _detect_retry_loop(traj: Trajectory) -> list[Episode]:
     argument keys alone are not a retry: reading three files is a fan-out,
     and a parameter sweep that never failed is not a loop.
 
-    Required evidence: the first and the last attempt; the attempts between
-    them are context.
+    Required evidence: the first and the last attempt with their results or
+    errors; the attempts between them and the group's user message (``task``)
+    are context.
     """
     episodes: list[Episode] = []
     for group in _groups(traj):
@@ -884,7 +1050,7 @@ def _detect_retry_loop(traj: Trajectory) -> list[Episode]:
                     continue
                 chains.setdefault((call.name, subject), []).append((turn, call))
             for (_, subject), chain in chains.items():
-                episodes.extend(_retry_episode(traj, chain, subject))
+                episodes.extend(_retry_episode(traj, chain, subject, group[0]))
     return episodes
 
 
@@ -1002,32 +1168,12 @@ def _detect_skill_gap(traj: Trajectory, index: BM25Index) -> list[Episode]:
     ]
 
 
-# --------------------------------------------------------------- public API
-
-
-def extract_episodes(
-    traj: Trajectory,
-    *,
-    skill_index: BM25Index | None = None,
-) -> list[Episode]:
-    """Run every per-trajectory detector; ``skill_gap`` needs a skill index."""
-    episodes = [
-        *_detect_error_recovery(traj),
-        *_detect_user_correction(traj),
-        *_detect_retry_loop(traj),
-        *_detect_approval_denied(traj),
-    ]
-    if skill_index is not None:
-        episodes.extend(_detect_skill_gap(traj, skill_index))
-    return episodes
-
-
-def _procedure_segments(traj: Trajectory) -> list[list[_Step]]:
+def _procedure_segments(traj: Trajectory, *, min_len: int = NGRAM_MIN) -> list[list[_Step]]:
     """Runs of ``ok`` domain calls inside one stream: the steps of a procedure.
 
     Catalog calls are not steps and are skipped; a call that failed or never
     finished ends the segment, so a repeated failure is never mined as a
-    procedure. Segments shorter than NGRAM_MIN are dropped.
+    procedure. Segments shorter than ``min_len`` are dropped.
     """
     segments: list[list[_Step]] = []
     for group in _groups(traj):
@@ -1037,14 +1183,240 @@ def _procedure_segments(traj: Trajectory) -> list[list[_Step]]:
                 if call.name in CATALOG_TOOLS:
                     continue
                 if call.status != "ok":
-                    if len(current) >= NGRAM_MIN:
+                    if len(current) >= min_len:
                         segments.append(current)
                     current = []
                     continue
                 current.append((turn, call))
-            if len(current) >= NGRAM_MIN:
+            if len(current) >= min_len:
                 segments.append(current)
     return segments
+
+
+def _note(notes: list[DetectorNote] | None, reason: str, detail: str, seqs: list[int]) -> None:
+    """Record why the observed_procedure detector dropped a chain, when the caller collects notes."""
+    if notes is not None:
+        notes.append(DetectorNote("observed_procedure", reason, detail, seqs))
+
+
+def _chain_problem(head: Turn, chain: list[_Step]) -> tuple[str, str] | None:
+    """Why ``chain`` is not a confirmed procedure — ``(DROP_* reason, detail)`` — or ``None``.
+
+    Checked in order: the group head has no user message (an earlier group's
+    message is never borrowed), a call was recorded without ``tool.start``
+    (its arguments are unknown), an output carries an ERROR_MARKERS text
+    (any step: an erroneous intermediate result is not a confirmed
+    procedure), the last output is empty (no observable outcome).
+    """
+    if head.run_id == PRELUDE_RUN_ID or not (head.user_message or "").strip():
+        return DROP_NO_TASK, f"turn {head.run_id} ({head.source}) has no user message"
+    for _, call in chain:
+        if call.line_end == call.line_start:
+            detail = f"{call.name} at seq {call.seq_start} was recorded without tool.start; its arguments are unknown"
+            return DROP_MISSING_START, detail
+    for _, call in chain:
+        marker = _error_marker(call.output_text)
+        if marker is not None:
+            return (
+                DROP_ERROR_IN_OUTPUT,
+                f"{call.name} at seq {call.seq_end} returned ok but its output contains {marker!r}",
+            )
+    last = chain[-1][1]
+    if not last.output_text.strip():
+        return DROP_EMPTY_RESULT, f"last call {last.name} at seq {last.seq_end} has no output; no observable outcome"
+    return None
+
+
+def _observed_episode(traj: Trajectory, head: Turn, chain: list[_Step], chain_index: int) -> Episode:
+    """The observed_procedure episode of one confirmed chain."""
+    last = chain[-1][1]
+    return _episode(
+        "observed_procedure",
+        traj,
+        [
+            EvidenceItem(_turn_ref(traj, head), "task", True),
+            *(
+                item
+                for _, call in chain
+                for item in (
+                    EvidenceItem(_start(traj, call), "step", True),
+                    *_end_item(traj, call, "result", snippet=_clip_edges(call.output_text)),
+                )
+            ),
+        ],
+        [call.name for _, call in chain],
+        {
+            "task": _clip(head.user_message),
+            "run_id": chain[0][0].run_id,
+            "subagent": chain[0][1].subagent,
+            "chain_index": chain_index,
+            "calls": len(chain),
+            "steps": [
+                {
+                    "tool": call.name,
+                    "work_object": _work_object(call),
+                    "args": _clip_args(call.args),
+                    "result": _clip_outcome(call.output_text),
+                }
+                for _, call in chain
+            ],
+            "outcome": _clip_outcome(last.output_text),
+            "verification": f"observed output of {last.name}: {_clip_outcome(last.output_text)}",
+        },
+        [_anchor(turn.run_id, call.seq_start) for turn, call in chain],
+    )
+
+
+def _detect_observed_procedure(traj: Trajectory, notes: list[DetectorNote] | None = None) -> list[Episode]:
+    """Short chains of ``ok`` domain calls with their task and outputs (demo evidence).
+
+    Segments of :func:`_procedure_segments` (any length) are cut into
+    consecutive windows of at most OBSERVED_MAX_CALLS calls from the start —
+    the head of a procedure carries its inputs — and at most
+    OBSERVED_MAX_CHAINS windows become episodes, in model order. A window is
+    dropped for the first problem :func:`_chain_problem` finds, then as a
+    duplicate, and only an otherwise valid window for the chain limit; every
+    drop is reported through ``notes``. AI messages are never read: an assistant
+    saying "done" without a completed call yields no chain at all
+    (DROP_NO_COMPLETED_CALLS). Windows are disjoint, so no two chains share
+    a ref; the duplicate check is a defensive invariant.
+
+    Required evidence: the task (the group's user message), every step and
+    its result. Weight 0.0: a chain admits a thread only through the demo
+    gate, never through the score.
+    """
+    heads = _heads(traj)
+    segments = _procedure_segments(traj, min_len=1)
+    if not segments:
+        calls = [call for call in _flat_calls(traj) if call.name not in CATALOG_TOOLS]
+        counts = Counter(call.status for call in calls)
+        detail = (
+            f"{len(calls)} domain calls: {counts['ok']} ok, {counts['error']} error, "
+            f"{counts['orphan']} orphan; no completed chain"
+        )
+        _note(notes, DROP_NO_COMPLETED_CALLS, detail, [])
+        return []
+    episodes: list[Episode] = []
+    seen: set[tuple[EvidenceRef, ...]] = set()
+    for segment in segments:
+        for start in range(0, len(segment), OBSERVED_MAX_CALLS):
+            window = segment[start : start + OBSERVED_MAX_CALLS]
+            names = ", ".join(call.name for _, call in window)
+            seqs = [call.seq_start for _, call in window]
+            head = heads[id(window[0][0])]
+            problem = _chain_problem(head, window)
+            if problem is not None:
+                _note(notes, problem[0], problem[1], seqs)
+                continue
+            key = tuple(ref for _, call in window for ref in (_start(traj, call), _end(traj, call)) if ref is not None)
+            if key in seen:
+                _note(notes, DROP_DUPLICATE, f"chain {names} cites the same events as an earlier chain", seqs)
+                continue
+            if len(episodes) == OBSERVED_MAX_CHAINS:
+                _note(
+                    notes,
+                    DROP_CHAIN_LIMIT,
+                    f"chain {names} skipped: {OBSERVED_MAX_CHAINS} chains already selected",
+                    seqs,
+                )
+                continue
+            seen.add(key)
+            episodes.append(_observed_episode(traj, head, window, len(episodes) + 1))
+    return episodes
+
+
+# --------------------------------------------------------------- public API
+
+
+def extract_episodes(
+    traj: Trajectory,
+    *,
+    skill_index: BM25Index | None = None,
+    demo: bool = False,
+    notes: list[DetectorNote] | None = None,
+) -> list[Episode]:
+    """Run every per-trajectory detector; ``skill_gap`` needs a skill index.
+
+    ``demo`` adds the ``observed_procedure`` detector, whose drop reasons are
+    appended to ``notes`` when a list is given.
+    """
+    episodes = [
+        *_detect_error_recovery(traj),
+        *_detect_user_correction(traj),
+        *_detect_retry_loop(traj),
+        *_detect_approval_denied(traj),
+    ]
+    if skill_index is not None:
+        episodes.extend(_detect_skill_gap(traj, skill_index))
+    if demo:
+        episodes.extend(_detect_observed_procedure(traj, notes))
+    return episodes
+
+
+def _context_items(traj: Trajectory, call: ToolCall) -> list[EvidenceItem]:
+    """Non-required items for a neighbouring call: its start and its result or error."""
+    start, end = _start(traj, call), _end(traj, call)
+    items: list[EvidenceItem] = []
+    if end != start:
+        items.append(EvidenceItem(start, "context_call", False))
+    if end is not None:
+        if call.status == "error":
+            items.append(EvidenceItem(end, "context_error", False, _clip_edges(call.error or call.output_text)))
+        else:
+            items.append(EvidenceItem(end, "context_result", False))
+    return items
+
+
+def expand_episode_context(
+    episodes: list[Episode],
+    traj: Trajectory,
+    *,
+    surrounding_events: int,
+    only: Collection[int] | None = None,
+) -> list[Episode]:
+    """Episodes of ``traj`` with the neighbours of their cited calls added as context.
+
+    For every cited call, the ``surrounding_events`` calls before and after
+    it inside the same stream contribute non-required ``context_call`` and
+    ``context_result`` / ``context_error`` items, the call's own missing
+    result is added the same way, and the group's user message becomes a
+    ``task`` item. With ``surrounding_events == 0`` only the missing results
+    and the task are added. ``only`` restricts the expansion to the listed
+    indices. An episode that gains nothing is returned as the same object;
+    an episode of another trajectory (the second thread of a
+    ``repeated_procedure``) is never touched. Anchors, facts and weights are
+    unchanged: nothing is invented.
+    """
+    if surrounding_events < 0:
+        raise ValueError(f"surrounding_events must be >= 0, got {surrounding_events}")
+    positions: dict[EvidenceRef, tuple[Turn, list[_Step], int]] = {}
+    for group in _groups(traj):
+        for stream in _streams(group):
+            for index, (_, call) in enumerate(stream):
+                positions.setdefault(_start(traj, call), (group[0], stream, index))
+                end = _end(traj, call)
+                if end is not None:
+                    positions.setdefault(end, (group[0], stream, index))
+    expanded: list[Episode] = []
+    for position, episode in enumerate(episodes):
+        if (only is not None and position not in only) or episode.source != traj.source:
+            expanded.append(episode)
+            continue
+        refs = {item.ref for item in episode.evidence}
+        new: list[EvidenceItem] = []
+        for item in list(episode.evidence):
+            found = positions.get(item.ref)
+            if found is None:
+                continue
+            head, stream, index = found
+            neighbours = stream[max(0, index - surrounding_events) : index + surrounding_events + 1]
+            candidates = [context for _, call in neighbours for context in _context_items(traj, call)]
+            for candidate in [*candidates, *_task_item(traj, head, required=False)]:
+                if candidate.ref not in refs:
+                    refs.add(candidate.ref)
+                    new.append(candidate)
+        expanded.append(episode if not new else replace(episode, evidence=[*episode.evidence, *new]))
+    return expanded
 
 
 def _is_extended(
@@ -1079,9 +1451,10 @@ def mine_cross_session(
     evidence, the steps of that trajectory and of the lexicographically
     first other supporting thread — proof from two sessions, while
     ``facts["support"]`` counts every supporting thread (all listed in
-    ``facts["thread_ids"]``). A shared n-gram says that several sessions
-    issued these calls in this order and each returned ``ok`` — not that
-    the task succeeded.
+    ``facts["thread_ids"]``). The owner's results and the user message of
+    its turn group (``task``) are context. A shared n-gram says that several
+    sessions issued these calls in this order and each returned ``ok`` — not
+    that the task succeeded.
     """
     if min_support < 2:
         raise ValueError(f"min_support must be >= 2, got {min_support}")
@@ -1106,6 +1479,7 @@ def mine_cross_session(
         segment_index, start = first_seen[gram, thread_id]
         return segments_by_thread[thread_id][segment_index][start : start + len(gram)]
 
+    heads_by_thread: dict[str, dict[int, Turn]] = {}
     episodes: list[Episode] = []
     for gram in sorted(frequent, key=lambda g: (-len(frequent[g]), -len(g), g)):
         if _is_extended(gram, frequent):
@@ -1114,13 +1488,27 @@ def mine_cross_session(
         owner = min(threads, key=order.__getitem__)
         second = min(threads - {owner})
         own, other = steps_of(gram, owner), steps_of(gram, second)
+        owner_traj = by_thread[owner]
+        if owner not in heads_by_thread:
+            heads_by_thread[owner] = _heads(owner_traj)
+        owner_head = heads_by_thread[owner][id(own[0][0])]
         episodes.append(
             _episode(
                 "repeated_procedure",
-                by_thread[owner],
+                owner_traj,
                 [
-                    *(EvidenceItem(_start(by_thread[owner], call), "step", True) for _, call in own),
+                    *(
+                        item
+                        for _, call in own
+                        for item in (
+                            EvidenceItem(_start(owner_traj, call), "step", True),
+                            *_end_item(
+                                owner_traj, call, "result", snippet=_clip_edges(call.output_text), required=False
+                            ),
+                        )
+                    ),
                     *(EvidenceItem(_start(by_thread[second], call), "step", True) for _, call in other),
+                    *_task_item(owner_traj, owner_head, required=False),
                 ],
                 list(gram),
                 {
@@ -1141,8 +1529,11 @@ def group_incidents(episodes: list[Episode]) -> list[list[Episode]]:
     """Episodes about the same events, grouped: connected components over anchors.
 
     An episode without anchors is keyed on its own identity, so an exact
-    duplicate joins its twin and nothing else. Incidents are ordered by
-    their first episode; episodes keep list order inside an incident.
+    duplicate joins its twin and nothing else. A zero-weight episode (an
+    observed_procedure chain) joins the incident of the first anchor it
+    shares but never bridges two incidents, so demo changes neither the
+    incident count nor the score. Incidents are ordered by their first
+    episode; episodes keep list order inside an incident.
     """
     parent = list(range(len(episodes)))
 
@@ -1154,17 +1545,29 @@ def group_incidents(episodes: list[Episode]) -> list[list[Episode]]:
 
     owner: dict[str, int] = {}
     for index, episode in enumerate(episodes):
-        keys = episode.anchors or [
-            f"{episode.kind}@{episode.thread_id}:{episode.evidence_seq}",
-        ]
-        for key in keys:
+        if episode.weight <= 0.0:
+            continue
+        for key in _incident_keys(episode):
             root = find(owner.setdefault(key, index))
             if root != find(index):
                 parent[root] = find(index)
+    for index, episode in enumerate(episodes):
+        if episode.weight > 0.0:
+            continue
+        shared = next((find(owner[key]) for key in _incident_keys(episode) if key in owner), None)
+        if shared is not None:
+            parent[index] = shared
+        for key in _incident_keys(episode):
+            owner.setdefault(key, index)
     incidents: dict[int, list[Episode]] = {}
     for index, episode in enumerate(episodes):
         incidents.setdefault(find(index), []).append(episode)
     return list(incidents.values())
+
+
+def _incident_keys(episode: Episode) -> list[str]:
+    """The anchors an episode is grouped by, or its own identity when it has none."""
+    return episode.anchors or [f"{episode.kind}@{episode.thread_id}:{episode.evidence_seq}"]
 
 
 def _incident_score(incidents: list[list[Episode]]) -> float:
@@ -1182,7 +1585,7 @@ def evidence_score(episodes: list[Episode]) -> float:
     return _incident_score(group_incidents(episodes))
 
 
-def gate_decision(episodes: list[Episode], *, min_score: float) -> GateDecision:
+def gate_decision(episodes: list[Episode], *, min_score: float, demo: bool = False) -> GateDecision:
     """Whether the episodes admit their thread to the LLM stage, and why.
 
     A thread with no episodes never passes. It passes when the incident
@@ -1190,7 +1593,11 @@ def gate_decision(episodes: list[Episode], *, min_score: float) -> GateDecision:
     holds a strong ``user_correction`` and ``min_score`` is at most
     DEFAULT_MIN_EVIDENCE_SCORE: one explicit correction with an observed
     change of action is worth analysing at the default settings, while a
-    stricter threshold opts out of the rule.
+    stricter threshold opts out of the rule. In demo mode a thread the
+    ordinary rules refuse still passes (GATE_DEMO_OVERRIDE) when at least
+    one episode :func:`has_required_evidence`; otherwise the refusal
+    carries GATE_DEMO_NOT_APPLICABLE as its detail. Score, weights and
+    incidents are never altered.
     """
     incidents = group_incidents(episodes)
     score = _incident_score(incidents)
@@ -1203,4 +1610,11 @@ def gate_decision(episodes: list[Episode], *, min_score: float) -> GateDecision:
     )
     if strong and min_score <= DEFAULT_MIN_EVIDENCE_SCORE:
         return GateDecision(incidents, score, True, GATE_STRONG_CORRECTION)
+    if demo:
+        complete = sorted({episode.kind for episode in episodes if has_required_evidence(episode)})
+        if complete:
+            verb = "has" if len(complete) == 1 else "have"
+            detail = f"{', '.join(complete)} {verb} required evidence"
+            return GateDecision(incidents, score, True, GATE_DEMO_OVERRIDE, detail)
+        return GateDecision(incidents, score, False, GATE_SCORE_BELOW, GATE_DEMO_NOT_APPLICABLE)
     return GateDecision(incidents, score, False, GATE_SCORE_BELOW)

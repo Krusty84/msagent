@@ -61,6 +61,24 @@ def test_episodes_come_from_features_not_a_fork() -> None:
     assert "user_correction" in kinds
 
 
+def test_two_recoveries_in_one_turn_are_two_episode_nodes() -> None:
+    """Both recoveries cite the turn's user message (seq 2) as context; nodes are keyed by primary_seq."""
+    trajectory = load_trajectory(SIGNALS)
+    graph = build_from_path(SIGNALS)
+    episodes = enrich_graph(graph, trajectory)
+    recoveries = [e for e in episodes if e.kind == "error_recovery"]
+    assert [e.primary_seq for e in recoveries] == [5, 8]
+    assert all(2 in e.evidence_seq for e in recoveries)
+    nodes = sorted(
+        node.id for node in graph.nodes.values() if node.type == "Episode" and node.attrs["kind"] == "error_recovery"
+    )
+    assert len(nodes) == 2
+    assert [node.rsplit(":", 1)[1] for node in nodes] == ["5", "8"]
+    assert nodes == [f"episode:{trajectory.thread_id}:error_recovery:{seq}" for seq in (5, 8)]
+    episode_nodes = [node for node in graph.nodes.values() if node.type == "Episode"]
+    assert len(episode_nodes) == len(episodes)
+
+
 def test_fixed_by_user_correction_and_recovery() -> None:
     trajectory = load_trajectory(SIGNALS)
     graph = build_from_path(SIGNALS)
@@ -105,8 +123,14 @@ def test_overlay_uses_mine_cross_session(tmp_path: Path) -> None:
 
 
 def test_evolver_pool_limit_unchanged() -> None:
-    mining = (REPO_ROOT / "src/msagent/skill_evolver/mining.py").read_text(encoding="utf-8")
+    import inspect
+
+    import msagent.cli.handlers  # noqa: F401
+    from msagent.skill_evolver import mining
+    from msagent.skill_evolver.config import CROSS_SESSION_LIMIT, SkillEvolverConfig
+
     direct = (REPO_ROOT / "src/msagent/skill_evolver/direct_skill_generation.py").read_text(encoding="utf-8")
     assert "CROSS_SESSION_LIMIT = 20" in direct
-    assert "pool = listing[:CROSS_SESSION_LIMIT]" in mining
-    assert "select_trajectories(" in mining
+    assert CROSS_SESSION_LIMIT == 20
+    assert SkillEvolverConfig(schema_version=2).evidence.cross_session_limit == 20
+    assert inspect.signature(mining.select_trajectories).parameters["cross_session_limit"].default == 20

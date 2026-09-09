@@ -1,6 +1,28 @@
-active: default                  # legacy replay variant: a folder under skill-evolver/prompts/ (the evidence pipeline does not use it)
-prompt_file: prompt_v1.md        # prompt file inside each stage folder (prompts/classify/, prompts/render/); unset = all *.md of the folder
-# category: default             # library category a proposal is meant for (recorded in provenance.json; nothing is written there automatically)
-# output_dir: ~/.msagent/skills # root that receives .proposals/<thread>/<name>/; by default: <working_dir>/skills
-# min_evidence_score: 1.0      # code-computed evidence (features.evidence_score) a session needs before the LLM is called
-# max_plans: 3                 # most SKILL.md proposals rendered per thread (each costs up to two LLM calls); extra plans are listed as deferred
+# Skill Evolver (/skill-mine, /direct-skill-generation). schema_version 2; a flat v1 file without
+# schema_version is still read and migrated in memory (min_evidence_score -> gate, max_plans/category/output_dir -> generation).
+schema_version: 2
+demo_mode: false                    # demonstration overlay: a confirmed but trivial procedure may become a demo-<task-class> proposal
+classification:
+  policy: strict_knowledge          # strict_knowledge | reusable_workflow
+gate:
+  min_evidence_score: 1.0           # evidence score a thread needs before the LLM is called; demo_mode bypasses it (demo_override)
+evidence:
+  excerpt_max_chars: 1000           # longest cut of one recorded event shown in the bundle
+  bundle_max_chars: 30000           # bundle size; the model context window is checked separately at run time
+  surrounding_events: 2             # neighbours added on each side by expand_context_once
+  cross_session_limit: 20           # newest trajectories of the agent mined for repeated procedures
+on_nothing:
+  action: expand_context_once       # stop | expand_context_once (one more classify round, only on insufficient_evidence)
+generation:
+  max_plans_per_thread: 3           # SKILL.md proposals per thread; extra plans are listed as deferred
+  max_llm_calls_per_thread: 16      # every ainvoke counts: classify, retries, render, corrections, quality review
+  category: default                 # library category recorded in provenance (one directory name)
+  output_dir: null                  # null -> <working_dir>/skills; a relative path is resolved against working_dir
+prompts:
+  contract_version: 2               # each prompt file must declare '## contract_version: 2' in its header
+  classify: prompt_v2.md            # file names inside skill-evolver/prompts/<stage>/ (user copy first, then packaged)
+  render: prompt_v2.md
+  review: prompt_v2.md
+diagnostics:
+  save_decision_report: true        # <project state>/skill-evolver/decisions/<thread>-<utc>.json, also when nothing is saved
+  save_evidence_text: false         # additionally store the evidence bundle text next to the report

@@ -84,7 +84,7 @@ def attach_episodes(graph: ExperienceGraph, trajectory: Trajectory) -> list[Epis
     episodes = extract_episodes(trajectory)
     graph.schema_version = SCHEMA_VERSION
     for episode in episodes:
-        first = episode.evidence_seq[0]
+        first = episode.primary_seq
         nid = episode_id(episode.thread_id, episode.kind, first)
         graph.add_node(
             Node(
@@ -110,18 +110,18 @@ def attach_episodes(graph: ExperienceGraph, trajectory: Trajectory) -> list[Epis
 def attach_fixed_by(graph: ExperienceGraph, episodes: list[Episode]) -> None:
     """Case- and step-level FIXED_BY. Does not change Case.r."""
     for episode in episodes:
-        eid = episode_id(episode.thread_id, episode.kind, episode.evidence_seq[0])
+        eid = episode_id(episode.thread_id, episode.kind, episode.primary_seq)
         if episode.kind == "user_correction":
             after = episode.facts.get("run_id_after")
             before = episode.facts.get("run_id_before")
-            dst = case_id(str(after)) if after else _case_for_seq(graph, episode.evidence_seq[0])
+            dst = case_id(str(after)) if after else _case_for_seq(graph, episode.primary_seq)
             src = case_id(str(before)) if before else (_previous_case(graph, dst) if dst else None)
             if src and dst and src in graph.nodes and dst in graph.nodes:
                 _link(graph, "FIXED_BY", src, dst, via="user_correction", episode=eid)
             continue
         if episode.kind != "error_recovery":
             continue
-        owner = _case_for_seq(graph, episode.evidence_seq[0])
+        owner = _case_for_seq(graph, episode.primary_seq)
         if owner is None:
             continue
         tool = str(episode.facts.get("tool") or "")

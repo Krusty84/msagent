@@ -32,16 +32,22 @@ from msagent.skill_evolver.classify import EMPTY_REPLY, Candidate
 from msagent.skill_evolver.render import (
     AMBIGUOUS_TARGET,
     CANDIDATES_PLACEHOLDER,
+    EVIDENCE_LINE_OVERHEAD,
     EXISTING_SKILL_PLACEHOLDER,
     INVALID_TARGET,
     NO_EXISTING_SKILL,
-    RENDER_EVIDENCE_LIMIT,
+    RENDER_POLICY_PLACEHOLDER,
+    EvidenceSelection,
+    InsufficientContextBudget,
     RenderPlan,
     RenderPlans,
     format_candidates,
     format_existing_skill,
     plan_render,
     render_skill_md,
+    resolve_library_skill,
+    revise_skill_md,
+    select_plan_evidence,
     select_render_evidence,
 )
 from msagent.skills.factory import Skill
@@ -49,11 +55,15 @@ from msagent.trajectory_recorder.model import EvidenceRef
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 PROMPT_PATH = (
-    REPO_ROOT / "resources" / "configs" / "default" / "skill-evolver" / "prompts" / "render" / "prompt_v1.md"
+    REPO_ROOT / "resources" / "configs" / "default" / "skill-evolver" / "prompts" / "render" / "prompt_v2.md"
 )
 LOGGER = "msagent.skill_evolver.render"
 
-TEMPLATE = "Render.\n\n# Candidates\n\n{candidates}\n\n# Existing\n\n{existing_skill}\n\nReply with SKILL.md."
+TEMPLATE = (
+    "Render.\n\n# Policy\n\n{render_policy}\n\n# Candidates\n\n{candidates}\n\n"
+    "# Existing\n\n{existing_skill}\n\nReply with SKILL.md."
+)
+POLICY = "Selection policy: test. Name it after the task class."
 VALID = "\n".join(
     [
         "---",
@@ -113,6 +123,11 @@ SHOWN = {
     "ev3": _fragment("ev3", "tool.result bash (ok): ok built 42 targets"),
     "ev4": _fragment("ev4", 'user: "please build it"', required=False),
 }
+
+
+def _cost(*ids: str) -> int:
+    """Budget cost of quoting the given SHOWN fragments."""
+    return sum(len(SHOWN[fragment_id].text) + EVIDENCE_LINE_OVERHEAD for fragment_id in ids)
 
 
 def _update(existing_skill: str, **overrides: Any) -> Candidate:
@@ -185,14 +200,89 @@ def test_format_candidates_with_conditions_and_evidence() -> None:
     )
 
 
-def test_select_render_evidence_prefers_required_and_caps() -> None:
+def test_select_render_evidence_orders_required_first_without_cap() -> None:
     candidate = _candidate(evidence_refs=["ev4", "ev2", "ev3", "ev1", "ev99"])
 
-    fragments = select_render_evidence(candidate, SHOWN)
+    selection = select_render_evidence(candidate, SHOWN)
 
-    assert [fragment.id for fragment in fragments] == ["ev3", "ev1", "ev4"]
-    assert len(fragments) == RENDER_EVIDENCE_LIMIT
-    assert select_render_evidence(candidate, {}) == []
+    assert selection.ids == ["ev3", "ev1", "ev4", "ev2"]
+    assert selection.complete and selection.usable
+    assert selection.omitted == [] and selection.missing_required == []
+    assert select_render_evidence(candidate, {}) == EvidenceSelection([], [], [])
+
+
+def test_select_plan_evidence_drops_optional_first_under_budget() -> None:
+    candidate = _candidate(evidence_refs=["ev4", "ev2", "ev3", "ev1"])
+
+    (selection,) = select_plan_evidence([candidate], SHOWN, budget_chars=_cost("ev3", "ev1", "ev4"))
+
+    assert selection.ids == ["ev3", "ev1", "ev4"]
+    assert selection.omitted == ["ev2"]
+    assert selection.missing_required == []
+    assert selection.usable and not selection.complete
+
+
+def test_select_plan_evidence_reports_every_missing_required() -> None:
+    candidate = _candidate(evidence_refs=["ev4", "ev2", "ev3", "ev1"])
+
+    (selection,) = select_plan_evidence([candidate], SHOWN, budget_chars=5)
+
+    assert selection.ids == []
+    assert selection.missing_required == ["ev3", "ev1"]
+    assert selection.omitted == ["ev4", "ev2"]
+    assert not selection.usable
+
+
+def test_select_plan_evidence_places_all_required_before_any_optional() -> None:
+    first = _candidate(evidence_refs=["ev2", "ev1"])
+    second = _candidate(title="Second", evidence_refs=["ev4", "ev3"])
+    # Room for both required fragments and the first candidate's optional one only.
+    budget = _cost("ev1", "ev3", "ev2")
+
+    one, two = select_plan_evidence([first, second], SHOWN, budget_chars=budget)
+
+    assert one.ids == ["ev1", "ev2"] and one.omitted == []
+    assert two.ids == ["ev3"] and two.omitted == ["ev4"]
+    assert one.usable and two.usable
+    # A fragment cited by two candidates is costed and quoted for each.
+    twin = _candidate(title="Twin", evidence_refs=["ev1"])
+    both = select_plan_evidence([first, twin], SHOWN, budget_chars=_cost("ev1"))
+    assert both[0].ids == ["ev1"] and both[1].missing_required == ["ev1"]
+
+
+def test_format_candidates_shows_covered_by_and_omitted_count() -> None:
+    candidate = _candidate(evidence_refs=["ev1", "ev2", "ev4"], covered_by="csv-column-sum")
+    selections = select_plan_evidence([candidate], SHOWN, budget_chars=_cost("ev1", "ev2"))
+
+    text = format_candidates([candidate], SHOWN, selections=selections)
+
+    assert text == "\n".join(
+        [
+            "1. Build before test (future applicability: high)",
+            "   Rule: Run make before invoking the test suite.",
+            "   Target: create a new skill",
+            "   Covered by library skill: csv-column-sum (write a separate teaching skill; do not copy the library text)",
+            "   Evidence:",
+            "   - tool.error bash (error): CalledProcessError: exit 2 missing dep",
+            '   - tool.start bash: {"cmd": "make deps && make"}',
+            "   - (1 context excerpts omitted for the prompt budget)",
+        ]
+    )
+    # Unbudgeted: every cited fragment, no omitted line, no covered-by line.
+    plain = format_candidates([_candidate(evidence_refs=["ev1", "ev2", "ev4"])], SHOWN)
+    assert plain.count("   - ") == 3 and "omitted" not in plain and "Covered by" not in plain
+
+
+def test_resolve_library_skill() -> None:
+    profiler = _skill("real", category="profiler")
+    modeling = _skill("real", category="modeling")
+    other = _skill("other")
+
+    assert resolve_library_skill("profiler/real", [profiler, modeling, other]) is profiler
+    assert resolve_library_skill("other", [profiler, modeling, other]) is other
+    assert resolve_library_skill("real", [profiler, modeling]) is None
+    assert resolve_library_skill("ghost", [other]) is None
+    assert resolve_library_skill(None, [other]) is None and resolve_library_skill("  ", [other]) is None
 
 
 def test_render_payload_has_no_evidence_ids() -> None:
@@ -408,7 +498,7 @@ def test_plan_empty() -> None:
 async def test_valid_first_reply_single_call(fake_llm_cls) -> None:
     llm = fake_llm_cls(VALID)
 
-    result = await render_skill_md([_candidate()], llm=llm, template=TEMPLATE)
+    result = await render_skill_md([_candidate()], llm=llm, policy_text=POLICY, template=TEMPLATE)
 
     assert result.ok and result.calls == 1
     assert result.content == VALID.strip()
@@ -419,6 +509,9 @@ async def test_valid_first_reply_single_call(fake_llm_cls) -> None:
     assert NO_EXISTING_SKILL in instruction
     assert CANDIDATES_PLACEHOLDER not in instruction
     assert EXISTING_SKILL_PLACEHOLDER not in instruction
+    assert RENDER_POLICY_PLACEHOLDER not in instruction
+    assert result.transcript == [*payload, ("ai", VALID.strip())]
+    assert result.render_evidence == {"": []} and result.render_evidence_omitted == {"": []}
 
 
 @pytest.mark.asyncio
@@ -426,7 +519,7 @@ async def test_evidence_texts_reach_the_render_payload(fake_llm_cls) -> None:
     llm = fake_llm_cls(VALID)
     candidate = _candidate(applies_when="the build is stale")
 
-    result = await render_skill_md([candidate], llm=llm, template=TEMPLATE, evidence=SHOWN)
+    result = await render_skill_md([candidate], llm=llm, policy_text=POLICY, template=TEMPLATE, evidence=SHOWN)
 
     assert result.ok
     instruction = llm.payloads[0][0][1]
@@ -440,7 +533,7 @@ async def test_evidence_texts_reach_the_render_payload(fake_llm_cls) -> None:
 async def test_fenced_and_think_reply_cleaned(fake_llm_cls) -> None:
     llm = fake_llm_cls("<think>hmm</think>\n```markdown\n" + VALID + "```")
 
-    result = await render_skill_md([_candidate()], llm=llm, template=TEMPLATE)
+    result = await render_skill_md([_candidate()], llm=llm, policy_text=POLICY, template=TEMPLATE)
 
     assert result.ok
     assert result.content == VALID.strip()
@@ -450,7 +543,7 @@ async def test_fenced_and_think_reply_cleaned(fake_llm_cls) -> None:
 async def test_crlf_reply_normalized(fake_llm_cls) -> None:
     llm = fake_llm_cls(VALID.replace("\n", "\r\n"))
 
-    result = await render_skill_md([_candidate()], llm=llm, template=TEMPLATE)
+    result = await render_skill_md([_candidate()], llm=llm, policy_text=POLICY, template=TEMPLATE)
 
     assert result.ok
     assert "\r" not in result.content
@@ -460,7 +553,7 @@ async def test_crlf_reply_normalized(fake_llm_cls) -> None:
 async def test_invalid_then_valid_retries_once(fake_llm_cls) -> None:
     llm = fake_llm_cls(INVALID, VALID)
 
-    result = await render_skill_md([_candidate()], llm=llm, template=TEMPLATE)
+    result = await render_skill_md([_candidate()], llm=llm, policy_text=POLICY, template=TEMPLATE)
 
     assert result.ok and result.calls == 2
     first, second = llm.payloads
@@ -474,16 +567,17 @@ async def test_invalid_then_valid_retries_once(fake_llm_cls) -> None:
         "description: must start with",
         "missing section '## Inputs'",
         "missing section '## Outputs'",
-        "Workflow: needs at least 2",
     ):
         assert fragment in correction
+    assert "Workflow: needs at least" not in correction
+    assert result.transcript == [*second, ("ai", VALID.strip())]
 
 
 @pytest.mark.asyncio
 async def test_blank_first_reply_replayed_as_empty(fake_llm_cls) -> None:
     llm = fake_llm_cls("   ", VALID)
 
-    result = await render_skill_md([_candidate()], llm=llm, template=TEMPLATE)
+    result = await render_skill_md([_candidate()], llm=llm, policy_text=POLICY, template=TEMPLATE)
 
     assert result.ok
     assert llm.payloads[1][1] == ("ai", EMPTY_REPLY)
@@ -493,7 +587,7 @@ async def test_blank_first_reply_replayed_as_empty(fake_llm_cls) -> None:
 async def test_invalid_twice_returns_errors_without_third_call(fake_llm_cls) -> None:
     llm = fake_llm_cls(INVALID, "no frontmatter at all")
 
-    result = await render_skill_md([_candidate()], llm=llm, template=TEMPLATE)
+    result = await render_skill_md([_candidate()], llm=llm, policy_text=POLICY, template=TEMPLATE)
 
     assert not result.ok and result.calls == 2
     assert len(llm.payloads) == 2 and llm.replies == []
@@ -507,7 +601,7 @@ async def test_update_passes_existing_text_and_enforces_name(fake_llm_cls) -> No
     llm = fake_llm_cls(VALID, VALID.replace("name: build-before-test", "name: real"))
 
     result = await render_skill_md(
-        [_update("real")], llm=llm, template=TEMPLATE, existing_skill=existing, expected_name="real"
+        [_update("real")], llm=llm, policy_text=POLICY, template=TEMPLATE, existing_skill=existing, expected_name="real"
     )
 
     assert result.ok and result.calls == 2
@@ -521,7 +615,7 @@ async def test_taken_name_rejected_then_corrected(fake_llm_cls) -> None:
     llm = fake_llm_cls(VALID, VALID.replace("build-before-test", "build-first"))
 
     result = await render_skill_md(
-        [_candidate()], llm=llm, template=TEMPLATE, taken_names={"build-before-test"}
+        [_candidate()], llm=llm, policy_text=POLICY, template=TEMPLATE, taken_names={"build-before-test"}
     )
 
     assert result.ok and result.calls == 2
@@ -533,12 +627,144 @@ async def test_guards_raise_before_any_call(fake_llm_cls) -> None:
     llm = fake_llm_cls(VALID)
 
     with pytest.raises(ValueError, match="no candidates"):
-        await render_skill_md([], llm=llm, template=TEMPLATE)
+        await render_skill_md([], llm=llm, policy_text=POLICY, template=TEMPLATE)
     with pytest.raises(ValueError, match="placeholder"):
-        await render_skill_md([_candidate()], llm=llm, template="no placeholders here")
+        await render_skill_md([_candidate()], llm=llm, policy_text=POLICY, template="no placeholders here")
     with pytest.raises(ValueError, match="go together"):
-        await render_skill_md([_candidate()], llm=llm, template=TEMPLATE, expected_name="real")
+        await render_skill_md([_candidate()], llm=llm, policy_text=POLICY, template=TEMPLATE, expected_name="real")
+    with pytest.raises(ValueError, match="new skills only"):
+        await render_skill_md(
+            [_candidate()],
+            llm=llm,
+            policy_text=POLICY,
+            template=TEMPLATE,
+            existing_skill="x",
+            expected_name="real",
+            required_prefix="demo-",
+        )
     assert llm.payloads == []
+
+
+@pytest.mark.asyncio
+async def test_render_policy_placeholder_is_substituted_once_and_mandatory(fake_llm_cls) -> None:
+    llm = fake_llm_cls(VALID)
+
+    await render_skill_md([_candidate()], llm=llm, template=TEMPLATE, policy_text=POLICY)
+
+    instruction = llm.payloads[0][0][1]
+    assert instruction.count(POLICY) == 1
+    assert "{render_policy}" not in instruction
+    without = TEMPLATE.replace("{render_policy}", "")
+    with pytest.raises(ValueError, match=r"placeholder") as info:
+        await render_skill_md([_candidate()], llm=llm, template=without, policy_text=POLICY)
+    assert "{render_policy}" in str(info.value)
+    assert len(llm.payloads) == 1
+
+
+@pytest.mark.asyncio
+async def test_render_quotes_all_required_fragments_beyond_three(fake_llm_cls) -> None:
+    shown = {f"ev{n}": _fragment(f"ev{n}", f"tool.result step{n} (ok): output number {n}") for n in range(1, 6)}
+    candidate = _candidate(evidence_refs=list(shown), candidate_id="c1")
+    llm = fake_llm_cls(VALID)
+
+    result = await render_skill_md([candidate], llm=llm, template=TEMPLATE, policy_text=POLICY, evidence=shown)
+
+    instruction = llm.payloads[0][0][1]
+    for fragment in shown.values():
+        assert "   - " + fragment.text in instruction
+    assert result.render_evidence == {"c1": ["ev1", "ev2", "ev3", "ev4", "ev5"]}
+    assert result.render_evidence_omitted == {"c1": []}
+
+
+@pytest.mark.asyncio
+async def test_render_refuses_before_llm_when_required_evidence_does_not_fit(fake_llm_cls) -> None:
+    llm = fake_llm_cls(VALID)
+    candidate = _candidate(evidence_refs=["ev3", "ev1", "ev2"], candidate_id="c7")
+
+    with pytest.raises(InsufficientContextBudget) as info:
+        await render_skill_md(
+            [candidate], llm=llm, template=TEMPLATE, policy_text=POLICY, evidence=SHOWN, evidence_budget_chars=5
+        )
+
+    assert info.value.candidate_id == "c7"
+    assert info.value.missing == ["ev3", "ev1"]
+    assert info.value.budget_chars == 5
+    assert "'c7'" in str(info.value) and "5 chars" in str(info.value)
+    assert llm.payloads == []
+
+
+@pytest.mark.asyncio
+async def test_render_records_omitted_optional_fragments(fake_llm_cls) -> None:
+    llm = fake_llm_cls(VALID)
+    candidate = _candidate(evidence_refs=["ev4", "ev2", "ev3", "ev1"], candidate_id="c1")
+
+    result = await render_skill_md(
+        [candidate],
+        llm=llm,
+        template=TEMPLATE,
+        policy_text=POLICY,
+        evidence=SHOWN,
+        evidence_budget_chars=_cost("ev3", "ev1", "ev4"),
+    )
+
+    assert result.render_evidence == {"c1": ["ev3", "ev1", "ev4"]}
+    assert result.render_evidence_omitted == {"c1": ["ev2"]}
+    instruction = llm.payloads[0][0][1]
+    assert SHOWN["ev2"].text not in instruction
+    assert "(1 context excerpts omitted for the prompt budget)" in instruction
+
+
+@pytest.mark.asyncio
+async def test_required_prefix_reaches_validation_and_correction(fake_llm_cls) -> None:
+    llm = fake_llm_cls(
+        VALID.replace("name: build-before-test", "name: csv-column-sum"),
+        VALID.replace("name: build-before-test", "name: demo-csv-column-sum"),
+    )
+
+    result = await render_skill_md(
+        [_candidate()], llm=llm, template=TEMPLATE, policy_text=POLICY, required_prefix="demo-"
+    )
+
+    assert result.ok and result.calls == 2
+    assert "name: 'csv-column-sum' must start with 'demo-' (demo proposal)" in llm.payloads[1][2][1]
+    assert "name: demo-csv-column-sum" in result.content
+
+
+@pytest.mark.asyncio
+async def test_revise_skill_md_extends_transcript_with_review_issues(fake_llm_cls) -> None:
+    previous = await render_skill_md(
+        [_candidate(candidate_id="c1")], llm=fake_llm_cls(VALID), template=TEMPLATE, policy_text=POLICY, evidence=SHOWN
+    )
+    fixed = VALID.replace("1. Run make.", "1. Run make deps && make.")
+    llm = fake_llm_cls(fixed)
+    issues = ["command_mismatch: the evidence shows `make deps && make`, not `make`", "other: x"]
+
+    result = await revise_skill_md(previous, issues, llm=llm)
+
+    (payload,) = llm.payloads
+    assert payload[:-1] == previous.transcript
+    role, correction = payload[-1]
+    assert role == "human"
+    assert correction.startswith("A reviewer compared your SKILL.md with the accepted candidates and their evidence")
+    assert "- command_mismatch: the evidence shows `make deps && make`, not `make`\n- other: x" in correction
+    assert "without adding anything the evidence does not support" in correction
+    assert result.ok and result.calls == 1
+    assert result.content == fixed.strip()
+    assert result.transcript == [*payload, ("ai", fixed.strip())]
+    assert result.render_evidence == previous.render_evidence == {"c1": ["ev1", "ev2"]}
+    assert result.render_evidence_omitted == previous.render_evidence_omitted == {"c1": []}
+
+
+@pytest.mark.asyncio
+async def test_revise_skill_md_validates_once_without_retry(fake_llm_cls) -> None:
+    previous = await render_skill_md([_candidate()], llm=fake_llm_cls(VALID), template=TEMPLATE, policy_text=POLICY)
+    llm = fake_llm_cls(INVALID, VALID)
+
+    result = await revise_skill_md(previous, ["other: x"], llm=llm, taken_names={"fix-build"})
+
+    assert not result.ok and result.calls == 1
+    assert len(llm.payloads) == 1 and llm.replies == [VALID]
+    assert any("task identifier" in error for error in result.validation.errors)
 
 
 @pytest.mark.asyncio
@@ -546,7 +772,7 @@ async def test_placeholder_text_inside_a_rule_is_not_resubstituted(fake_llm_cls)
     llm = fake_llm_cls(VALID)
     candidate = _candidate(rule="Keep the literal {existing_skill} marker.")
 
-    await render_skill_md([candidate], llm=llm, template=TEMPLATE)
+    await render_skill_md([candidate], llm=llm, policy_text=POLICY, template=TEMPLATE)
 
     instruction = llm.payloads[0][0][1]
     assert "Keep the literal {existing_skill} marker." in instruction
@@ -558,16 +784,41 @@ async def test_placeholder_text_inside_a_rule_is_not_resubstituted(fake_llm_cls)
 
 def test_packaged_render_prompt_contract() -> None:
     text = PROMPT_PATH.read_text(encoding="utf-8")
+    lines = text.splitlines()
 
-    assert text.count(CANDIDATES_PLACEHOLDER) == 1
-    assert text.count(EXISTING_SKILL_PLACEHOLDER) == 1
+    assert lines[0].startswith("## description: ")
+    assert lines[1] == "## contract_version: 2"
+    for placeholder in (CANDIDATES_PLACEHOLDER, EXISTING_SKILL_PLACEHOLDER, RENDER_POLICY_PLACEHOLDER):
+        assert text.count(placeholder) == 1, placeholder
+    assert "# Selection policy" in text
     assert "# REQUIRED SKILL.md STRUCTURE" in text
     assert "## Description must be proactive" in text
     assert "Do not create an empty `Examples` section." in text
     assert "# Output contract" in text
+    assert text.index("# Selection policy") < text.index("# Task") < text.index("# Accepted candidates")
     assert text.index("# REQUIRED SKILL.md STRUCTURE") < text.index("# Output contract")
     # The candidate block carries conditions and evidence text, never ids.
     for present in ("When", "Constraints", "Expected outcome", "Evidence", "evidence ids"):
         assert present in text, present
-    for absent in ("{evidence_bundle}", "{skill_library}", "Nothing to save", "skills_list"):
-        assert absent not in text
+    # Evidence reading rules, parameterisation, no unsupported additions, no claimed verification, one step allowed.
+    for present in (
+        "tool.start <tool>",
+        "tool.result <tool> (ok)",
+        "not proof",
+        "<parameter>",
+        "durable file names, column names and environment conventions",
+        "Never add a command, flag, API, version, unit, dependency or guarantee of success",
+        "Never claim that a test or verification ran unless the evidence shows it ran",
+        "exactly one `## Workflow` step",
+        "one step when the procedure is one operation",
+        "Prohibitions are allowed when the evidence shows the failure they prevent",
+    ):
+        assert present in text, present
+    for absent in ("{evidence_bundle}", "{skill_library}", "Nothing to save", "skills_list", "must never be used"):
+        assert absent not in text, absent
+
+
+def test_packaged_v1_render_prompt_stays_for_hash_comparison() -> None:
+    v1 = PROMPT_PATH.with_name("prompt_v1.md")
+    assert v1.is_file()
+    assert "contract_version" not in v1.read_text(encoding="utf-8")

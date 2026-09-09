@@ -273,6 +273,36 @@ def test_parse_mine_args_defaults() -> None:
     assert options.since is None
     assert options.dry_run is False
     assert options.thread is None
+    assert options.policy is None
+    assert options.demo is None
+
+
+def test_parse_mine_args_shared_flags() -> None:
+    options = module.parse_mine_args(["--policy", "reusable_workflow", "--demo", "--thread", "abc"])
+    assert options.policy == "reusable_workflow"
+    assert options.demo is True
+    assert options.thread == "abc"
+    assert module.parse_mine_args(["--no-demo"]).demo is False
+
+
+@pytest.mark.parametrize(
+    ("args", "message"),
+    [
+        (["--policy"], "--policy requires a value"),
+        (["--policy", "x"], "--policy: expected one of strict_knowledge, reusable_workflow, got 'x'"),
+        (["--policy", "strict_knowledge", "--policy", "reusable_workflow"], "--policy given twice"),
+        (["--demo", "--demo"], "--demo given twice"),
+        (["--no-demo", "--no-demo"], "--no-demo given twice"),
+        (["--demo", "--no-demo"], "--demo and --no-demo cannot be combined"),
+        (["--dry-run", "--dry-run"], "--dry-run given twice"),
+    ],
+)
+def test_parse_mine_args_shared_flag_errors(args: list[str], message: str) -> None:
+    import re
+
+    assert module.MineArgsError is module.CliArgsError
+    with pytest.raises(module.MineArgsError, match=re.escape(message)):
+        module.parse_mine_args(args)
 
 
 def test_parse_mine_args_full_line() -> None:
@@ -377,6 +407,29 @@ def test_threads_table_explains_a_strong_correction() -> None:
     assert "strong user correction" in text
 
 
+def test_threads_table_prints_demo_override_reason() -> None:
+    from msagent.skill_evolver.features import extract_episodes
+    from msagent.trajectory_recorder.reader import load_trajectory
+
+    trajectory = load_trajectory(FIXTURES / "skill_evolver_demo_success.jsonl")
+    episodes = extract_episodes(trajectory, demo=True)
+    stats = module.ThreadStats(trajectory=trajectory, turns=1, tool_calls=3, ai_messages=1, episodes=episodes)
+
+    recorder = _recorder()
+    recorder.print(module.build_threads_table([stats], min_score=1.0, demo=True))
+    text = recorder.export_text()
+
+    assert "Threads (min_evidence_score 1.00, demo override)" in text
+    assert "pass" in text
+    assert "demo_override; observed_procedure has required evidence" in text
+
+    recorder = _recorder()
+    recorder.print(module.build_threads_table([stats], min_score=1.0))
+    text = recorder.export_text()
+
+    assert "skip" in text and "demo_override" not in text
+
+
 # ------------------------------------------------------------------- dry run
 
 
@@ -419,13 +472,14 @@ async def test_dry_run_reports_call_bound_with_max_plans(mine) -> None:
 
     await mine.handler.handle(["--dry-run"])
 
-    assert any("1 threads would reach the LLM (up to 6 LLM calls)" in line for line in mine.spy.info)
+    # 2 classify + 2 expand + 6 per plan = 16 for two plans, within max_llm_calls 16.
+    assert any("1 threads would reach the LLM (up to 16 LLM calls)" in line for line in mine.spy.info)
 
 
 def test_llm_call_bound() -> None:
     assert module.llm_call_bound(0, 3) == 0
-    assert module.llm_call_bound(1, 1) == 4
-    assert module.llm_call_bound(5, 3) == 40
+    assert module.llm_call_bound(1, 1) == 10
+    assert module.llm_call_bound(5, 3) == 80
 
 
 @pytest.mark.asyncio
@@ -515,12 +569,8 @@ async def test_real_run_bundle_exclusion_creates_no_llm(mine, monkeypatch: pytes
     # The thread passes the gate, but no episode's required evidence fits the
     # bundle budget: everything is excluded and the LLM (wired to explode)
     # is never created.
-    from functools import partial
-
-    from msagent.skill_evolver.bundle import build_evidence_bundle
-
     _copy(mine.trajectories, SIGNALS, SIGNALS_THREAD)
-    monkeypatch.setattr(module, "build_evidence_bundle", partial(build_evidence_bundle, max_chars=1))
+    mine.config = DirectSkillGenerationConfig(output_dir=mine.root / "skills", bundle_max_chars=1)
 
     await mine.handler.handle([])
 
@@ -542,12 +592,16 @@ def _write_proposal(
     content: str = SKILL_MD,
     action: str = "create",
     category: str = "default",
+    demo: bool = False,
 ) -> Path:
-    """Create a proposal folder the way writer.write_proposal does."""
+    """Create a proposal folder the way writer.write_proposal does.
+
+    Without ``demo`` the provenance is an old (v2) one: no ``demo`` key at all.
+    """
     folder = root / ".proposals" / thread / name
     folder.mkdir(parents=True)
     (folder / "SKILL.md").write_text(content, encoding="utf-8")
-    provenance = {
+    provenance: dict = {
         "thread_ids": [thread],
         "episodes": [],
         "candidates": [{"title": "t"}],
@@ -562,6 +616,9 @@ def _write_proposal(
             "existing_path": "/library/profiling-recipe/SKILL.md",
         },
     }
+    if demo:
+        provenance["demo"] = True
+        provenance["policy"] = {"requested": "reusable_workflow", "selection": "demo_workflow", "source": "config"}
     (folder / "provenance.json").write_text(
         json.dumps(provenance, indent=2),
         encoding="utf-8",
@@ -742,10 +799,170 @@ async def test_unknown_subcommand(review) -> None:
     assert any("Unknown subcommand" in line for line in review.spy.error)
 
 
+# ------------------------------------------------------- skill review: demo
+
+DEMO_SKILL_MD = SKILL_MD.replace("name: profiling-recipe", "name: demo-profiling-recipe")
+
+
+@pytest.mark.asyncio
+async def test_review_list_shows_demo_marker(review) -> None:
+    _write_proposal(review.root, thread="thread-a", name="demo-profiling-recipe", content=DEMO_SKILL_MD, demo=True)
+    # A v4 proposal written outside demo mode carries an explicit false.
+    folder = _write_proposal(review.root, thread="thread-b", name="strict-recipe")
+    provenance_file = folder / "provenance.json"
+    provenance = json.loads(provenance_file.read_text(encoding="utf-8"))
+    provenance["demo"] = False
+    provenance["policy"] = {"requested": "strict_knowledge", "selection": "strict_knowledge", "source": "config"}
+    provenance_file.write_text(json.dumps(provenance), encoding="utf-8")
+    # An old provenance (v2) has no demo key at all.
+    _write_proposal(review.root, thread="thread-c", name="old-recipe")
+
+    await review.handler.handle(["list"])
+
+    lines = review.spy.rendered_text().splitlines()
+    header = next(line for line in lines if "category" in line and "action" in line)
+    assert "demo" in header
+    rows = {name: next(line for line in lines if name in line) for name in ("strict-recipe", "old-recipe")}
+    rows["demo-profiling-recipe"] = next(line for line in lines if "demo-profiling-recipe" in line)
+    assert "DEMO" in rows["demo-profiling-recipe"]
+    assert "DEMO" not in rows["strict-recipe"]
+    assert "DEMO" not in rows["old-recipe"]
+
+
+@pytest.mark.asyncio
+async def test_accept_demo_requires_explicit_confirmation(review, monkeypatch) -> None:
+    folder = _write_proposal(review.root, name="demo-profiling-recipe", content=DEMO_SKILL_MD, demo=True)
+    seen: list[tuple[str, list[str], bool]] = []
+
+    async def confirm(question: str) -> bool:
+        seen.append((question, list(review.spy.warning), folder.exists()))
+        return True
+
+    monkeypatch.setattr(review.handler, "_confirm", confirm)
+
+    await review.handler.handle(["accept", "demo-profiling-recipe"])
+
+    destination = review.root / "default" / "demo-profiling-recipe"
+    assert review.spy.error == []
+    [(question, warnings_before, folder_was_present)] = seen
+    assert "Accept demo proposal 'demo-profiling-recipe'" in question
+    assert folder_was_present, "the confirmation must come before the move"
+    assert any("demo proposal (demo_workflow)" in line and "possibly trivial" in line for line in warnings_before)
+    assert not folder.exists()
+    assert (destination / "SKILL.md").read_text(encoding="utf-8") == DEMO_SKILL_MD
+
+
+@pytest.mark.asyncio
+async def test_accept_demo_declined_keeps_folder(review, monkeypatch) -> None:
+    folder = _write_proposal(review.root, name="demo-profiling-recipe", content=DEMO_SKILL_MD, demo=True)
+
+    async def decline(_question: str) -> bool:
+        return False
+
+    monkeypatch.setattr(review.handler, "_confirm", decline)
+
+    await review.handler.handle(["accept", "demo-profiling-recipe"])
+
+    assert folder.exists()
+    assert not (review.root / "default" / "demo-profiling-recipe").exists()
+    assert "Cancelled; nothing was moved" in review.spy.info
+    assert review.spy.success == []
+
+
+@pytest.mark.asyncio
+async def test_accept_non_demo_never_asks(review, monkeypatch) -> None:
+    _write_proposal(review.root)
+
+    async def confirm(_question: str) -> bool:
+        raise AssertionError("an ordinary proposal must be accepted without a question")
+
+    monkeypatch.setattr(review.handler, "_confirm", confirm)
+
+    await review.handler.handle(["accept", "profiling-recipe"])
+
+    assert review.spy.error == []
+    assert review.spy.warning == []
+    assert (review.root / "default" / "profiling-recipe" / "SKILL.md").is_file()
+
+
+@pytest.mark.asyncio
+async def test_accept_demo_without_prefix_is_refused(review, monkeypatch) -> None:
+    # Demo provenance, but the frontmatter name lacks the demo- prefix.
+    folder = _write_proposal(review.root, demo=True)
+
+    async def confirm(_question: str) -> bool:
+        raise AssertionError("an invalid proposal must be refused before any question")
+
+    monkeypatch.setattr(review.handler, "_confirm", confirm)
+
+    await review.handler.handle(["accept", "profiling-recipe"])
+
+    assert any("must start with 'demo-'" in line for line in review.spy.error)
+    assert folder.exists()
+    assert not (review.root / "default" / "profiling-recipe").exists()
+
+
+@pytest.mark.asyncio
+async def test_accept_leaves_private_state_untouched(review, tmp_path: Path) -> None:
+    _write_proposal(review.root)
+    decisions = module.initializer.get_project_paths(tmp_path).root / "skill-evolver" / "decisions"
+    decisions.mkdir(parents=True)
+    report = decisions / "thread-signals-x.json"
+    report.write_text("{}", encoding="utf-8")
+
+    await review.handler.handle(["accept", "profiling-recipe"])
+
+    assert review.spy.error == []
+    assert report.read_text(encoding="utf-8") == "{}"
+    assert sorted(path.name for path in decisions.iterdir()) == ["thread-signals-x.json"]
+    destination = review.root / "default" / "profiling-recipe"
+    assert sorted(path.name for path in destination.iterdir()) == ["SKILL.md", "provenance.json"]
+
+
+@pytest.mark.asyncio
+async def test_review_config_error_is_reported(review, monkeypatch) -> None:
+    from msagent.skill_evolver.config import SkillEvolverConfigError
+
+    def broken() -> None:
+        problems = [("gate.min_evidence_score", "must be a finite non-negative number, got 'abc'")]
+        raise SkillEvolverConfigError(problems, file=Path("config.skill.evolver.yml"))
+
+    monkeypatch.setattr(module.DirectSkillGenerationHandler, "_load_config", staticmethod(broken))
+
+    await review.handler.handle(["list"])
+
+    assert review.spy.error == [
+        "config.skill.evolver.yml: gate.min_evidence_score: must be a finite non-negative number, got 'abc'",
+    ]
+    assert any(
+        "Fix ~/.msagent/config/config.skill.evolver.yml (schema_version: 2)" in line for line in review.spy.plain
+    )
+    assert review.spy.renderables == []
+
+
+@pytest.mark.asyncio
+async def test_review_root_resolves_relative_output_dir_under_working_dir(review, tmp_path: Path, monkeypatch) -> None:
+    config = DirectSkillGenerationConfig(output_dir=Path("rel/skills"))
+    monkeypatch.setattr(module.DirectSkillGenerationHandler, "_load_config", staticmethod(lambda: config))
+    root = tmp_path / "rel" / "skills"
+    _write_proposal(root, name="relative-recipe")
+
+    assert review.handler._root() == root
+
+    await review.handler.handle(["list"])
+
+    assert "relative-recipe" in review.spy.rendered_text()
+
+
 # ------------------------------------------------------------------ real run
 
-CLASSIFY_TEMPLATE = "Library:\n{skill_library}\n\nBundle:\n{evidence_bundle}\n"
-RENDER_TEMPLATE = "Candidates:\n{candidates}\n\nExisting:\n{existing_skill}\n"
+CLASSIFY_TEMPLATE = "Library:\n{skill_library}\n\nPolicy:\n{selection_policy}\n\nBundle:\n{evidence_bundle}\n"
+RENDER_TEMPLATE = "Policy:\n{render_policy}\n\nCandidates:\n{candidates}\n\nExisting:\n{existing_skill}\n"
+REVIEW_TEMPLATE = (
+    "Policy:\n{review_policy}\n\nSkill:\n{skill_md}\n\nCandidates:\n{candidates}\n\n"
+    "Evidence:\n{evidence}\n\nExisting:\n{existing_skill}\n"
+)
+REVIEW_PASS = json.dumps({"verdict": "pass", "issues": []})
 GENERATED_NAME = "generated-source-debugging"
 GENERATED_SKILL = "\n".join(
     [
@@ -799,7 +1016,15 @@ def _update(refs: list[str], existing: str, **overrides) -> dict:
 
 
 def _classify_reply(*candidates: dict, verdict: str = "save") -> str:
-    return json.dumps({"verdict": verdict, "candidates": list(candidates)})
+    """A contract-2 reply; the signals fixture always renders E1, so its default decision is valid."""
+    if candidates:
+        decision = {"decision": "accept", "reason_code": "accepted"}
+    else:
+        decision = {"decision": "reject", "reason_code": "routine_activity"}
+    decisions = [{"episode_ids": ["E1"], **decision, "explanation": "scripted", "evidence_refs": []}]
+    return json.dumps(
+        {"contract_version": 2, "verdict": verdict, "candidates": list(candidates), "decisions": decisions}
+    )
 
 
 class _FakeLLM:
@@ -835,7 +1060,7 @@ def scripted(mine, monkeypatch: pytest.MonkeyPatch):
     """The mining fixture with the LLM stages wired to a scripted fake."""
 
     async def fake_stage_prompt(_self, _root, _cfg, stage):
-        templates = {"classify": CLASSIFY_TEMPLATE, "render": RENDER_TEMPLATE}
+        templates = {"classify": CLASSIFY_TEMPLATE, "render": RENDER_TEMPLATE, "review": REVIEW_TEMPLATE}
         return templates[stage], f"packaged/{stage}/prompt_v1.md"
 
     monkeypatch.setattr(
@@ -845,7 +1070,7 @@ def scripted(mine, monkeypatch: pytest.MonkeyPatch):
     )
 
     async def fake_load_llm_config(_model, _working_dir):
-        return SimpleNamespace(model="fake-model", context_window=1000)
+        return SimpleNamespace(model="fake-model", context_window=128_000)
 
     monkeypatch.setattr(module.initializer, "load_llm_config", fake_load_llm_config)
 
@@ -862,7 +1087,7 @@ def scripted(mine, monkeypatch: pytest.MonkeyPatch):
 @pytest.mark.asyncio
 async def test_real_run_writes_one_proposal_per_thread(scripted) -> None:
     _copy(scripted.trajectories, SIGNALS, SIGNALS_THREAD)
-    scripted.script(_classify_reply(_candidate(["ev1", "ev2"])), GENERATED_SKILL)
+    scripted.script(_classify_reply(_candidate(["ev1", "ev2"])), GENERATED_SKILL, REVIEW_PASS)
 
     await scripted.handler.handle([])
 
@@ -881,22 +1106,32 @@ async def test_real_run_writes_one_proposal_per_thread(scripted) -> None:
     )
     assert provenance["model"] == "fake-model"
     assert provenance["thread_ids"][0] == SIGNALS_THREAD
-    assert provenance["provenance_version"] == 3
+    assert provenance["provenance_version"] == 4
     assert set(provenance["candidates"][0]["evidence_refs"]) <= set(provenance["evidence_shown"])
     assert provenance["render_evidence"] == {"c1": ["ev1", "ev2"]}
+    # The ordinary policy is recorded as such.
+    assert provenance["policy"] == {
+        "requested": "strict_knowledge",
+        "selection": "strict_knowledge",
+        "source": "config",
+    }
+    assert provenance["demo"] is False
+    assert provenance["quality_review"]["verdict"] == "pass"
+    assert provenance["verification"]["level"] == "evidence_supported"
     assert any("1 proposals" in line for line in scripted.spy.success)
     # The per-thread header names the gate decision that let it through.
     assert any("incidents" in line for line in scripted.spy.info)
-    # Two calls for one thread: classify and render.
-    assert len(scripted.llm.payloads) == 2
-    # The default max_plans (3) bounds the run at 2 + 2 * 3 calls per thread.
-    assert any("(up to 8 LLM calls)" in line for line in scripted.spy.info)
+    # Three calls for one thread: classify, render and the quality review.
+    assert len(scripted.llm.payloads) == 3
+    # The default max_plans (3) bounds the run at min(max_llm_calls, 2 + 2 + 6 * 3) calls per thread.
+    bound = module.llm_call_bound(1, 3, max_llm_calls=16)
+    assert any(f"(up to {bound} LLM calls)" in line for line in scripted.spy.info)
 
 
 @pytest.mark.asyncio
 async def test_real_run_writes_nothing_on_a_nothing_verdict(scripted) -> None:
     _copy(scripted.trajectories, SIGNALS, SIGNALS_THREAD)
-    scripted.script(_classify_reply(_candidate(["ev1", "ev2"]), verdict="nothing"))
+    scripted.script(_classify_reply(verdict="nothing"))
 
     await scripted.handler.handle([])
 
@@ -940,17 +1175,19 @@ async def test_real_run_two_updates_two_proposals(scripted) -> None:
     scripted.script(
         _classify_reply(_update(["ev1"], "alpha", title="Alpha rule"), _update(["ev2"], "beta", title="Beta rule")),
         _revised("alpha"),
+        REVIEW_PASS,
         _revised("beta"),
+        REVIEW_PASS,
     )
 
     await scripted.handler.handle([])
 
-    assert len(scripted.llm.payloads) == 3 and scripted.llm.replies == []
+    assert len(scripted.llm.payloads) == 5 and scripted.llm.replies == []
     proposals = scripted.root / "skills" / ".proposals" / SIGNALS_THREAD
     assert (proposals / "alpha" / "SKILL.md").is_file(), scripted.spy.error
     assert (proposals / "beta" / "SKILL.md").is_file()
     assert "Beta rule" not in scripted.llm.payloads[1][0][1]
-    assert "Alpha rule" not in scripted.llm.payloads[2][0][1]
+    assert "Alpha rule" not in scripted.llm.payloads[3][0][1]
     assert any("2 proposals" in line for line in scripted.spy.success)
     assert scripted.spy.error == []
     assert not any(line.startswith("Plans:") for line in scripted.spy.info)
@@ -965,15 +1202,17 @@ async def test_real_run_taken_names_span_threads(scripted) -> None:
     scripted.script(
         _classify_reply(_candidate(["ev1", "ev2"])),
         GENERATED_SKILL,
+        REVIEW_PASS,
         _classify_reply(_candidate(["ev1", "ev2"])),
         GENERATED_SKILL,
         SECOND_SKILL,
+        REVIEW_PASS,
     )
 
     await scripted.handler.handle([])
 
-    assert len(scripted.llm.payloads) == 5 and scripted.llm.replies == []
-    assert f"'{GENERATED_NAME}' already exists in the skill library" in scripted.llm.payloads[4][-1][1]
+    assert len(scripted.llm.payloads) == 7 and scripted.llm.replies == []
+    assert f"'{GENERATED_NAME}' already exists in the skill library" in scripted.llm.payloads[5][-1][1]
     proposals = scripted.root / "skills" / ".proposals"
     assert sorted(p.name for p in proposals.glob("*/*")) == [GENERATED_NAME, SECOND_NAME]
     assert any("2 proposals" in line for line in scripted.spy.success)
@@ -983,11 +1222,12 @@ async def test_real_run_taken_names_span_threads(scripted) -> None:
 async def test_real_run_first_plan_error_does_not_stop_second(scripted) -> None:
     _copy(scripted.trajectories, SIGNALS, SIGNALS_THREAD)
     second = _candidate(["ev1", "ev2"], title="Profile before summary")
-    scripted.script(_classify_reply(_candidate(["ev1", "ev2"]), second), SECOND_SKILL, fail_at=2)
+    scripted.script(_classify_reply(_candidate(["ev1", "ev2"]), second), SECOND_SKILL, REVIEW_PASS, fail_at=2)
 
     await scripted.handler.handle([])
 
-    assert len(scripted.llm.payloads) == 3 and scripted.llm.replies == []
+    # classify, the failed render, the second render and its review; the failed call still counts.
+    assert len(scripted.llm.payloads) == 4 and scripted.llm.replies == []
     (plan_error,) = [line for line in scripted.spy.error if line.startswith("plan ")]
     assert "Generated source debugging" in plan_error and "transport down" in plan_error
     proposals = scripted.root / "skills" / ".proposals" / SIGNALS_THREAD
@@ -1003,12 +1243,96 @@ async def test_real_run_defers_plans_over_max_plans(scripted) -> None:
     _copy(scripted.trajectories, SIGNALS, SIGNALS_THREAD)
     scripted.config = DirectSkillGenerationConfig(output_dir=scripted.root / "skills", max_plans=1)
     second = _candidate(["ev1", "ev2"], title="Profile before summary")
-    scripted.script(_classify_reply(_candidate(["ev1", "ev2"]), second), GENERATED_SKILL)
+    scripted.script(_classify_reply(_candidate(["ev1", "ev2"]), second), GENERATED_SKILL, REVIEW_PASS)
 
     await scripted.handler.handle([])
 
-    assert len(scripted.llm.payloads) == 2 and scripted.llm.replies == []
+    assert len(scripted.llm.payloads) == 3 and scripted.llm.replies == []
     assert "Deferred plan: create: Profile before summary — max_plans 1 reached" in scripted.spy.info
     assert "Plans: 0 render errors, 0 rejected targets, 1 deferred" in scripted.spy.info
     proposals = scripted.root / "skills" / ".proposals" / SIGNALS_THREAD
     assert sorted(p.name for p in proposals.iterdir()) == [GENERATED_NAME]
+
+
+@pytest.mark.asyncio
+async def test_real_run_reports_review_and_bound_lines(scripted) -> None:
+    _copy(scripted.trajectories, SIGNALS, SIGNALS_THREAD)
+    scripted.script(_classify_reply(_candidate(["ev1", "ev2"])), GENERATED_SKILL, REVIEW_PASS)
+
+    await scripted.handler.handle([])
+
+    assert scripted.spy.error == []
+    assert any("Mining 1 threads (up to 16 LLM calls)" in line for line in scripted.spy.info)
+    plain = "\n".join(scripted.spy.plain)
+    assert "Requested policy: strict_knowledge (config.skill.evolver.yml)" in plain
+    assert "Demo mode: false (config.skill.evolver.yml)" in plain
+    assert "Effective selection: strict_knowledge" in plain
+    assert "Evidence score: " in plain and "Gate: pass (score >= min_evidence_score)" in plain
+    assert "Decision E1: accept (accepted)" in plain
+    assert "Candidate 'Generated source debugging': accepted" in plain
+    assert "(trivial procedure allowed)" not in plain
+    assert "Quality review: passed" in plain
+    assert "Verification: evidence_supported; not executed by generator" in plain
+    assert "Proposal: saved, inactive[/muted]" in plain and "DEMO" not in plain
+    decisions = module.initializer.get_project_paths(scripted.root).root / "skill-evolver" / "decisions"
+    (report_path,) = sorted(decisions.glob("*.json"))
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["command"] == "skill-mine" and report["thread_id"] == SIGNALS_THREAD
+    assert report["plans"]["proposals"] == 1 and report["llm"]["calls_used"] == 3
+    assert report["classifier"]["verdict"] == "save" and report["classifier"]["candidates"] == 1
+
+
+@pytest.mark.asyncio
+async def test_dry_run_with_overrides_prints_effective_config_and_changes_nothing(mine, monkeypatch) -> None:
+    from msagent.core.constants import CONFIG_SKILL_EVOLVER_FILE_NAME
+    from msagent.skill_evolver.config import load_skill_evolver_config
+
+    _copy(mine.trajectories, SIGNALS, SIGNALS_THREAD)
+    config_dir = module.initializer.app_paths.config_dir
+    config_dir.mkdir(parents=True, exist_ok=True)
+    user_file = config_dir / CONFIG_SKILL_EVOLVER_FILE_NAME.name
+    text = "schema_version: 2\nclassification:\n  policy: strict_knowledge\ndemo_mode: false\n"
+    user_file.write_text(text, encoding="utf-8")
+    monkeypatch.setattr(
+        module.DirectSkillGenerationHandler,
+        "_load_config",
+        staticmethod(lambda: load_skill_evolver_config(config_dir)),
+    )
+
+    await mine.handler.handle(["--dry-run", "--policy", "reusable_workflow", "--demo"])
+
+    assert mine.spy.error == []
+    plain = "\n".join(mine.spy.plain)
+    assert "Requested policy: reusable_workflow (--policy)" in plain
+    assert "Demo mode: true (--demo)" in plain
+    assert "Effective selection: demo_workflow" in plain
+    assert "Demo overlay: " in plain
+    assert "observed_procedure candidates: " in plain
+    assert "Threads (min_evidence_score 1.00, demo override)" in mine.spy.rendered_text()
+    assert any("Nothing was written and no LLM was created" in line for line in mine.spy.info)
+    assert user_file.read_text(encoding="utf-8") == text
+    state = module.initializer.get_project_paths(mine.root).root
+    assert not (state / "skill-evolver").exists()
+    assert not (mine.root / "skills").exists()
+
+
+@pytest.mark.asyncio
+async def test_config_error_stops_before_llm_and_keeps_session(mine, monkeypatch) -> None:
+    from msagent.skill_evolver.config import SkillEvolverConfigError
+
+    _copy(mine.trajectories, SIGNALS, SIGNALS_THREAD)
+
+    def broken() -> None:
+        problems = [("gate.min_evidence_score", "must be a finite non-negative number, got 'abc'")]
+        raise SkillEvolverConfigError(problems, file=Path("config.skill.evolver.yml"))
+
+    monkeypatch.setattr(module.DirectSkillGenerationHandler, "_load_config", staticmethod(broken))
+
+    await mine.handler.handle([])
+
+    assert mine.spy.error == [
+        "config.skill.evolver.yml: gate.min_evidence_score: must be a finite non-negative number, got 'abc'",
+    ]
+    assert any("Fix ~/.msagent/config/config.skill.evolver.yml (schema_version: 2)" in line for line in mine.spy.plain)
+    assert mine.spy.renderables == []
+    assert not (mine.root / "skills").exists()

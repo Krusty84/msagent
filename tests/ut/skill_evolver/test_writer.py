@@ -34,8 +34,11 @@ from msagent.skill_evolver.writer import (
     PROPOSALS_DIR,
     PROVENANCE_VERSION,
     REQUIRED_PROVENANCE_KEYS,
+    VERIFICATION_LEVELS,
+    SecretsDetected,
     batch_dir_name,
     build_provenance,
+    scan_package,
     write_proposal,
 )
 from msagent.skills.factory import SkillFactory
@@ -95,16 +98,25 @@ def _ref(seq: int, source: str = SOURCE) -> EvidenceRef:
     return EvidenceRef(source=source, line=seq, seq=seq)
 
 
-def _episode(seqs: list[int], thread_id: str = THREAD_ID, *, optional: list[int] = ()) -> Episode:
+def _episode(
+    seqs: list[int],
+    thread_id: str = THREAD_ID,
+    *,
+    optional: list[int] = (),
+    kind: str = "error_recovery",
+    roles: dict[int, str] | None = None,
+) -> Episode:
     source = f"{thread_id}.jsonl"
     return Episode(
-        kind="error_recovery",
+        kind=kind,
         thread_id=thread_id,
         source=source,
-        evidence=[EvidenceItem(_ref(seq, source), "event", seq not in optional) for seq in seqs],
+        evidence=[
+            EvidenceItem(_ref(seq, source), (roles or {}).get(seq, "event"), seq not in optional) for seq in seqs
+        ],
         tool_sequence=["bash"],
         facts={"tool": "bash"},
-        weight=0.6,
+        weight=0.6 if kind == "error_recovery" else 0.0,
     )
 
 
@@ -121,6 +133,43 @@ def _bundle() -> EvidenceBundle:
     return EvidenceBundle("(text)", shown, [BundleEpisode(_episode([4, 5]), "shown")])
 
 
+POLICY = {"requested": "strict_knowledge", "selection": "strict_knowledge", "source": "config"}
+CONFIG = {"requested": {"schema_version": 2}, "effective": {"policy": "strict_knowledge", "demo": False}}
+VERSIONS = {"config_schema": 2, "prompts_contract": 2}
+PROMPT_HASHES = {"classify": "sha256:c", "render": "sha256:r", "review": "sha256:v"}
+QUALITY_REVIEW = {
+    "verdict": "pass",
+    "issues": [],
+    "unknown_refs": [],
+    "calls": 1,
+    "corrected": False,
+    "initial_issues": [],
+}
+VERIFICATION = {"level": "evidence_supported", "note": "not executed by generator"}
+PROMPT_VARIANTS = {
+    "classify": "classify/prompt_v2.md",
+    "render": "render/prompt_v2.md",
+    "review": "review/prompt_v2.md",
+}
+CREATE_TARGET = {"action": "create", "existing_skill": None, "existing_path": None, "base_sha256": None}
+UPDATE_TARGET = {"action": "update", "existing_skill": "real", "existing_path": "/x", "base_sha256": "abc"}
+
+
+def _v4_kwargs(**overrides: Any) -> dict[str, Any]:
+    """The provenance v4 keyword arguments every build_provenance call needs."""
+    kwargs: dict[str, Any] = {
+        "policy": POLICY,
+        "demo": False,
+        "config": CONFIG,
+        "versions": VERSIONS,
+        "prompt_hashes": PROMPT_HASHES,
+        "quality_review": QUALITY_REVIEW,
+        "verification": VERIFICATION,
+    }
+    kwargs.update(overrides)
+    return kwargs
+
+
 def _provenance(**overrides: Any) -> dict[str, Any]:
     candidate = _candidate()
     data = build_provenance(
@@ -130,9 +179,10 @@ def _provenance(**overrides: Any) -> dict[str, Any]:
         rejected=[],
         sources={SOURCE: f"/trajectories/{SOURCE}"},
         model="fake-model",
-        prompt_variants={"classify": "classify/prompt_v1.md", "render": "render/prompt_v1.md"},
+        prompt_variants=PROMPT_VARIANTS,
         category="default",
-        target={"action": "create", "existing_skill": None, "existing_path": None},
+        target=CREATE_TARGET,
+        **_v4_kwargs(),
     )
     data.update(overrides)
     return data
@@ -190,14 +240,15 @@ def test_build_provenance_maps_episodes_candidates_and_evidence() -> None:
         rejected=[(rejected, "evidence not shown in the bundle: ['ev9']")],
         sources={SOURCE: "/t/a.jsonl", "thread-other.jsonl": "/t/b.jsonl"},
         model="fake-model",
-        prompt_variants={"classify": "c", "render": "r"},
+        prompt_variants={"classify": "c", "render": "r", "review": "v"},
         category="profiler",
-        target={"action": "update", "existing_skill": "real", "existing_path": "/x"},
+        target=UPDATE_TARGET,
         generated_at="2026-09-04T10:00:00+00:00",
+        **_v4_kwargs(),
     )
 
-    assert provenance["provenance_version"] == PROVENANCE_VERSION == 3
-    assert provenance["features_version"] == FEATURES_VERSION == 3
+    assert provenance["provenance_version"] == PROVENANCE_VERSION == 4
+    assert provenance["features_version"] == FEATURES_VERSION == 4
     assert provenance["thread_ids"] == [THREAD_ID, "thread-other"]
     assert provenance["sources"] == {SOURCE: "/t/a.jsonl", "thread-other.jsonl": "/t/b.jsonl"}
     # Extracted episodes with their bundle outcome; unshown events have no id.
@@ -257,13 +308,158 @@ def test_build_provenance_maps_episodes_candidates_and_evidence() -> None:
     assert provenance["candidates_rejected"] == [
         {"title": "Fabricated", "reason": "evidence not shown in the bundle: ['ev9']", "evidence_refs": ["ev1", "ev9"]}
     ]
-    # What the renderer was quoted, per rendered candidate.
+    # What the renderer was quoted, per rendered candidate (recomputed without a budget when not given).
     assert provenance["render_evidence"] == {"c1": ["ev1", "ev2"]}
+    assert provenance["render_evidence_omitted"] == {"c1": []}
     assert provenance["generated_at"] == "2026-09-04T10:00:00+00:00"
-    assert provenance["prompt_variants"] == {"classify": "c", "render": "r"}
+    assert provenance["prompt_variants"] == {"classify": "c", "render": "r", "review": "v"}
     assert provenance["category"] == "profiler"
-    assert provenance["target"]["existing_path"] == "/x"
+    assert provenance["target"] == UPDATE_TARGET
     assert REQUIRED_PROVENANCE_KEYS <= set(provenance)
+
+
+def test_build_provenance_records_v4_fields() -> None:
+    provenance = _provenance()
+
+    assert provenance["provenance_version"] == PROVENANCE_VERSION == 4
+    assert provenance["features_version"] == FEATURES_VERSION == 4
+    assert provenance["policy"] == POLICY
+    assert provenance["demo"] is False
+    assert provenance["config"] == CONFIG
+    assert provenance["versions"] == {"features": 4, "provenance": 4, "config_schema": 2, "prompts_contract": 2}
+    assert provenance["prompt_hashes"] == PROMPT_HASHES
+    assert provenance["prompt_variants"] == PROMPT_VARIANTS
+    assert provenance["quality_review"] == QUALITY_REVIEW
+    assert provenance["verification"] == {"level": "evidence_supported", "note": "not executed by generator"}
+    assert provenance["covering_skill"] is None
+    assert provenance["observed_procedure_source"] == []
+    assert provenance["target"] == CREATE_TARGET
+    assert REQUIRED_PROVENANCE_KEYS >= {
+        "policy",
+        "demo",
+        "config",
+        "versions",
+        "prompt_hashes",
+        "quality_review",
+        "verification",
+    }
+    # A demo proposal records the covering skill it duplicates.
+    covering = {"display_name": "csv-column-sum", "path": "/skills/default/csv-column-sum/SKILL.md", "sha256": "f" * 64}
+    demo = _provenance_with(demo=True, policy={**POLICY, "selection": "demo_workflow"}, covering_skill=covering)
+    assert demo["demo"] is True and demo["covering_skill"] == covering
+    assert demo["policy"]["selection"] == "demo_workflow"
+
+
+def _provenance_with(**overrides: Any) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {
+        "thread_ids": [THREAD_ID],
+        "bundle": _bundle(),
+        "candidates": [_candidate()],
+        "rejected": [],
+        "sources": {SOURCE: "/t/a.jsonl"},
+        "model": "fake-model",
+        "prompt_variants": PROMPT_VARIANTS,
+        "category": "default",
+        "target": CREATE_TARGET,
+        **_v4_kwargs(),
+    }
+    kwargs.update(overrides)
+    return build_provenance(**kwargs)
+
+
+def test_build_provenance_uses_given_render_evidence_and_omitted() -> None:
+    given = _provenance_with(render_evidence={"c1": ["ev1"]}, render_evidence_omitted={"c1": ["ev2"]})
+    assert given["render_evidence"] == {"c1": ["ev1"]}
+    assert given["render_evidence_omitted"] == {"c1": ["ev2"]}
+
+    recomputed = _provenance_with()
+    assert recomputed["render_evidence"] == {"c1": ["ev1", "ev2"]}
+    assert recomputed["render_evidence_omitted"] == {"c1": []}
+
+
+def test_build_provenance_derives_observed_procedure_source() -> None:
+    observed = _episode([2, 4, 5], kind="observed_procedure", roles={2: "task", 4: "step", 5: "result"})
+    other_observed = _episode([12, 14, 15], kind="observed_procedure", roles={12: "task", 14: "step", 15: "result"})
+    recovery = _episode([7, 8])
+    shown = {
+        "ev1": _fragment("ev1", 4, 'tool.start bash: {"cmd": "python3 -c ..."}'),
+        "ev2": _fragment("ev2", 5, "tool.result bash (ok): 60.0"),
+        "ev3": _fragment("ev3", 7, 'tool.start bash: {"cmd": "make"}'),
+        "ev4": _fragment("ev4", 14, "tool.start bash: {}"),
+    }
+    bundle = EvidenceBundle(
+        "(text)",
+        shown,
+        [BundleEpisode(observed, "shown"), BundleEpisode(recovery, "shown"), BundleEpisode(other_observed, "shown")],
+    )
+
+    provenance = _provenance_with(bundle=bundle, candidates=[_candidate(evidence_refs=["ev1", "ev2", "ev3"])])
+
+    # Every physical line of the cited observed_procedure episode; the other kinds and uncited episodes are ignored.
+    assert provenance["observed_procedure_source"] == [
+        {"source": SOURCE, "line": 2, "seq": 2, "role": "task"},
+        {"source": SOURCE, "line": 4, "seq": 4, "role": "step"},
+        {"source": SOURCE, "line": 5, "seq": 5, "role": "result"},
+    ]
+    assert [row["kind"] for row in provenance["episodes"]] == [
+        "observed_procedure",
+        "error_recovery",
+        "observed_procedure",
+    ]
+
+
+def test_build_provenance_redacts_secrets_in_evidence_text() -> None:
+    token = "x" * 24
+    shown = {
+        "ev1": _fragment("ev1", 4, 'tool.start bash: {"cmd": "curl -H \'Bearer ' + token + "'\"}"),
+        "ev2": _fragment("ev2", 5, "tool.error bash (error): exit 2"),
+    }
+    bundle = EvidenceBundle("(text)", shown, [BundleEpisode(_episode([4, 5]), "shown")])
+
+    provenance = _provenance_with(bundle=bundle)
+
+    text = provenance["evidence_shown"]["ev1"]["text"]
+    assert "[REDACTED:bearer token]" in text and token not in text
+    assert text == 'tool.start bash: {"cmd": "curl -H \'[REDACTED:bearer token]\'"}'
+    assert token not in json.dumps(provenance)
+    assert provenance["evidence_shown"]["ev2"]["text"] == "tool.error bash (error): exit 2"
+
+
+def test_build_provenance_redacts_json_keyed_credential_in_evidence_text() -> None:
+    # Bundle excerpts render tool.start arguments as JSON, so the key is quoted.
+    value = "hunter2" * 2
+    shown = {
+        "ev1": _fragment("ev1", 4, 'tool.start http_request: {"headers": {"password": "' + value + '"}}'),
+        "ev2": _fragment("ev2", 5, "tool.error bash (error): exit 2"),
+    }
+    bundle = EvidenceBundle("(text)", shown, [BundleEpisode(_episode([4, 5]), "shown")])
+
+    provenance = _provenance_with(bundle=bundle)
+
+    text = provenance["evidence_shown"]["ev1"]["text"]
+    assert text == 'tool.start http_request: {"headers": {"password": "[REDACTED:credential assignment]"}}'
+    assert value not in json.dumps(provenance)
+
+
+def test_build_provenance_rejects_demo_update_and_missing_base_hash() -> None:
+    with pytest.raises(ValueError, match="demo proposal must create a new skill, got target.action 'update'"):
+        _provenance_with(demo=True, target=UPDATE_TARGET)
+    with pytest.raises(ValueError, match="update provenance needs target.base_sha256"):
+        _provenance_with(target={**UPDATE_TARGET, "base_sha256": None})
+    with pytest.raises(ValueError, match="needs target.base_sha256"):
+        _provenance_with(target={"action": "update", "existing_skill": "real", "existing_path": "/x"})
+    with pytest.raises(ValueError, match="unknown verification level 'tested'"):
+        _provenance_with(verification={"level": "tested", "note": ""})
+    with pytest.raises(ValueError, match="demo must be a bool"):
+        _provenance_with(demo=1)
+    with pytest.raises(ValueError, match=r"policy is missing \['source'\]"):
+        _provenance_with(policy={"requested": "strict_knowledge", "selection": "strict_knowledge"})
+    with pytest.raises(ValueError, match=r"prompt_hashes is missing \['review'\]"):
+        _provenance_with(prompt_hashes={"classify": "sha256:c", "render": "sha256:r"})
+    assert VERIFICATION_LEVELS == ("evidence_supported", "execution_verified")
+    assert _provenance_with(verification={"level": "execution_verified", "note": "ran"})["verification"]["level"] == (
+        "execution_verified"
+    )
 
 
 def test_build_provenance_stamps_utc_time() -> None:
@@ -292,9 +488,10 @@ def _scoped(candidates: list[Candidate]) -> dict[str, Any]:
         rejected=[],
         sources={SOURCE: "/t/a.jsonl"},
         model="fake-model",
-        prompt_variants={"classify": "c", "render": "r"},
+        prompt_variants=PROMPT_VARIANTS,
         category="default",
-        target={"action": "create", "existing_skill": None, "existing_path": None},
+        target=CREATE_TARGET,
+        **_v4_kwargs(),
     )
 
 
@@ -339,8 +536,9 @@ def test_write_proposal_writes_skill_and_provenance(tmp_path: Path) -> None:
     assert path.read_text(encoding="utf-8") == SKILL
     provenance = json.loads((path.parent / "provenance.json").read_text(encoding="utf-8"))
     assert REQUIRED_PROVENANCE_KEYS <= set(provenance)
-    assert provenance["features_version"] == 3
-    assert provenance["provenance_version"] == 3
+    assert provenance["features_version"] == 4
+    assert provenance["provenance_version"] == 4
+    assert provenance["demo"] is False and provenance["policy"]["selection"] == "strict_knowledge"
     assert sorted(p.name for p in path.parent.iterdir()) == ["SKILL.md", "provenance.json"]
     assert not (root / "default").exists()
 
@@ -424,6 +622,76 @@ def test_write_proposal_rejects_non_json_provenance(tmp_path: Path) -> None:
     assert not (tmp_path / PROPOSALS_DIR).exists()
 
 
+def test_write_proposal_refuses_package_with_secret(tmp_path: Path) -> None:
+    key = "AKIA" + "A" * 16
+    leaked = SKILL.replace("A green run.", f"A green run; export the key {key} first.")
+    line = leaked.split("\n").index(f"A green run; export the key {key} first.") + 1
+
+    with pytest.raises(SecretsDetected) as info:
+        write_proposal(leaked, root=tmp_path, name=NAME, provenance=_provenance(), thread_id=THREAD_ID)
+
+    message = str(info.value)
+    assert message.startswith("proposal package contains possible secrets; nothing written: ")
+    assert f"SKILL.md:{line}: possible secret (aws access key)" in message
+    assert key not in message
+    assert not (tmp_path / PROPOSALS_DIR).exists()
+
+    # A secret only in the provenance (a candidate rule the model echoed) is refused the same way.
+    token = "ghp_" + "b" * 36
+    tainted = _provenance(candidates=[_candidate(rule=f"Authenticate with {token} before pushing.").model_dump()])
+    with pytest.raises(SecretsDetected) as info:
+        _write(tmp_path, provenance=tainted)
+    assert "provenance.json:" in str(info.value) and "possible secret (github token)" in str(info.value)
+    assert token not in str(info.value)
+    assert not (tmp_path / PROPOSALS_DIR).exists()
+
+
+def test_write_proposal_refuses_quoted_credential_in_candidate_rule(tmp_path: Path) -> None:
+    # json.dumps escapes the quotes around the value; the raw text fields are scanned as well.
+    value = "hunter2" * 2
+    tainted = _provenance(candidates=[_candidate(rule=f'Set password: "{value}" in the config').model_dump()])
+
+    with pytest.raises(SecretsDetected) as info:
+        _write(tmp_path, provenance=tainted)
+
+    message = str(info.value)
+    assert "provenance.json: possible secret (credential assignment) in a text field" in message
+    assert value not in message
+    assert not (tmp_path / PROPOSALS_DIR).exists()
+    clean = _provenance()
+    assert scan_package({"provenance.json": json.dumps(clean)}, raw=clean) == []
+
+
+def test_scan_package_names_file_line_and_label() -> None:
+    bearer = "Bearer " + "y" * 24
+    findings = scan_package({"SKILL.md": f"ok\n{bearer}\n", "provenance.json": '{"rule": "password: hunter2secret"}'})
+
+    assert findings == [
+        "SKILL.md:2: possible secret (bearer token)",
+        "provenance.json:1: possible secret (credential assignment)",
+    ]
+    assert scan_package({"SKILL.md": SKILL, "provenance.json": json.dumps(_provenance())}) == []
+
+
+def test_write_proposal_refuses_demo_non_create(tmp_path: Path) -> None:
+    provenance = _provenance(demo=True, target=UPDATE_TARGET)
+
+    with pytest.raises(ValueError, match=r"demo proposal must target a new skill \(create\)"):
+        _write(tmp_path, provenance=provenance)
+    assert not (tmp_path / PROPOSALS_DIR).exists()
+
+    demo = _provenance(demo=True, policy={**POLICY, "selection": "demo_workflow"})
+    path = write_proposal(
+        SKILL.replace(f"name: {NAME}", "name: demo-build-before-test"),
+        root=tmp_path,
+        name="demo-build-before-test",
+        provenance=demo,
+        thread_id=THREAD_ID,
+    )
+    stored = json.loads((path.parent / "provenance.json").read_text(encoding="utf-8"))
+    assert stored["demo"] is True and stored["policy"]["selection"] == "demo_workflow"
+
+
 # ---------------------------------------------------------- scanner guarantee
 
 
@@ -491,9 +759,10 @@ def test_provenance_shown_fragments_resolve_to_source_lines(tmp_path: Path, fixt
         rejected=[(rejected, "evidence not shown in the bundle: ['ev999']")],
         sources={trajectory.source: str(trajectory.path)},
         model="fake-model",
-        prompt_variants={"classify": "c", "render": "r"},
+        prompt_variants=PROMPT_VARIANTS,
         category="default",
-        target={"action": "create", "existing_skill": None, "existing_path": None},
+        target=CREATE_TARGET,
+        **_v4_kwargs(),
     )
 
     path = write_proposal(
@@ -501,7 +770,8 @@ def test_provenance_shown_fragments_resolve_to_source_lines(tmp_path: Path, fixt
     )
 
     stored = json.loads((path.parent / "provenance.json").read_text(encoding="utf-8"))
-    assert stored["provenance_version"] == 3
+    assert stored["provenance_version"] == 4
+    assert stored["observed_procedure_source"] == []
     assert stored["thread_ids"] == [trajectory.thread_id]
     assert stored["sources"] == {source.name: str(source)}
     shown = stored["evidence_shown"]

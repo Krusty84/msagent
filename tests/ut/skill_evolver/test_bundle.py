@@ -33,7 +33,9 @@ import pytest
 from msagent.skill_evolver.bundle import (
     ELLIPSIS,
     EXCERPT_LIMIT,
+    EXCLUDED_CODE,
     FACT_LIMIT,
+    OBSERVED_LINE,
     EvidenceBundle,
     build_evidence_bundle,
 )
@@ -531,6 +533,113 @@ def test_minimal_block_shows_required_only_and_counts_omitted() -> None:
     assert bundle.shown["ev1"].required is True
 
 
+def test_excerpt_chars_is_configurable_and_guarded() -> None:
+    turn = _turn("run-1", 2, "word " * 400)
+    episode = _episode("approval_denied", [2])
+
+    bundle = build_evidence_bundle([episode], [_traj(turn)], excerpt_chars=50)
+
+    excerpt_line = bundle.text.splitlines()[-1]
+    assert excerpt_line.startswith('- [ev1] user: "word word')
+    assert excerpt_line.endswith(ELLIPSIS)
+    assert len(excerpt_line) == len("- [ev1] user: ") + 50
+    assert bundle.shown["ev1"].text == excerpt_line[len("- [ev1] ") :]
+    # The default is the module constant (see test_excerpt_and_fact_clipping).
+    default = build_evidence_bundle([episode], [_traj(turn)])
+    assert len(default.text.splitlines()[-1]) == len("- [ev1] user: ") + EXCERPT_LIMIT
+    assert build_evidence_bundle([episode], [_traj(turn)], excerpt_chars=EXCERPT_LIMIT) == default
+    for bad in (len(ELLIPSIS), 0, -5):
+        with pytest.raises(ValueError, match=f"excerpt_chars must be greater than {len(ELLIPSIS)}, got {bad}"):
+            build_evidence_bundle([episode], [_traj(turn)], excerpt_chars=bad)
+
+
+# ---------------------------------------------------------------------- demo
+
+
+def _demo_traj() -> Trajectory:
+    """One ok chain (read_file, bash, bash) and a denied approval in one turn."""
+    calls = [
+        _call("read_file", {"path": "input/sales.csv"}, seq=4, output="id,amount\n1,10\n2,20\n3,30\n"),
+        _call("bash", {"cmd": "python3 sum.py input/sales.csv amount"}, seq=6, output="60.0"),
+        _call("bash", {"cmd": "python3 check.py input/sales.csv amount 60"}, seq=8, output="TOTAL_OK"),
+    ]
+    approval = _approval(12, {"decisions": [{"type": "reject"}]}, {"tool": "rm"})
+    return _traj(_turn("run-1", 2, "sum it and check", calls, approvals=[approval]))
+
+
+def test_demo_ranks_observed_procedure_first_and_prints_its_line() -> None:
+    traj = _demo_traj()
+    episodes = extract_episodes(traj, demo=True)
+    assert [e.kind for e in episodes] == ["approval_denied", "observed_procedure"]
+    denial, observed = episodes
+
+    demo = build_evidence_bundle(episodes, [traj], demo=True)
+
+    first, second = _blocks(demo.text)
+    assert [m.group(1, 2, 3) for m in _headers(demo.text)] == [
+        ("1", "observed_procedure", "0.00"),
+        ("2", "approval_denied", "1.00"),
+    ]
+    assert first.splitlines()[1] == OBSERVED_LINE.format(calls=3)
+    assert first.splitlines()[1] == (
+        "Observed procedure: 3 call(s) in one execution context (selected by code); "
+        "ok status is not proof of task success"
+    )
+    assert "Observed procedure:" not in second
+    assert _excerpts(first) == [
+        '- [ev1] user: "sum it and check"',
+        '- [ev2] tool.start read_file: {"path": "input/sales.csv"}',
+        "- [ev3] tool.result read_file (ok): id,amount 1,10 2,20 3,30",
+        '- [ev4] tool.start bash: {"cmd": "python3 sum.py input/sales.csv amount"}',
+        "- [ev5] tool.result bash (ok): 60.0",
+        '- [ev6] tool.start bash: {"cmd": "python3 check.py input/sales.csv amount 60"}',
+        "- [ev7] tool.result bash (ok): TOTAL_OK",
+    ]
+    assert demo.kept == [observed, denial]
+    assert [(item.status, item.episode_id) for item in demo.episodes] == [("shown", "E1"), ("shown", "E2")]
+    assert demo.episode_ids == {"E1": observed, "E2": denial}
+    assert list(demo.episode_ids) == ["E1", "E2"]
+
+    # Without demo the weight order stands and the zero-weight chain comes last.
+    plain = build_evidence_bundle(episodes, [traj])
+    assert [m.group(2) for m in _headers(plain.text)] == ["approval_denied", "observed_procedure"]
+    assert plain.episode_ids == {"E1": denial, "E2": observed}
+    assert _blocks(plain.text)[1].splitlines()[1] == OBSERVED_LINE.format(calls=3)
+
+    # An excluded episode has no id and is absent from episode_ids.
+    excluded = build_evidence_bundle(episodes, [traj], demo=True, max_chars=len(first))
+    assert [(item.status, item.episode_id) for item in excluded.episodes] == [("shown", "E1"), ("excluded", None)]
+    assert excluded.episode_ids == {"E1": observed}
+    assert EXCLUDED_CODE == "insufficient_context_budget"
+    # Positional construction and the default of the new field keep working.
+    assert EvidenceBundle("", {}, []).episode_ids == {}
+
+
+def test_demo_fixture_bundle_resolves_and_is_complete() -> None:
+    path = FIXTURES / "skill_evolver_demo_success.jsonl"
+    traj = load_trajectory(path)
+    (episode,) = extract_episodes(traj, skill_index=BM25Index(DOCS), demo=True)
+
+    bundle = build_evidence_bundle([episode], [traj], demo=True)
+
+    assert _statuses(bundle) == ["shown"] and len(_blocks(bundle.text)) == 1
+    assert bundle.episode_ids == {"E1": episode}
+    assert {fragment.role for fragment in bundle.shown.values()} == {"task", "step", "result"}
+    assert all(fragment.required for fragment in bundle.shown.values())
+    for fragment in bundle.shown.values():
+        assert fragment.ref.source == path.name
+        assert _seq_at(path, fragment.ref.line) == fragment.ref.seq
+    excerpts = _excerpts(bundle.text)
+    assert excerpts[0] == (
+        '- [ev1] user: "Compute the sum of the amount column in input/sales.csv and check that the total is 60"'
+    )
+    results = [line for line in excerpts if "tool.result" in line]
+    assert len(results) == 3
+    assert results[1].endswith("tool.result bash (ok): 60.0")
+    assert results[2].endswith("tool.result bash (ok): TOTAL_OK")
+    assert "ai:" not in bundle.text  # the assistant's text is never shown as evidence
+
+
 # ---------------------------------------------------------------- collisions
 
 
@@ -663,9 +772,14 @@ def test_cross_session_episodes_render() -> None:
         support = episode.facts["support"]
         assert block.splitlines()[1] == f"Support: {support} threads (counted by code); excerpts from 2 of them"
         excerpts = _excerpts(block)
-        assert len(excerpts) == 2 * len(episode.tool_sequence)
-        own, other = excerpts[: len(episode.tool_sequence)], excerpts[len(episode.tool_sequence) :]
+        # Owner steps with their results (a start-less owner has start == end,
+        # so its result refs collapse into the step refs), the second
+        # thread's steps, then the owner's own task line.
+        n = len(episode.tool_sequence)
+        assert len(excerpts) in (2 * n + 1, 3 * n + 1)
+        own, other, task = excerpts[: -n - 1], excerpts[-n - 1 : -1], excerpts[-1]
         assert not any("(thread " in line for line in own)
         assert all("] (thread " in line for line in other)
+        assert "] user:" in task and "(thread " not in task
     for fragment in bundle.shown.values():
         assert _seq_at(paths[fragment.ref.source], fragment.ref.line) == fragment.ref.seq

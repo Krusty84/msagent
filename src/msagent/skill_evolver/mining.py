@@ -20,12 +20,15 @@
 
 Up to ``max_plans`` proposals per thread: every selected trajectory is turned
 into episodes by code, gated by ``features.gate_decision`` (incident score
-against ``min_evidence_score``, plus the strong correction rule) and only then
-classified by the LLM and rendered once per plan (a new skill, or a library
-skill being updated). ``--dry-run`` stops after the code-only
-stage and prints the gate decision with its reason and the episode table
-with incident labels, so detector behaviour can be inspected without
-spending a token.
+against ``min_evidence_score``, plus the strong correction rule and, in demo
+mode, the observed-procedure override) and only then handed to
+:func:`msagent.skill_evolver.pipeline.run_thread`, the stage sequence shared
+with /direct-skill-generation; a refused thread still leaves its gate-only
+decision report. ``--dry-run`` stops after the code-only stage
+and prints the gate decision with its reason, the episode table with
+incident labels and a bundle preview, so detector behaviour can be inspected
+without spending a token. ``--policy``, ``--demo`` and ``--no-demo`` override
+the config for one run.
 """
 
 from __future__ import annotations
@@ -36,7 +39,6 @@ import time
 from dataclasses import dataclass, field
 from datetime import timedelta
 from pathlib import Path
-from typing import Any
 
 from rich import box
 from rich.markup import escape
@@ -44,29 +46,46 @@ from rich.table import Table
 from rich.text import Text
 
 from msagent.cli.bootstrap.initializer import initializer
-from msagent.cli.theme import console, theme
+from msagent.cli.theme import console
 from msagent.core.constants import SKILL_EVOLVER_CONFIG_FOLDER_NAME
 from msagent.core.logging import get_logger
-from msagent.skill_evolver.bundle import build_evidence_bundle
-from msagent.skill_evolver.exgraph_context import attach_stored_graph
-from msagent.skill_evolver.classify import classify
-from msagent.skill_evolver.direct_skill_generation import (
+from msagent.skill_evolver.budget import llm_call_bound
+from msagent.skill_evolver.cli_args import POLICY_USAGE, CliArgsError, SharedFlags, take_shared_flag
+from msagent.skill_evolver.config import (
     CROSS_SESSION_LIMIT,
     DirectSkillGenerationConfig,
-    DirectSkillGenerationHandler,
-    PlanContext,
-    PlanTally,
-    _collect_episodes,
-    _supporting,
+    EffectiveRules,
+    SkillEvolverConfigError,
+    apply_overrides,
+    effective_rules,
 )
+from msagent.skill_evolver.direct_skill_generation import DirectSkillGenerationHandler
 from msagent.skill_evolver.features import (
+    DetectorNote,
     Episode,
     GateDecision,
     evidence_score,
     gate_decision,
     group_incidents,
 )
-from msagent.skill_evolver.render import plan_render
+from msagent.skill_evolver.pipeline import (
+    LazyLlm,
+    PlanTally,
+    RunContext,
+    ThreadInput,
+    bundle_preview,
+    collect_episodes,
+    gate_lines,
+    load_prompts,
+    print_policy_block,
+    record_gate_refusal,
+    report_config_error,
+    run_thread,
+    status,
+    supporting,
+)
+from msagent.skill_evolver.prompts import PromptContractError
+from msagent.skill_evolver.report import decisions_dir
 from msagent.skill_evolver.retrieval import BM25Index, SkillDoc
 from msagent.skills.factory import Skill
 from msagent.trajectory_recorder.export import (
@@ -75,21 +94,18 @@ from msagent.trajectory_recorder.export import (
 )
 from msagent.trajectory_recorder.reader import (
     Trajectory,
+    TrajectoryReadError,
     load_trajectories,
     load_trajectory,
 )
 
 logger = get_logger(__name__)
 
-USAGE = "/skill-mine [--threads N] [--since 7d] [--dry-run] [--thread <id>]"
-# Threads mined by default: at most ``llm_call_bound(1, max_plans)`` LLM calls
-# each, and the evidence gate usually cuts that further. Cross-session support
-# is unaffected by this number.
+USAGE = "/skill-mine [--threads N] [--since 7d] [--dry-run] [--thread <id>] " + POLICY_USAGE
+# Threads mined by default: at most ``llm_call_bound(1, max_plans, ...)`` LLM
+# calls each, and the evidence gate usually cuts that further. Cross-session
+# support is unaffected by this number.
 DEFAULT_THREADS = 5
-# LLM calls one thread can cost: classify (a call plus one corrective retry)
-# and the same pair per render plan. Transport retries are not counted.
-CLASSIFY_CALLS = 2
-RENDER_CALLS_PER_PLAN = 2
 # Thread ids are uuid4; this prefix stays unique in practice and is still a
 # valid --thread argument (find_trajectory_file resolves unique prefixes).
 THREAD_ID_WIDTH = 12
@@ -101,7 +117,6 @@ MAX_SEQ_SHOWN = 8
 _SINCE_RE = re.compile(r"^(\d+)([hdw])$")
 _SINCE_SECONDS = {"h": 3600.0, "d": 86400.0, "w": 604800.0}
 
-_REJECTED = "SKILL.md rejected after one correction; nothing written:"
 _NO_TOOL_EVENTS_NOTE = " ".join(
     (
         "Threads showing 0 tools have no tool.* events recorded.",
@@ -113,14 +128,8 @@ _NO_TOOL_EVENTS_NOTE = " ".join(
     ),
 )
 
-
-def llm_call_bound(threads: int, max_plans: int) -> int:
-    """Most LLM calls a run over ``threads`` passing threads can make."""
-    return threads * (CLASSIFY_CALLS + RENDER_CALLS_PER_PLAN * max_plans)
-
-
-class MineArgsError(ValueError):
-    """The command line of /skill-mine is not valid."""
+# The shared flags' violations keep the historical name.
+MineArgsError = CliArgsError
 
 
 class MineSelectionError(ValueError):
@@ -135,6 +144,8 @@ class MineOptions:
     since: timedelta | None = None
     dry_run: bool = False
     thread: str | None = None
+    policy: str | None = None
+    demo: bool | None = None
 
 
 @dataclass(slots=True)
@@ -149,6 +160,8 @@ class ThreadStats:
     # Other trajectories the episodes cite (a shared procedure's second
     # session); the evidence bundle indexes them next to ``trajectory``.
     supporting: list[Trajectory] = field(default_factory=list)
+    # Why observed_procedure candidates were dropped (demo only).
+    notes: list[DetectorNote] = field(default_factory=list)
 
     @property
     def thread_id(self) -> str:
@@ -160,37 +173,9 @@ class ThreadStats:
         """Incident score of the episodes mined from this thread."""
         return evidence_score(self.episodes)
 
-    def gate(self, min_score: float) -> GateDecision:
+    def gate(self, min_score: float, *, demo: bool = False) -> GateDecision:
         """Whether this thread reaches the LLM stage, and why."""
-        return gate_decision(self.episodes, min_score=min_score)
-
-
-@dataclass(frozen=True, slots=True)
-class StagePrompts:
-    """Templates and resolved sources of the classify and render stages."""
-
-    classify: str
-    classify_source: str
-    render: str
-    render_source: str
-
-
-@dataclass(slots=True)
-class LazyLlm:
-    """Builds the LLM on first use, so a dry or fully gated run creates none."""
-
-    session: Any
-    llm: Any = None
-    model: str = ""
-
-    async def get(self) -> Any:
-        """The analysis model of the session, created once per run."""
-        if self.llm is None:
-            ctx = self.session.context
-            config = await initializer.load_llm_config(ctx.model, ctx.working_dir)
-            self.llm = initializer.llm_factory.create(config)
-            self.model = config.model
-        return self.llm
+        return gate_decision(self.episodes, min_score=min_score, demo=demo)
 
 
 # ------------------------------------------------------------ argument parsing
@@ -231,17 +216,15 @@ def parse_mine_args(args: list[str]) -> MineOptions:
     threads: int | None = None
     since: timedelta | None = None
     thread: str | None = None
-    dry_run = False
+    shared = SharedFlags()
 
     index = 0
     while index < len(args):
-        token = args[index]
-        if token == "--dry-run":
-            if dry_run:
-                raise MineArgsError("--dry-run given twice")
-            dry_run = True
-            index += 1
+        consumed = take_shared_flag(args, index, shared)
+        if consumed is not None:
+            index = consumed
             continue
+        token = args[index]
         if token in ("--threads", "--since", "--thread"):
             if index + 1 >= len(args):
                 raise MineArgsError(f"{token} requires a value")
@@ -274,8 +257,10 @@ def parse_mine_args(args: list[str]) -> MineOptions:
     return MineOptions(
         threads=DEFAULT_THREADS if threads is None else threads,
         since=since,
-        dry_run=dry_run,
+        dry_run=shared.dry_run,
         thread=thread,
+        policy=shared.policy,
+        demo=shared.demo,
     )
 
 
@@ -327,11 +312,13 @@ def count_shape(trajectory: Trajectory) -> tuple[int, int, int]:
     return turns, tool_calls, ai_messages
 
 
-def build_threads_table(stats: list[ThreadStats], *, min_score: float) -> Table:
+def build_threads_table(stats: list[ThreadStats], *, min_score: float, demo: bool = False) -> Table:
     """One row per selected thread: shape counters, score and the gate."""
+    title = f"Threads (min_evidence_score {min_score:.2f}"
+    title += ", demo override)" if demo else ")"
     table = Table(
         box=box.SIMPLE_HEAD,
-        title=f"Threads (min_evidence_score {min_score:.2f})",
+        title=title,
         title_style="accent",
         title_justify="left",
         header_style="accent",
@@ -352,7 +339,7 @@ def build_threads_table(stats: list[ThreadStats], *, min_score: float) -> Table:
         # A zero tool count is the single most diagnostic number here: it
         # means no detector that needs tool calls could ever fire.
         tools_style = "warning" if item.tool_calls == 0 else "muted"
-        decision = item.gate(min_score)
+        decision = item.gate(min_score, demo=demo)
         gate = Text("pass", style="success") if decision.passes else Text("skip", style="muted")
         table.add_row(
             escape(short_thread(item.thread_id)),
@@ -363,7 +350,7 @@ def build_threads_table(stats: list[ThreadStats], *, min_score: float) -> Table:
             str(len(decision.incidents)),
             f"{decision.score:.2f}",
             gate,
-            escape(decision.reason),
+            escape(decision.describe()),
         )
     return table
 
@@ -442,10 +429,11 @@ def select_trajectories(
     agent: str,
     options: MineOptions,
     now: float,
+    cross_session_limit: int = CROSS_SESSION_LIMIT,
 ) -> tuple[list[Trajectory], list[Trajectory]]:
     """Pick the threads to mine plus the cross-session pool behind them.
 
-    The pool is the agent's newest ``CROSS_SESSION_LIMIT`` trajectories, the
+    The pool is the agent's newest ``cross_session_limit`` trajectories, the
     same set the single-thread command builds, so repeated procedures keep
     their support. ``--since`` compares file mtime, not ``started_at``: mtime
     is always present and means last activity, while ``started_at`` is the
@@ -461,9 +449,9 @@ def select_trajectories(
     listing = load_trajectories(
         trajectories_dir,
         agent=agent,
-        limit=max(options.threads, CROSS_SESSION_LIMIT),
+        limit=max(options.threads, cross_session_limit),
     )
-    pool = listing[:CROSS_SESSION_LIMIT]
+    pool = listing[:cross_session_limit]
 
     if options.thread is not None:
         return [_resolve_thread(trajectories_dir, options.thread, pool)], pool
@@ -514,6 +502,8 @@ def mine_stats(
     targets: list[Trajectory],
     pool: list[Trajectory],
     skills: list[Skill],
+    *,
+    demo: bool = False,
 ) -> list[ThreadStats]:
     """Run the code-only detectors over every selected thread."""
     docs = [SkillDoc(skill.display_name, skill.description) for skill in skills]
@@ -525,7 +515,8 @@ def mine_stats(
         # the first thread it sees, so the kept episodes belong to this thread
         # and cite its events plus those of one supporting session, which the
         # bundle must index too (``supporting``).
-        episodes = _collect_episodes(target, others, skill_index=index)
+        notes: list[DetectorNote] = []
+        episodes = collect_episodes(target, others, skill_index=index, demo=demo, notes=notes)
         turns, tool_calls, ai_messages = count_shape(target)
         stats.append(
             ThreadStats(
@@ -534,7 +525,8 @@ def mine_stats(
                 tool_calls=tool_calls,
                 ai_messages=ai_messages,
                 episodes=episodes,
-                supporting=_supporting(others, episodes),
+                supporting=supporting(others, episodes),
+                notes=notes,
             ),
         )
     return stats
@@ -563,8 +555,14 @@ class SkillMiningHandler:
 
         try:
             await self._run(options)
+        except (SkillEvolverConfigError, PromptContractError) as exc:
+            report_config_error(console, exc)
+            console.print("")
         except MineSelectionError as exc:
             console.print_warning(escape(str(exc)))
+            console.print("")
+        except TrajectoryReadError as exc:
+            console.print_warning(escape(f"Trajectory unreadable ({exc}); the LLM was not called"))
             console.print("")
         except Exception as exc:
             console.print_error(escape(f"Error mining skills: {exc}"))
@@ -574,7 +572,8 @@ class SkillMiningHandler:
     async def _run(self, options: MineOptions) -> None:
         """Select threads, extract evidence, then report or mine."""
         ctx = self.session.context
-        cfg = DirectSkillGenerationHandler._load_config()
+        cfg = apply_overrides(DirectSkillGenerationHandler._load_config(), policy=options.policy, demo=options.demo)
+        rules = effective_rules(cfg, working_dir=Path(ctx.working_dir))
         state_dir = initializer.get_project_paths(Path(ctx.working_dir)).root
         trajectories_dir = resolve_trajectories_dir(state_dir=state_dir)
         skills = await self._load_skills()
@@ -588,20 +587,22 @@ class SkillMiningHandler:
                 options,
                 skills,
                 now,
+                rules,
             )
 
         self._report_selection(stats, options, agent=ctx.agent)
+        print_policy_block(console, cfg, rules)
         console.console.print(
-            build_threads_table(stats, min_score=cfg.min_evidence_score),
+            build_threads_table(stats, min_score=rules.min_evidence_score, demo=rules.demo),
         )
         if any(item.tool_calls == 0 for item in stats):
             console.print(f"[muted]{_NO_TOOL_EVENTS_NOTE}[/muted]")
 
         if options.dry_run:
-            self._report_dry_run(stats, cfg)
+            self._report_dry_run(stats, rules)
             return
 
-        await self._mine(stats, cfg=cfg, skills=skills)
+        await self._mine(stats, cfg=cfg, rules=rules, skills=skills)
 
     @staticmethod
     def _gather(
@@ -610,6 +611,7 @@ class SkillMiningHandler:
         options: MineOptions,
         skills: list[Skill],
         now: float,
+        rules: EffectiveRules,
     ) -> list[ThreadStats]:
         """Blocking part of a run: read the JSONL files and detect episodes."""
         targets, pool = select_trajectories(
@@ -617,8 +619,9 @@ class SkillMiningHandler:
             agent=agent,
             options=options,
             now=now,
+            cross_session_limit=rules.cross_session_limit,
         )
-        return mine_stats(targets, pool, skills)
+        return mine_stats(targets, pool, skills, demo=rules.demo)
 
     @staticmethod
     def _report_selection(
@@ -639,25 +642,39 @@ class SkillMiningHandler:
         console.print_info(f"{prefix}{escape(scope)}")
 
     @staticmethod
-    def _report_dry_run(stats: list[ThreadStats], cfg: DirectSkillGenerationConfig) -> None:
-        """Episode table and the totals; no LLM exists at this point."""
-        min_score = cfg.min_evidence_score
+    def _report_dry_run(stats: list[ThreadStats], rules: EffectiveRules) -> None:
+        """Episode table, per-thread gate and bundle preview, then the totals; no LLM exists at this point."""
+        min_score = rules.min_evidence_score
         episodes = sum(len(item.episodes) for item in stats)
         if episodes:
             console.console.print(build_episodes_table(stats))
         else:
             console.print_info(f"No episodes detected in {len(stats)} threads.")
 
-        decisions = [item.gate(min_score) for item in stats]
+        decisions = [item.gate(min_score, demo=rules.demo) for item in stats]
+        for item, decision in zip(stats, decisions):
+            console.print(f"[muted]thread {escape(short_thread(item.thread_id))}:[/muted]")
+            thread = ThreadInput(item.trajectory, item.supporting, item.episodes, item.notes)
+            for line in (
+                *gate_lines(decision, min_score=min_score, episodes=item.episodes),
+                *bundle_preview(thread, rules),
+            ):
+                console.print(f"[muted]  {escape(line)}[/muted]")
         incidents = sum(len(decision.incidents) for decision in decisions)
         total = sum(decision.score for decision in decisions)
         passing = sum(1 for decision in decisions if decision.passes)
+        bound = llm_call_bound(
+            passing,
+            rules.max_plans,
+            max_llm_calls=rules.max_llm_calls,
+            expand=rules.on_nothing == "expand_context_once",
+        )
         summary = " ".join(
             (
                 f"Dry run: {len(stats)} threads, {episodes} episodes,",
                 f"{incidents} incidents, total evidence score {total:.2f};",
                 f"{passing} threads would reach the LLM (up to",
-                f"{llm_call_bound(passing, cfg.max_plans)} LLM calls).",
+                f"{bound} LLM calls).",
                 "Nothing was written and no LLM was created.",
             ),
         )
@@ -669,39 +686,55 @@ class SkillMiningHandler:
         stats: list[ThreadStats],
         *,
         cfg: DirectSkillGenerationConfig,
+        rules: EffectiveRules,
         skills: list[Skill],
     ) -> None:
-        """Run the LLM stages for every thread that passes the evidence gate."""
-        passing = [item for item in stats if item.gate(cfg.min_evidence_score).passes]
-        below = len(stats) - len(passing)
+        """Run the LLM stages for every thread that passes the evidence gate; a refused one gets its gate-only report."""
+        decisions = [item.gate(rules.min_evidence_score, demo=rules.demo) for item in stats]
+        passing = [item for item, decision in zip(stats, decisions) if decision.passes]
+        refused = [item for item, decision in zip(stats, decisions) if not decision.passes]
+        below = len(refused)
+
+        root = initializer.app_paths.home / SKILL_EVOLVER_CONFIG_FOLDER_NAME / "prompts"
+        prompts = await load_prompts(self._generator._load_stage_prompt, root, cfg)
+        work = Path(self.session.context.working_dir)
+        state_dir = initializer.get_project_paths(work).root
+        run = RunContext(
+            command="skill-mine",
+            working_dir=work,
+            state_dir=state_dir,
+            requested=cfg,
+            rules=rules,
+            prompts=prompts,
+            skills=skills,
+            llm_slot=LazyLlm(self.session),
+            # Names a new skill must not reuse: the library plus every create
+            # proposal written earlier in this run, across threads.
+            taken={s.name for s in skills} | {s.display_name for s in skills},
+            sink=console,
+            report_dir=decisions_dir(state_dir) if rules.save_decision_report else None,
+        )
+        for item in refused:
+            await record_gate_refusal(run, ThreadInput(item.trajectory, item.supporting, item.episodes, item.notes))
         if not passing:
-            threshold = f"{cfg.min_evidence_score:.2f}"
+            threshold = f"{rules.min_evidence_score:.2f}"
             detail = f"skipped by the gate (min_evidence_score {threshold})"
             console.print_info(f"Nothing to mine: {below} threads {detail}")
             console.print("")
             return
 
-        prompts = await self._load_prompts(cfg)
-        bound = llm_call_bound(len(passing), cfg.max_plans)
+        bound = llm_call_bound(
+            len(passing),
+            rules.max_plans,
+            max_llm_calls=rules.max_llm_calls,
+            expand=rules.on_nothing == "expand_context_once",
+        )
         console.print_info(f"Mining {len(passing)} threads (up to {bound} LLM calls)")
-        llm_slot = LazyLlm(self.session)
-        # Names a new skill must not reuse: the library plus every create
-        # proposal written earlier in this run, across threads.
-        taken = {s.name for s in skills} | {s.display_name for s in skills}
         total = PlanTally()
         nothing = 0
         failed: list[str] = []
         for position, item in enumerate(passing, start=1):
-            tally = await self._mine_thread(
-                item,
-                cfg=cfg,
-                prompts=prompts,
-                skills=skills,
-                llm_slot=llm_slot,
-                taken=taken,
-                position=position,
-                total=len(passing),
-            )
+            tally = await self._mine_thread(item, run=run, position=position, total=len(passing))
             if tally is None:
                 failed.append(item.thread_id)
                 continue
@@ -732,15 +765,11 @@ class SkillMiningHandler:
         self,
         stats: ThreadStats,
         *,
-        cfg: DirectSkillGenerationConfig,
-        prompts: StagePrompts,
-        skills: list[Skill],
-        llm_slot: LazyLlm,
-        taken: set[str],
+        run: RunContext,
         position: int,
         total: int,
     ) -> PlanTally | None:
-        """Bundle → classify → plans → (render → validate → proposal) each; one thread.
+        """The shared per-thread pipeline for one thread.
 
         Returns the plan tally, or ``None`` when the thread failed before or
         outside its plans. A failure is printed and logged with its thread
@@ -748,151 +777,21 @@ class SkillMiningHandler:
         threads after earlier ones already wrote files.
         """
         thread_id = stats.thread_id
-        decision = stats.gate(cfg.min_evidence_score)
+        decision = stats.gate(run.rules.min_evidence_score, demo=run.rules.demo)
         header = (
             f"[{position}/{total}] thread {short_thread(thread_id)} —"
             f" score {decision.score:.2f}, {len(stats.episodes)} episodes,"
-            f" {len(decision.incidents)} incidents, {decision.reason}"
+            f" {len(decision.incidents)} incidents, {decision.describe()}"
         )
         console.print_info(escape(header))
         try:
-            return await self._generate(
-                stats,
-                cfg=cfg,
-                prompts=prompts,
-                skills=skills,
-                llm_slot=llm_slot,
-                taken=taken,
-            )
+            thread = ThreadInput(stats.trajectory, stats.supporting, stats.episodes, stats.notes)
+            result = await run_thread(run, thread)
         except Exception as exc:
             console.print_error(escape(f"thread {thread_id}: {exc}"))
             logger.exception("Mining thread %s failed", thread_id)
             return None
-
-    async def _generate(
-        self,
-        stats: ThreadStats,
-        *,
-        cfg: DirectSkillGenerationConfig,
-        prompts: StagePrompts,
-        skills: list[Skill],
-        llm_slot: LazyLlm,
-        taken: set[str],
-    ) -> PlanTally:
-        """The LLM stages of one thread; a plan is written only when valid."""
-        current = stats.trajectory
-        thread_id = stats.thread_id
-        trajectories = [current, *stats.supporting]
-        bundle = build_evidence_bundle(stats.episodes, trajectories)
-        warnings, stop = DirectSkillGenerationHandler._report_bundle(bundle, cfg.min_evidence_score)
-        for line in warnings:
-            console.print_warning(escape(line))
-        if stop is not None:
-            console.print_info(stop)
-            return PlanTally()
-        work = Path(self.session.context.working_dir)
-        state = initializer.get_project_paths(work).root
-        bundle_text = attach_stored_graph(
-            bundle.text, current, working_dir=work, state_dir=state,
-        )
-        llm = await llm_slot.get()
-        library = DirectSkillGenerationHandler._skill_library_snapshot(skills)
-        with self._status("Classifying evidence..."):
-            result = await classify(
-                bundle_text,
-                bundle.shown,
-                llm,
-                prompts.classify.replace("{skill_library}", library),
-            )
-        for candidate, reason in result.rejected:
-            console.print_warning(escape(f"Rejected '{candidate.title}': {reason}"))
-        if result.verdict == "nothing":
-            console.print_info(
-                f"Nothing to save: no durable learning found in thread {thread_id}",
-            )
-            return PlanTally()
-
-        plans = plan_render(result.candidates, skills, max_plans=cfg.max_plans)
-        warnings, notes = DirectSkillGenerationHandler._report_plans(plans)
-        for line in warnings:
-            console.print_warning(escape(line))
-        for line in notes:
-            console.print_info(escape(line))
-        tally = PlanTally(rejected=len(plans.rejected), deferred=len(plans.deferred))
-        if not plans.plans:
-            console.print_info("Nothing to save: no candidate left to render")
-            return tally
-
-        ctx = self.session.context
-        output_root = cfg.output_dir or (Path(ctx.working_dir) / "skills")
-        library_dir = output_root / cfg.category
-        context = PlanContext(
-            thread_id=thread_id,
-            thread_ids=DirectSkillGenerationHandler._cited_threads(current, stats.episodes),
-            bundle=bundle,
-            rejected=result.rejected,
-            sources={traj.source: str(traj.path) for traj in trajectories},
-            model=llm_slot.model,
-            prompt_variants={
-                "classify": prompts.classify_source,
-                "render": prompts.render_source,
-            },
-            category=cfg.category,
-            output_root=output_root,
-        )
-        total = len(plans.plans)
-        for position, plan in enumerate(plans.plans, start=1):
-            label = plan.label
-            tally.plans += 1
-            try:
-                status = f"Rendering SKILL.md (plan {position}/{total}: {escape(label)})..."
-                with self._status(status):
-                    outcome = await DirectSkillGenerationHandler._render_plan(
-                        plan,
-                        llm=llm,
-                        template=prompts.render,
-                        context=context,
-                        taken=taken,
-                    )
-            except Exception as exc:
-                tally.render_errors += 1
-                console.print_error(escape(f"plan {label}: {exc}"))
-                logger.exception("Rendering plan %s of thread %s failed", label, thread_id)
-                continue
-            if not outcome.written:
-                tally.render_errors += 1
-                console.print_error(escape(f"plan {label}: {_REJECTED}"))
-                for error in outcome.errors:
-                    console.print_error(escape(f"  - {error}"))
-                continue
-            tally.proposals += 1
-            console.print_success(escape(f"Skill proposal saved to {outcome.skill_path}"))
-            hint = DirectSkillGenerationHandler._activation_hint(
-                outcome.skill_path,
-                outcome.name,
-                plan,
-                library_dir,
-            )
-            console.print(f"[muted]{escape(hint)}[/muted]")
-        return tally
-
-    async def _load_prompts(self, cfg: DirectSkillGenerationConfig) -> StagePrompts:
-        """Resolve the classify and render templates before any LLM call."""
-        root = initializer.app_paths.home / SKILL_EVOLVER_CONFIG_FOLDER_NAME
-        prompts_root = root / "prompts"
-        loader = self._generator._load_stage_prompt
-        classify_template, classify_source = await loader(
-            prompts_root,
-            cfg,
-            "classify",
-        )
-        render_template, render_source = await loader(prompts_root, cfg, "render")
-        return StagePrompts(
-            classify=classify_template,
-            classify_source=classify_source,
-            render=render_template,
-            render_source=render_source,
-        )
+        return result.tally
 
     async def _load_skills(self) -> list[Skill]:
         """The skill catalogue of the current agent (rescanned, project first)."""
@@ -905,5 +804,4 @@ class SkillMiningHandler:
     @staticmethod
     def _status(text: str):
         """Spinner shown while a pipeline stage runs."""
-        color = theme.spinner_color
-        return console.console.status(f"[{color}]{text}[/{color}]")
+        return status(console, text)

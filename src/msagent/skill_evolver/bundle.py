@@ -39,7 +39,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from msagent.skill_evolver.features import Episode
@@ -56,6 +56,13 @@ logger = logging.getLogger(__name__)
 
 # Header of one episode block; ``idx`` is the 1-based rank among the rendered blocks.
 EPISODE_HEADER = "### Episode E{idx} — {kind} (weight {weight:.2f}, thread {thread})"
+# Second line of an observed_procedure block (demo evidence selected by code).
+OBSERVED_LINE = (
+    "Observed procedure: {calls} call(s) in one execution context (selected by code); "
+    "ok status is not proof of task success"
+)
+# Code-rejection name of an episode excluded because its required excerpts do not fit.
+EXCLUDED_CODE = "insufficient_context_budget"
 # Characters of the thread id shown in the header and on cross-thread excerpts.
 THREAD_ID_CHARS = 8
 # Length limits of one rendered fact line and of one excerpt line.
@@ -95,6 +102,8 @@ class BundleEpisode:
 
     episode: Episode
     status: BundleStatus
+    # "E<rank>" of a shown or trimmed block; ``None`` for an excluded episode.
+    episode_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,12 +113,14 @@ class EvidenceBundle:
     text: str
     # Fragment id -> fragment; exactly the "[evN]" lines of ``text``.
     shown: dict[str, ShownFragment]
-    # Every input episode, heaviest first.
+    # Every input episode, in rendering order.
     episodes: list[BundleEpisode]
+    # Episode id ("E<rank>") -> episode, for every rendered block.
+    episode_ids: dict[str, Episode] = field(default_factory=dict)
 
     @property
     def kept(self) -> list[Episode]:
-        """The episodes the model sees (shown or trimmed), heaviest first."""
+        """The episodes the model sees (shown or trimmed), in rendering order."""
         return [item.episode for item in self.episodes if item.status != "excluded"]
 
 
@@ -239,13 +250,14 @@ def _render_block(
     by_ref: dict[EvidenceRef, ShownFragment],
     *,
     required_only: bool,
+    excerpt_chars: int,
 ) -> tuple[str, list[ShownFragment]]:
     """One markdown block and the fragments it introduces (not yet in ``by_ref``).
 
     A ref already shown by an earlier block keeps its id and text: one event
     is one fragment, even when a lighter episode would have cut it
     differently. With ``required_only`` the optional excerpts are replaced by
-    a count, which is not citable.
+    a count, which is not citable. Excerpt text is cut to ``excerpt_chars``.
     """
     items = [item for item in episode.evidence if item.required] if required_only else list(episode.evidence)
     omitted = len(episode.evidence) - len(items)
@@ -260,6 +272,8 @@ def _render_block(
     if episode.kind == "repeated_procedure":
         support = episode.facts.get("support")
         lines.append(f"Support: {support} threads (counted by code); excerpts from 2 of them")
+    if episode.kind == "observed_procedure":
+        lines.append(OBSERVED_LINE.format(calls=episode.facts.get("calls")))
     if episode.tool_sequence:
         lines.append("Tools: " + _clip(", ".join(episode.tool_sequence), FACT_LIMIT))
     if episode.facts:
@@ -272,7 +286,7 @@ def _render_block(
         fragment = by_ref.get(item.ref) or new.get(item.ref)
         record = records[item.ref]
         if fragment is None:
-            text = f"{record.label}: {_clip(item.snippet or record.text, EXCERPT_LIMIT)}"
+            text = f"{record.label}: {_clip(item.snippet or record.text, excerpt_chars)}"
             fragment = ShownFragment(
                 id=f"{FRAGMENT_ID_PREFIX}{len(by_ref) + len(new) + 1}",
                 ref=item.ref,
@@ -296,28 +310,40 @@ def build_evidence_bundle(
     trajectories: list[Trajectory],
     *,
     max_chars: int = 30000,
+    excerpt_chars: int = EXCERPT_LIMIT,
+    demo: bool = False,
 ) -> EvidenceBundle:
     """Render episodes for the classify stage; return the text and its registry.
 
-    One block per episode, heaviest first (stable for equal weights). Each
+    One block per episode, heaviest first (stable for equal weights); with
+    ``demo`` the ``observed_procedure`` blocks come first — they carry the
+    admission and are short, so heavier episodes' optional excerpts can never
+    starve their required ones — and the rest keeps the weight order. Each
     episode is tried in full, then with its required excerpts only
     (``trimmed``); when even those do not fit ``max_chars`` the episode is
-    ``excluded`` — insufficient context — and lighter episodes are still
-    tried. ``shown`` holds exactly the fragments printed with an ``[evN]``
-    id: a classification citing any other id is fabricated. Fragment ids
-    are assigned in order of first appearance; one event has one id across
-    blocks.
+    ``excluded`` — insufficient context (EXCLUDED_CODE) — and later episodes
+    are still tried. ``shown`` holds exactly the fragments printed with an
+    ``[evN]`` id: a classification citing any other id is fabricated.
+    Fragment ids are assigned in order of first appearance; one event has one
+    id across blocks. ``episode_ids`` maps the ``E<rank>`` ids of the
+    rendered blocks to their episodes. Excerpts are cut to ``excerpt_chars``.
 
-    Raises ``ValueError`` on a non-positive budget and on an episode whose
-    source is not among ``trajectories`` or whose evidence ref is not in it
-    (episodes and trajectories must come from the same data). Nothing
-    raises for size: an empty bundle is a legitimate outcome.
+    Raises ``ValueError`` on a non-positive budget, an ``excerpt_chars`` that
+    leaves no room beside ELLIPSIS, and on an episode whose source is not
+    among ``trajectories`` or whose evidence ref is not in it (episodes and
+    trajectories must come from the same data). Nothing raises for size: an
+    empty bundle is a legitimate outcome.
     """
     if max_chars <= 0:
         raise ValueError(f"max_chars must be positive, got {max_chars}")
+    if excerpt_chars <= len(ELLIPSIS):
+        raise ValueError(f"excerpt_chars must be greater than {len(ELLIPSIS)}, got {excerpt_chars}")
     records = _index_records(trajectories)
     sources = {traj.source for traj in trajectories}
-    ranked = sorted(episodes, key=lambda episode: -episode.weight)
+    if demo:
+        ranked = sorted(episodes, key=lambda episode: (episode.kind != "observed_procedure", -episode.weight))
+    else:
+        ranked = sorted(episodes, key=lambda episode: -episode.weight)
     for episode in ranked:
         _check_refs(episode, records, sources)
 
@@ -331,7 +357,14 @@ def build_evidence_bundle(
         if any(not item.required for item in episode.evidence):
             attempts.append(True)
         for required_only in attempts:
-            block, new = _render_block(len(blocks) + 1, episode, records, by_ref, required_only=required_only)
+            block, new = _render_block(
+                len(blocks) + 1,
+                episode,
+                records,
+                by_ref,
+                required_only=required_only,
+                excerpt_chars=excerpt_chars,
+            )
             cost = len(block) + (len(_SEPARATOR) if blocks else 0)
             if total + cost <= max_chars:
                 blocks.append(block)
@@ -346,6 +379,7 @@ def build_evidence_bundle(
                 episode.thread_id,
                 max_chars,
             )
-        outcomes.append(BundleEpisode(episode, status))
+        outcomes.append(BundleEpisode(episode, status, None if status == "excluded" else f"E{len(blocks)}"))
     shown = {fragment.id: fragment for fragment in by_ref.values()}
-    return EvidenceBundle(_SEPARATOR.join(blocks), shown, outcomes)
+    episode_ids = {item.episode_id: item.episode for item in outcomes if item.episode_id}
+    return EvidenceBundle(_SEPARATOR.join(blocks), shown, outcomes, episode_ids)

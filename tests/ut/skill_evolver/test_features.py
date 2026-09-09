@@ -26,6 +26,7 @@ import subprocess
 import sys
 from collections import Counter
 from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, get_args
 
@@ -34,25 +35,43 @@ import pytest
 from msagent.skill_evolver import features as features_mod
 from msagent.skill_evolver.features import (
     DEFAULT_MIN_EVIDENCE_SCORE,
+    DROP_CHAIN_LIMIT,
+    DROP_EMPTY_RESULT,
+    DROP_ERROR_IN_OUTPUT,
+    DROP_MISSING_START,
+    DROP_NO_COMPLETED_CALLS,
+    DROP_NO_TASK,
+    EPISODE_KINDS,
     EPISODE_WEIGHTS,
+    ERROR_MARKERS,
+    FEATURES_VERSION,
+    GATE_DEMO_NOT_APPLICABLE,
+    GATE_DEMO_OVERRIDE,
     GATE_NO_EPISODES,
     GATE_SCORE_BELOW,
     GATE_SCORE_REACHED,
     GATE_STRONG_CORRECTION,
+    OBSERVED_MAX_CALLS,
+    OBSERVED_MAX_CHAINS,
+    REQUIRED_ROLES,
     WEAK_CORRECTION_WEIGHT,
+    DetectorNote,
     Episode,
     EpisodeKind,
     EvidenceItem,
     classify_approval,
     evidence_score,
+    expand_episode_context,
     extract_episodes,
     gate_decision,
     group_incidents,
+    has_required_evidence,
     mine_cross_session,
 )
 from msagent.skill_evolver.retrieval import BM25Index, SkillDoc
 from msagent.trajectory_recorder.model import (
     PRELUDE_RUN_ID,
+    AiMessage,
     Approval,
     EvidenceRef,
     ToolCall,
@@ -130,6 +149,7 @@ def _turn(
     message: str | None,
     calls: Sequence[ToolCall] = (),
     *,
+    ai: Sequence[AiMessage] = (),
     approvals: Sequence[Approval] = (),
     source: str = "dispatch",
 ) -> Turn:
@@ -139,9 +159,23 @@ def _turn(
         line_start=seq,
         user_message=message,
         source=source,
+        ai_messages=list(ai),
         tool_calls=list(calls),
         approvals=list(approvals),
         status="completed",
+    )
+
+
+def _ai(seq: int, text: str, tools: Sequence[str] = ()) -> AiMessage:
+    return AiMessage(
+        seq=seq,
+        span_id=f"a{seq}",
+        text=text,
+        tool_call_names=list(tools),
+        usage=None,
+        duration_ms=None,
+        subagent=None,
+        line=seq,
     )
 
 
@@ -317,8 +351,11 @@ def test_markers_report_positions_in_collapsed_text() -> None:
 
 def test_episode_weights_cover_all_kinds() -> None:
     assert set(EPISODE_WEIGHTS) == set(get_args(EpisodeKind))
-    assert all(0.0 < weight <= 1.0 for weight in EPISODE_WEIGHTS.values())
+    # Demo evidence never scores; every scoring kind weighs in (0, 1].
+    assert EPISODE_WEIGHTS["observed_procedure"] == 0.0
+    assert all(0.0 < weight <= 1.0 for kind, weight in EPISODE_WEIGHTS.items() if kind != "observed_procedure")
     assert 0.0 < WEAK_CORRECTION_WEIGHT < EPISODE_WEIGHTS["user_correction"]
+    assert FEATURES_VERSION == 4
 
 
 # ----------------------------------------------------------- error_recovery
@@ -351,7 +388,7 @@ def test_error_recovery_positive_reports_args_diff() -> None:
     assert episode.kind == "error_recovery"
     assert episode.weight == 0.6
     assert episode.thread_id == "thread-t"
-    assert episode.evidence_seq == [4, 5, 8, 9]
+    assert episode.evidence_seq == [2, 4, 5, 8, 9]
     assert episode.anchors == ["run-1#4", "run-1#8"]
     assert episode.tool_sequence == ["bash", "read_file", "bash"]
     assert episode.facts["tool"] == "bash"
@@ -389,7 +426,7 @@ def test_error_recovery_window_is_five_calls() -> None:
     near = _traj(_turn("run-1", 2, "go", [err, *fillers[:4], fixed]))
     within = extract_episodes(near)
     assert _kinds(within) == ["error_recovery"]
-    assert within[0].evidence_seq == [4, 5, 30, 31]
+    assert within[0].evidence_seq == [2, 4, 5, 30, 31]
     assert within[0].facts["calls_between"] == 4
 
     far = _traj(_turn("run-1", 2, "go", [err, *fillers, fixed]))
@@ -409,7 +446,7 @@ def test_error_recovery_crosses_turns_and_pairs_every_failure() -> None:
 
     assert _kinds(episodes) == ["error_recovery", "error_recovery"]
     evidence = [episode.evidence_seq for episode in episodes]
-    assert evidence == [[4, 5, 12, 13], [6, 7, 12, 13]]
+    assert evidence == [[2, 4, 5, 12, 13], [2, 6, 7, 12, 13]]
     olds = [episode.facts["args_diff"]["changed"]["cmd"]["old"] for episode in episodes]
     assert olds == ["a", "b"]
     assert [episode.anchors for episode in episodes] == [
@@ -444,13 +481,14 @@ def test_error_recovery_evidence_roles_and_error_from_output_text() -> None:
         ("result", 9, True),
         ("fixed_call", 8, True),
         ("failed_call", 4, False),
+        ("task", 2, False),
     ]
     error_item = episode.evidence[0]
     assert error_item.ref == EvidenceRef(source="thread-t.jsonl", line=5, seq=5)
     assert error_item.snippet is not None and error_item.snippet.endswith("FileNotFoundError: cfg.yml")
     assert error_item.snippet.startswith("Traceback") and "…" in error_item.snippet
     assert episode.facts["error"] == error_item.snippet
-    assert [item.snippet for item in episode.evidence[1:]] == [None, None, None]
+    assert [item.snippet for item in episode.evidence[1:]] == [None, None, None, None]
 
 
 def test_error_recovery_start_less_calls_cite_one_ref_each() -> None:
@@ -459,8 +497,8 @@ def test_error_recovery_start_less_calls_cite_one_ref_each() -> None:
 
     (episode,) = extract_episodes(_traj(_turn("run-1", 2, "go", [failed, fixed])))
 
-    assert _roles(episode) == [("error", 4, True), ("result", 8, True)]
-    assert episode.evidence_seq == [4, 8]
+    assert _roles(episode) == [("error", 4, True), ("result", 8, True), ("task", 2, False)]
+    assert episode.evidence_seq == [2, 4, 8]
 
 
 def test_error_recovery_stays_inside_the_stream() -> None:
@@ -482,7 +520,7 @@ def test_error_recovery_stays_inside_the_stream() -> None:
     fillers = [_call(f"step{i}", {"n": i}, seq=10 + 2 * i, subagent="tools:b1") for i in range(5)]
     root_fixed = _call("bash", {"cmd": "b"}, seq=30)
     (episode,) = extract_episodes(_traj(_turn("run-1", 2, "go", [root_err, *fillers, root_fixed])))
-    assert episode.evidence_seq == [4, 5, 30, 31]
+    assert episode.evidence_seq == [2, 4, 5, 30, 31]
     assert episode.tool_sequence == ["bash", "bash"]
     assert episode.facts["calls_between"] == 0
 
@@ -497,7 +535,7 @@ def test_error_recovery_continues_into_a_resume_turn_only() -> None:
     )
     (episode,) = extract_episodes(resumed)
     assert episode.kind == "error_recovery"
-    assert episode.evidence_seq == [4, 5, 12, 13]
+    assert episode.evidence_seq == [2, 4, 5, 12, 13]
     assert episode.anchors == ["run-1#4", "run-2#12"]
 
     # A new dispatch (or an unknown) turn is another execution context.
@@ -725,7 +763,7 @@ def test_retry_loop_positive() -> None:
 
     assert episode.kind == "retry_loop"
     assert episode.weight == 0.7
-    assert episode.evidence_seq == [4, 8, 10]
+    assert episode.evidence_seq == [2, 4, 5, 8, 9, 10, 11]
     assert episode.anchors == ["run-1#4", "run-1#8", "run-1#10"]
     assert episode.tool_sequence == ["grep", "grep", "grep"]
     assert episode.facts["tool_name"] == "grep"
@@ -736,7 +774,18 @@ def test_retry_loop_positive() -> None:
     assert episode.facts["run_id"] == "run-1"
     variants = [variant["pattern"] for variant in episode.facts["args_variants"]]
     assert variants == ["hotspot", "hot_spot", "HotSpot"]
-    assert _roles(episode) == [("attempt", 4, True), ("attempt", 8, False), ("attempt", 10, True)]
+    # The first and last attempt and their results are required; the
+    # attempt between them and the group's user message are context.
+    assert _roles(episode) == [
+        ("attempt", 4, True),
+        ("result", 5, True),
+        ("attempt", 8, False),
+        ("result", 9, False),
+        ("attempt", 10, True),
+        ("result", 11, True),
+        ("task", 2, False),
+    ]
+    assert episode.facts["outcome"] == ""  # the builder records no output
 
 
 def test_retry_loop_negative_cases() -> None:
@@ -832,7 +881,18 @@ def test_retry_loop_counts_orphans_as_attempts() -> None:
     (episode,) = extract_episodes(_traj(_turn("run-1", 2, "install", calls)))
 
     assert episode.kind == "retry_loop"
-    assert episode.evidence_seq == [4, 6, 8]
+    # The orphan at 6 is an attempt without an end; the errors at 5 and 9 are
+    # the first and last outcome.
+    assert episode.evidence_seq == [2, 4, 5, 6, 8, 9]
+    assert _roles(episode) == [
+        ("attempt", 4, True),
+        ("error", 5, True),
+        ("attempt", 6, False),
+        ("attempt", 8, True),
+        ("error", 9, True),
+        ("task", 2, False),
+    ]
+    assert episode.facts["outcome"] == ""
     assert episode.anchors == ["run-1#4", "run-1#6", "run-1#8"]
     assert episode.facts["work_object"] == "pip install"
     assert episode.facts["reason"] == "failed attempt"
@@ -857,7 +917,7 @@ def test_retry_loop_continues_into_a_resume_turn_only() -> None:
     )
     (episode,) = extract_episodes(resumed)
     assert episode.kind == "retry_loop"
-    assert episode.evidence_seq == [4, 6, 12]
+    assert episode.evidence_seq == [2, 4, 5, 6, 7, 12, 13]
     assert episode.anchors == ["run-1#4", "run-1#6", "run-2#12"]
     assert episode.facts["run_id"] == "run-1"
     assert episode.facts["reason"] == "search key varies"
@@ -1136,7 +1196,7 @@ def test_mine_cross_session_reports_closed_patterns() -> None:
     assert episode.kind == "repeated_procedure"
     assert episode.weight == 1.0
     assert episode.thread_id == "A"
-    assert episode.evidence_seq == [4, 6, 8]
+    assert episode.evidence_seq == [2, 4, 5, 6, 7, 8, 9]
     assert episode.anchors == ["run-1#4", "run-1#6", "run-1#8"]
     assert episode.tool_sequence == ["bash", "read_file", "grep"]
     assert episode.facts == {
@@ -1145,13 +1205,18 @@ def test_mine_cross_session_reports_closed_patterns() -> None:
         "thread_ids": ["A", "B"],
     }
     # Steps of both sessions are required evidence: the proof is the repetition.
-    assert [(item.ref.source, item.ref.seq, item.required) for item in episode.evidence] == [
-        ("A.jsonl", 4, True),
-        ("A.jsonl", 6, True),
-        ("A.jsonl", 8, True),
-        ("B.jsonl", 20, True),
-        ("B.jsonl", 22, True),
-        ("B.jsonl", 24, True),
+    # The owner's results and the user message of its turn group are context.
+    assert [(item.ref.source, item.role, item.ref.seq, item.required) for item in episode.evidence] == [
+        ("A.jsonl", "step", 4, True),
+        ("A.jsonl", "result", 5, False),
+        ("A.jsonl", "step", 6, True),
+        ("A.jsonl", "result", 7, False),
+        ("A.jsonl", "step", 8, True),
+        ("A.jsonl", "result", 9, False),
+        ("B.jsonl", "step", 20, True),
+        ("B.jsonl", "step", 22, True),
+        ("B.jsonl", "step", 24, True),
+        ("A.jsonl", "task", 2, False),
     ]
     assert episode.source == "A.jsonl"
 
@@ -1204,7 +1269,7 @@ def test_mine_cross_session_ignores_catalog_calls() -> None:
 
     assert episode.thread_id == "A"
     assert episode.tool_sequence == ["bash", "grep"]
-    assert episode.evidence_seq == [6, 10]
+    assert episode.evidence_seq == [2, 6, 7, 10, 11]
     assert episode.anchors == ["run-1#6", "run-1#10"]
     assert episode.facts["thread_ids"] == ["A", "B"]
     # Catalog calls alone are not a procedure.
@@ -1249,7 +1314,7 @@ def test_mine_cross_session_splits_at_a_failed_call() -> None:
     (episode,) = mine_cross_session([whole, plain])
 
     assert episode.tool_sequence == ["bash", "read_file", "grep"]
-    assert episode.evidence_seq == [4, 6, 8]
+    assert episode.evidence_seq == [2, 4, 5, 6, 7, 8, 9]
 
 
 def test_mine_cross_session_keeps_streams_apart() -> None:
@@ -1263,7 +1328,7 @@ def test_mine_cross_session_keeps_streams_apart() -> None:
     )
     (episode,) = mine_cross_session([resumed, plain])
     assert episode.tool_sequence == ["bash", "grep"]
-    assert episode.evidence_seq == [4, 12]
+    assert episode.evidence_seq == [2, 4, 5, 12, 13]
     assert episode.anchors == ["run-1#4", "run-2#12"]
     # A dispatch turn starts another sequence.
     dispatched = _traj(_turn("run-1", 2, "go", [first]), _turn("run-2", 10, "more", [second]))
@@ -1276,7 +1341,7 @@ def test_mine_cross_session_keeps_streams_apart() -> None:
     aside = _call("ls", {}, seq=6, subagent="tools:b1")
     around = _turn("run-1", 2, "go", [first, aside, _call("grep", {}, seq=8)])
     (episode,) = mine_cross_session([_traj(around), plain])
-    assert episode.evidence_seq == [4, 8]
+    assert episode.evidence_seq == [2, 4, 5, 8, 9]
 
 
 # ------------------------------------------------------------------- scoring
@@ -1300,10 +1365,10 @@ def test_signals_fixture_end_to_end() -> None:
     episodes = extract_episodes(traj, skill_index=_index())
 
     assert [(e.kind, e.evidence_seq) for e in episodes] == [
-        ("error_recovery", [4, 5, 10, 11]),
-        ("error_recovery", [7, 8, 10, 11]),
+        ("error_recovery", [2, 4, 5, 10, 11]),
+        ("error_recovery", [2, 7, 8, 10, 11]),
         ("user_correction", [2, 10, 17, 19]),
-        ("retry_loop", [4, 7, 10]),
+        ("retry_loop", [2, 4, 5, 7, 8, 10, 11]),
         ("approval_denied", [26, 29, 32]),
         ("skill_gap", [2, 4, 17]),
     ]
@@ -1348,12 +1413,15 @@ def test_signals_fixture_end_to_end() -> None:
 
 
 EXPECTED_KINDS = {
+    "exgraph_accuracy.jsonl": {},
+    "exgraph_reuse.jsonl": {"skill_gap": 1},
     "malformed_lines.jsonl": {"approval_denied": 1},
     "missing_turn_end.jsonl": {"skill_gap": 1},
     "normal_subagent.jsonl": {},
     "orphan_tool_start.jsonl": {"skill_gap": 1},
     "recorder_limit.jsonl": {"skill_gap": 1},
     "result_without_start.jsonl": {},
+    "skill_evolver_demo_success.jsonl": {},
     "skill_evolver_signals.jsonl": {
         "error_recovery": 2,
         "user_correction": 1,
@@ -1434,23 +1502,36 @@ def test_cross_session_evidence_exists_in_source() -> None:
         assert episode.tool_sequence == episode.facts["ngram"]
         assert 2 <= len(episode.tool_sequence) <= 5
         assert set(episode.evidence_seq) <= recorded[episode.thread_id]
-        assert _anchor_seqs(episode) == set(episode.evidence_seq)
-        # Two sources, both required, both resolving to their physical lines.
-        sources = [item.ref.source for item in episode.evidence]
-        assert sources[: len(episode.tool_sequence)] == [episode.source] * len(episode.tool_sequence)
-        assert len(set(sources)) == 2 and len(sources) == 2 * len(episode.tool_sequence)
-        assert all(item.required for item in episode.evidence)
+        assert _anchor_seqs(episode) <= set(episode.evidence_seq)
+        # Layout: the owner's steps (each followed by its result unless the
+        # call was recorded without tool.start, where start == end), the
+        # second thread's steps, then the owner's task; steps required, the
+        # rest context; every ref resolves to its physical line.
+        n = len(episode.tool_sequence)
+        own = [item for item in episode.evidence if item.ref.source == episode.source and item.role != "task"]
+        other = [item for item in episode.evidence if item.ref.source != episode.source]
+        task = [item for item in episode.evidence if item.role == "task"]
+        own_results = [item for item in own if item.role == "result"]
+        assert len(own_results) in (0, n) and len(own) == n + len(own_results)
+        assert [item.role for item in own if item.role != "result"] == ["step"] * n
+        assert [(item.role, item.required) for item in other] == [("step", True)] * n
+        assert len({item.ref.source for item in other}) == 1
+        assert [(item.role, item.required) for item in task] == [("task", False)]
+        assert episode.evidence == [*own, *other, *task]
+        assert all(item.required for item in own if item.role == "step")
+        assert not any(item.required for item in own_results)
         for item in episode.evidence:
             assert _seq_at(paths[item.ref.source], item.ref.line) == item.ref.seq
     procedures = {tuple(e.tool_sequence): e for e in episodes}
     shared = procedures[("bash", "read_file", "grep", "bash")]
     assert shared.facts["thread_ids"] == ["thread-ctrlc", "thread-limit"]
     assert shared.thread_id == "thread-ctrlc"
-    assert shared.evidence_seq == [4, 7, 10, 13]
+    assert shared.evidence_seq == [2, 4, 5, 7, 8, 10, 11, 13, 14]
     assert shared.anchors == ["run-1#4", "run-1#7", "run-1#10", "run-1#13"]
     # The fifth step of the old five-gram failed in one thread: no longer a procedure.
     assert ("bash", "read_file", "grep", "bash", "bash") not in procedures
-    assert procedures[("bash", "read_file")].facts["support"] == 3
+    # thread-reuse, thread-ctrlc, thread-limit, thread-signals
+    assert procedures[("bash", "read_file")].facts["support"] == 4
 
 
 # ------------------------------------------------------- incidents and gate
@@ -1592,6 +1673,582 @@ def test_strong_correction_passes_the_default_gate() -> None:
     # Below the score the ordinary rule applies first.
     lenient = gate_decision([episode], min_score=0.5)
     assert (lenient.passes, lenient.reason) == (True, GATE_SCORE_REACHED)
+
+
+# --------------------------------------------------------- context, primary_seq
+
+
+def test_context_items_and_primary_seq() -> None:
+    traj = load_trajectory(FIXTURES / "skill_evolver_signals.jsonl")
+
+    episodes = extract_episodes(traj, skill_index=_index())
+
+    assert [(e.kind, e.evidence_seq) for e in episodes] == [
+        ("error_recovery", [2, 4, 5, 10, 11]),
+        ("error_recovery", [2, 7, 8, 10, 11]),
+        ("user_correction", [2, 10, 17, 19]),
+        ("retry_loop", [2, 4, 5, 7, 8, 10, 11]),
+        ("approval_denied", [26, 29, 32]),
+        ("skill_gap", [2, 4, 17]),
+    ]
+    # The identity consumers key on is the first required own event, not the
+    # shared task context both recoveries cite.
+    assert [e.primary_seq for e in episodes] == [5, 8, 17, 4, 26, 2]
+    tasks = [item for e in episodes for item in e.evidence if item.role == "task"]
+    assert len(tasks) == 3 and not any(item.required for item in tasks)
+    assert {item.ref.seq for item in tasks} == {2}
+    # A group head without a message adds no task item.
+    err = _call("bash", {"cmd": "a"}, seq=4, status="error")
+    fixed = _call("bash", {"cmd": "b"}, seq=6)
+    (episode,) = extract_episodes(_traj(_turn("run-1", 2, None, [err, fixed])))
+    assert episode.evidence_seq == [4, 5, 6, 7]
+    assert "task" not in {item.role for item in episode.evidence}
+    # A hand-built episode without required own items falls back to its first seq.
+    fallback = Episode(
+        kind="skill_gap",
+        thread_id="t",
+        source="t.jsonl",
+        evidence=[_item(6, required=False), _item(3, source="o.jsonl")],
+        tool_sequence=[],
+        facts={},
+        weight=0.4,
+    )
+    assert fallback.primary_seq == 6
+
+
+def test_has_required_evidence_per_kind() -> None:
+    assert set(REQUIRED_ROLES) == EPISODE_KINDS
+    signals = load_trajectory(FIXTURES / "skill_evolver_signals.jsonl")
+    demo = load_trajectory(FIXTURES / "skill_evolver_demo_success.jsonl")
+    episodes = [
+        *extract_episodes(signals, skill_index=_index()),
+        *extract_episodes(demo, demo=True),
+        *mine_cross_session([signals, load_trajectory(FIXTURES / "exgraph_reuse.jsonl")]),
+    ]
+    assert {e.kind for e in episodes} == EPISODE_KINDS
+    assert all(has_required_evidence(e) for e in episodes)
+    # A start-less recovery collapses fixed_call into result: its arguments are unknown.
+    failed = _call("bash", {}, seq=4, status="error", error="boom", seq_end=4)
+    fixed = _call("bash", {"cmd": "make"}, seq=8, seq_end=8)
+    (startless,) = extract_episodes(_traj(_turn("run-1", 2, "go", [failed, fixed])))
+    assert {item.role for item in startless.evidence if item.required} == {"error", "result"}
+    assert not has_required_evidence(startless)
+    # The role must be carried by a *required* item.
+    (observed,) = extract_episodes(demo, demo=True)
+    demoted = [replace(item, required=False) if item.role == "task" else item for item in observed.evidence]
+    assert not has_required_evidence(replace(observed, evidence=demoted))
+    assert not has_required_evidence(_ep("observed_procedure", [2, 4], weight=0.0))
+
+
+# -------------------------------------------------------- observed_procedure
+
+
+def _ok(name: str, args: dict[str, Any], *, seq: int, output: str = "done", subagent: str | None = None) -> ToolCall:
+    return _call(name, args, seq=seq, output=output, subagent=subagent)
+
+
+def _observed(traj: Trajectory, notes: list[DetectorNote] | None = None) -> list[Episode]:
+    return [e for e in extract_episodes(traj, demo=True, notes=notes) if e.kind == "observed_procedure"]
+
+
+def test_observed_procedure_demo_fixture_single_chain() -> None:
+    path = FIXTURES / "skill_evolver_demo_success.jsonl"
+    traj = load_trajectory(path)
+    assert (traj.thread_id, traj.agent, traj.working_dir) == (
+        "thread-demo-synthetic",
+        "SyntheticDemo",
+        "/synthetic/demo",
+    )
+    assert json.loads(path.read_text(encoding="utf-8").splitlines()[0])["synthetic"] is True
+    assert "data" not in (traj.turns[0].user_message or "")
+    # Ordinary detectors see nothing; no LLM-free rule fires on a plain success.
+    assert extract_episodes(traj, skill_index=_index()) == []
+
+    notes: list[DetectorNote] = []
+    (episode,) = extract_episodes(traj, skill_index=_index(), demo=True, notes=notes)
+
+    assert notes == []
+    assert episode.kind == "observed_procedure"
+    assert episode.weight == 0.0
+    assert _roles(episode) == [
+        ("task", 2, True),
+        ("step", 4, True),
+        ("result", 5, True),
+        ("step", 7, True),
+        ("result", 8, True),
+        ("step", 10, True),
+        ("result", 11, True),
+    ]
+    assert episode.anchors == ["run-d1#4", "run-d1#7", "run-d1#10"]
+    assert episode.tool_sequence == ["read_file", "bash", "bash"]
+    assert episode.primary_seq == 2
+    assert has_required_evidence(episode)
+    assert episode.facts["task"] == traj.turns[0].user_message
+    assert (episode.facts["run_id"], episode.facts["subagent"]) == ("run-d1", None)
+    assert (episode.facts["chain_index"], episode.facts["calls"]) == (1, 3)
+    assert episode.facts["outcome"] == "TOTAL_OK"
+    assert episode.facts["verification"] == "observed output of bash: TOTAL_OK"
+    steps = episode.facts["steps"]
+    assert [step["tool"] for step in steps] == ["read_file", "bash", "bash"]
+    assert steps[0]["args"] == {"path": "input/sales.csv"} and steps[0]["work_object"] == "input/sales.csv"
+    assert steps[1]["args"]["cmd"].startswith("python3 -c") and steps[1]["result"] == "60.0"
+    assert steps[2]["args"]["cmd"].endswith("…")  # clipped like every fact value
+    assert [item.snippet for item in episode.evidence if item.role == "result"] == [
+        "id,amount\n1,10\n2,20\n3,30\n",
+        "60.0",
+        "TOTAL_OK",
+    ]
+    for item in episode.evidence:
+        assert _seq_at(path, item.ref.line) == item.ref.seq
+
+
+@pytest.mark.parametrize("path", FIXTURE_FILES, ids=FIXTURE_IDS)
+def test_observed_procedure_not_extracted_without_demo_on_any_fixture(path: Path) -> None:
+    traj = load_trajectory(path)
+    # exgraph calls extract_episodes(traj) without keywords: same path, same result.
+    assert "observed_procedure" not in _kinds(extract_episodes(traj))
+    assert "observed_procedure" not in _kinds(extract_episodes(traj, skill_index=_index()))
+
+
+def test_observed_procedure_chain_limits_and_windows() -> None:
+    twelve = [_ok(f"t{i}", {"n": i}, seq=4 + 2 * i) for i in range(12)]
+    notes: list[DetectorNote] = []
+
+    chains = _observed(_traj(_turn("run-1", 2, "go", twelve)), notes)
+
+    assert notes == []
+    assert [len(e.tool_sequence) for e in chains] == [5, 5, 2]
+    assert [e.facts["chain_index"] for e in chains] == [1, 2, 3]
+    assert [e.anchors[0] for e in chains] == ["run-1#4", "run-1#14", "run-1#24"]
+    refs = [item.ref for e in chains for item in e.evidence if item.role != "task"]
+    assert len(refs) == len(set(refs))  # windows are disjoint
+    assert all(len(e.tool_sequence) <= OBSERVED_MAX_CALLS for e in chains)
+    # Four segments (ok calls separated by failures of another tool): three
+    # chains and one note for the fourth.
+    calls: list[ToolCall] = []
+    for i in range(4):
+        calls.append(_ok(f"step{i}", {"n": i}, seq=4 + 4 * i))
+        calls.append(_call("fail", {"n": i}, seq=6 + 4 * i, status="error"))
+    notes = []
+    chains = _observed(_traj(_turn("run-1", 2, "go", calls)), notes)
+    assert [e.tool_sequence for e in chains] == [["step0"], ["step1"], ["step2"]]
+    assert len(chains) == OBSERVED_MAX_CHAINS
+    assert [(n.detector, n.reason, n.seqs) for n in notes] == [("observed_procedure", DROP_CHAIN_LIMIT, [16])]
+    assert notes[0].detail == "chain step3 skipped: 3 chains already selected"
+
+
+def test_observed_procedure_chain_limit_is_the_last_disqualification() -> None:
+    # Three selected one-call chains; the next window carries an error marker
+    # and is dropped for that, the one after it is valid and hits the limit.
+    calls: list[ToolCall] = []
+    for i in range(3):
+        calls.append(_ok(f"step{i}", {"n": i}, seq=4 + 4 * i))
+        calls.append(_call("fail", {"n": i}, seq=6 + 4 * i, status="error"))
+    calls.append(_ok("bash", {"cmd": "make"}, seq=16, output="process finished with exit code 2"))
+    calls.append(_call("fail", {"n": 3}, seq=18, status="error"))
+    calls.append(_ok("step4", {"n": 4}, seq=20))
+    notes: list[DetectorNote] = []
+
+    chains = _observed(_traj(_turn("run-1", 2, "go", calls)), notes)
+
+    assert [e.tool_sequence for e in chains] == [["step0"], ["step1"], ["step2"]]
+    assert [(n.reason, n.seqs) for n in notes] == [(DROP_ERROR_IN_OUTPUT, [16]), (DROP_CHAIN_LIMIT, [20])]
+    assert notes[0].detail == "bash at seq 17 returned ok but its output contains 'exit code 2'"
+    assert notes[1].detail == "chain step4 skipped: 3 chains already selected"
+
+
+def test_observed_procedure_single_call_is_a_chain() -> None:
+    traj = _traj(_turn("run-1", 2, "list it", [_ok("bash", {"cmd": "ls -la"}, seq=4, output="a.txt\nb.txt")]))
+
+    (episode,) = _observed(traj)
+
+    assert _roles(episode) == [("task", 2, True), ("step", 4, True), ("result", 5, True)]
+    assert episode.anchors == ["run-1#4"]
+    assert episode.facts["outcome"] == "a.txt\nb.txt"
+    assert episode.facts["steps"] == [
+        {"tool": "bash", "work_object": "ls", "args": {"cmd": "ls -la"}, "result": "a.txt\nb.txt"},
+    ]
+    # mine_cross_session keeps NGRAM_MIN: a single call is a chain only for the detector.
+    assert len(features_mod._procedure_segments(traj, min_len=1)) == 1
+    assert features_mod._procedure_segments(traj) == []
+
+
+def test_observed_procedure_orphan_only_and_ai_claim_yield_no_episode() -> None:
+    orphan = _call("bash", {"cmd": "python3 x.py"}, seq=4, status="orphan")
+    notes: list[DetectorNote] = []
+    assert extract_episodes(_traj(_turn("run-1", 2, "sum it", [orphan])), demo=True, notes=notes) == []
+    assert [(n.detector, n.reason) for n in notes] == [("observed_procedure", DROP_NO_COMPLETED_CALLS)]
+    assert notes[0].detail == "1 domain calls: 0 ok, 0 error, 1 orphan; no completed chain"
+    # The assistant's text is never evidence: a claimed success without a
+    # completed call is no chain at all, with or without the orphan.
+    claim = _ai(3, "Done: the total is 60")
+    for calls in ([], [orphan]):
+        notes = []
+        traj = _traj(_turn("run-1", 2, "sum it", calls, ai=[claim]))
+        assert extract_episodes(traj, demo=True, notes=notes) == []
+        assert [n.reason for n in notes] == [DROP_NO_COMPLETED_CALLS]
+        assert notes[0].detail.endswith(f"{len(calls)} orphan; no completed chain")
+    # Catalog calls are not domain work.
+    notes = []
+    catalog = _traj(_turn("run-1", 2, "sum it", [_ok("get_skill", {"name": "x"}, seq=4)]))
+    assert extract_episodes(catalog, demo=True, notes=notes) == []
+    assert notes[0].detail == "0 domain calls: 0 ok, 0 error, 0 orphan; no completed chain"
+
+
+@pytest.mark.parametrize(
+    ("output", "marker"),
+    [
+        ("Traceback (most recent call last):\n  File x\nKeyError: 'amount'", "Traceback (most recent call last)"),
+        ("KeyError: 'amount'", "KeyError"),
+        ("langchain_core.tools.ToolException: bad input", "ToolException"),
+        ("Error: unknown column", "Error:"),
+        ("fatal: not a git repository", "fatal:"),
+        ("FAILED tests/test_x.py::test_y", "FAILED"),
+        ("cat: input/sales.csv: No such file or directory", "No such file or directory"),
+        ("bash: python4: command not found", "command not found"),
+        ("rm: out.txt: Permission denied", "Permission denied"),
+        ("process finished with exit code 2", "exit code 2"),
+        ("Exit status 130", "Exit status 130"),
+        ("non-zero exit from make", "non-zero exit"),
+    ],
+)
+def test_observed_procedure_error_marker_in_ok_output_drops_chain(output: str, marker: str) -> None:
+    assert features_mod._error_marker(output) == marker
+    read = _ok("read_file", {"path": "s.csv"}, seq=4, output="id,amount")
+    check = _ok("bash", {"cmd": "python3 check.py"}, seq=8, output="TOTAL_OK")
+    # An erroneous output disqualifies the chain wherever it sits, last or between.
+    for calls in (
+        [read, _ok("bash", {"cmd": "python3 sum.py"}, seq=6, output=output)],
+        [read, _ok("bash", {"cmd": "python3 sum.py"}, seq=6, output=output), check],
+    ):
+        notes: list[DetectorNote] = []
+        assert _observed(_traj(_turn("run-1", 2, "sum it", calls)), notes) == []
+        (note,) = notes
+        assert (note.detector, note.reason) == ("observed_procedure", DROP_ERROR_IN_OUTPUT)
+        assert note.detail == f"bash at seq 7 returned ok but its output contains {marker!r}"
+        assert note.seqs == [call.seq_start for call in calls]
+
+
+def test_error_markers_do_not_flag_ordinary_output() -> None:
+    assert len(ERROR_MARKERS) == 10 and r"\berror\b" not in ERROR_MARKERS
+    for text in ("3 passed", "TOTAL_OK", "0 errors", "error-free build", "exit code 0", "60.0", "id,amount\n1,10"):
+        assert features_mod._error_marker(text) is None, text
+        (episode,) = _observed(_traj(_turn("run-1", 2, "go", [_ok("bash", {"cmd": "make"}, seq=4, output=text)])))
+        assert episode.facts["outcome"] == text
+
+
+def test_observed_procedure_requires_task_start_and_last_output() -> None:
+    read = _ok("read_file", {"path": "s.csv"}, seq=4, output="id,amount")
+    total = _ok("bash", {"cmd": "python3 sum.py"}, seq=6, output="60.0")
+    # No user message on the group head: an earlier group's message is never borrowed.
+    notes: list[DetectorNote] = []
+    for head in (_turn("run-2", 10, None, [read, total]), _turn("run-2", 10, "  ", [read, total])):
+        notes = []
+        traj = _traj(_turn("run-1", 2, "sum it", [_call("ls", {}, seq=3, output="s.csv", seq_end=3)]), head)
+        assert _observed(traj, notes) == []
+        assert [n.reason for n in notes] == [DROP_MISSING_START, DROP_NO_TASK]
+        assert notes[1].detail == "turn run-2 (dispatch) has no user message"
+        assert notes[1].seqs == [4, 6]
+    prelude = _turn(PRELUDE_RUN_ID, 1, None, [_ok("bash", {"cmd": "ls"}, seq=3)], source="prelude")
+    notes = []
+    assert _observed(_traj(prelude), notes) == []
+    assert (notes[0].reason, notes[0].detail) == (DROP_NO_TASK, f"turn {PRELUDE_RUN_ID} (prelude) has no user message")
+    # A call recorded without tool.start has unknown arguments.
+    notes = []
+    startless = _call("bash", {}, seq=6, output="60.0", seq_end=6)
+    assert _observed(_traj(_turn("run-1", 2, "sum it", [read, startless])), notes) == []
+    assert (notes[0].reason, notes[0].detail) == (
+        DROP_MISSING_START,
+        "bash at seq 6 was recorded without tool.start; its arguments are unknown",
+    )
+    # The last call must show an observable outcome; an empty intermediate output is fine.
+    notes = []
+    silent = _ok("bash", {"cmd": "python3 sum.py"}, seq=6, output="  \n")
+    assert _observed(_traj(_turn("run-1", 2, "sum it", [read, silent])), notes) == []
+    assert (notes[0].reason, notes[0].detail) == (
+        DROP_EMPTY_RESULT,
+        "last call bash at seq 7 has no output; no observable outcome",
+    )
+    quiet_first = _ok("read_file", {"path": "s.csv"}, seq=4, output="")
+    (episode,) = _observed(_traj(_turn("run-1", 2, "sum it", [quiet_first, total])))
+    assert episode.facts["steps"][0]["result"] == "" and episode.facts["outcome"] == "60.0"
+    # Every call of result_without_start.jsonl lacks its start.
+    notes = []
+    traj = load_trajectory(FIXTURES / "result_without_start.jsonl")
+    assert extract_episodes(traj, skill_index=_index(), demo=True, notes=notes) == []
+    assert notes and {n.reason for n in notes} == {DROP_MISSING_START}
+
+
+def test_observed_procedure_keeps_streams_apart_and_uses_physical_identity() -> None:
+    calls = [
+        _ok("read_file", {"path": "s.csv"}, seq=4, output="id,amount"),
+        _ok("bash", {"cmd": "python3 a.py"}, seq=6, output="1", subagent="tools:b2"),
+        _ok("bash", {"cmd": "python3 b.py"}, seq=8, output="2"),
+    ]
+
+    root, aside = _observed(_traj(_turn("run-1", 2, "sum it", calls)))
+
+    assert (root.tool_sequence, root.facts["subagent"], root.anchors) == (
+        ["read_file", "bash"],
+        None,
+        ["run-1#4", "run-1#8"],
+    )
+    assert (aside.tool_sequence, aside.facts["subagent"], aside.anchors) == (["bash"], "tools:b2", ["run-1#6"])
+    assert (root.facts["chain_index"], aside.facts["chain_index"]) == (1, 2)
+    # Two recorder writers repeat seqs 2..8 on later physical lines: refs are
+    # lines, so the third chain is distinct from the first.
+    path = FIXTURES / "missing_turn_end.jsonl"
+    first, second, third = _observed(load_trajectory(path))
+    assert first.anchors == ["run-1#4", "run-1#7", "run-1#10", "run-1#13"]
+    assert second.anchors == ["run-2#18"]
+    assert third.anchors == ["run-3#4", "run-3#7"]
+    assert [(item.ref.line, item.ref.seq) for item in third.evidence] == [(23, 2), (25, 4), (26, 5), (28, 7), (29, 8)]
+    assert {item.ref for item in first.evidence}.isdisjoint({item.ref for item in third.evidence})
+    for episode in (first, second, third):
+        for item in episode.evidence:
+            assert _seq_at(path, item.ref.line) == item.ref.seq
+
+
+def test_observed_procedure_coexists_with_retry_loop_and_shares_incident() -> None:
+    searches = [
+        _ok("grep", {"pattern": "hotspot", "path": "a.csv"}, seq=4, output="-"),
+        _ok("grep", {"pattern": "hot_spot", "path": "a.csv"}, seq=6, output="-"),
+        _ok("grep", {"pattern": "HotSpot", "path": "a.csv"}, seq=8, output="HotSpot,3"),
+    ]
+    procedure = [
+        _ok("read_file", {"path": "s.csv"}, seq=14, output="id,amount"),
+        _ok("bash", {"cmd": "python3 sum.py"}, seq=16, output="60.0"),
+    ]
+    traj = _traj(_turn("run-1", 2, "find it", searches), _turn("run-2", 12, "sum it", procedure))
+    assert _kinds(extract_episodes(traj)) == ["retry_loop"]
+
+    episodes = extract_episodes(traj, demo=True)
+
+    retry, greps, chain = episodes
+    assert _kinds(episodes) == ["retry_loop", "observed_procedure", "observed_procedure"]
+    assert greps.anchors == retry.anchors == ["run-1#4", "run-1#6", "run-1#8"]
+    assert chain.anchors == ["run-2#14", "run-2#16"]
+    # The grep chain describes the retry's events: one incident; the other chain
+    # is its own zero-weight incident, so the score does not move.
+    assert [_kinds(incident) for incident in group_incidents(episodes)] == [
+        ["retry_loop", "observed_procedure"],
+        ["observed_procedure"],
+    ]
+    assert evidence_score(episodes) == evidence_score([retry]) == pytest.approx(0.7)
+    plain = gate_decision(episodes, min_score=DEFAULT_MIN_EVIDENCE_SCORE)
+    assert (plain.passes, plain.describe()) == (False, GATE_SCORE_BELOW)
+    demo = gate_decision(episodes, min_score=DEFAULT_MIN_EVIDENCE_SCORE, demo=True)
+    assert (demo.passes, demo.reason, demo.score) == (True, GATE_DEMO_OVERRIDE, pytest.approx(0.7))
+    assert demo.detail == "observed_procedure, retry_loop have required evidence"
+
+
+def test_zero_weight_chain_joins_an_incident_but_never_bridges_two() -> None:
+    first = _ep("error_recovery", [4, 6], anchors=["run-1#4", "run-1#6"])
+    second = _ep("retry_loop", [8, 10], anchors=["run-1#8", "run-1#10"])
+    bridge = _ep("observed_procedure", [6, 8], anchors=["run-1#6", "run-1#8"])
+    twin = _ep("observed_procedure", [6, 8], anchors=["run-1#6", "run-1#8"])
+    assert group_incidents([first, second, bridge, twin]) == [[first, bridge, twin], [second]]
+    assert group_incidents([bridge, first, second]) == [[bridge, first], [second]]
+
+    # bash fails then succeeds with changed arguments (error_recovery), then
+    # three ok greps with a varying pattern (retry_loop): two incidents. In demo
+    # the ok run bash → grep × 3 is one observed chain anchored on both of them.
+    calls = [
+        _call("bash", {"cmd": "python3 sum.py"}, seq=4, status="error"),
+        _ok("bash", {"cmd": "python3 sum.py --fix"}, seq=6, output="60.0"),
+        _ok("grep", {"pattern": "hotspot", "path": "a.csv"}, seq=8, output="-"),
+        _ok("grep", {"pattern": "hot_spot", "path": "a.csv"}, seq=10, output="-"),
+        _ok("grep", {"pattern": "HotSpot", "path": "a.csv"}, seq=12, output="HotSpot,3"),
+    ]
+    traj = _traj(_turn("run-1", 2, "sum it, then find it", calls))
+    plain = extract_episodes(traj)
+    demo = extract_episodes(traj, demo=True)
+
+    assert _kinds(plain) == ["error_recovery", "retry_loop"]
+    assert _kinds(demo) == ["error_recovery", "retry_loop", "observed_procedure"]
+    assert demo[2].anchors == ["run-1#6", "run-1#8", "run-1#10", "run-1#12"]
+    assert [_kinds(incident) for incident in group_incidents(demo)] == [
+        ["error_recovery", "observed_procedure"],
+        ["retry_loop"],
+    ]
+    assert len(group_incidents(plain)) == len(group_incidents(demo)) == 2
+    assert evidence_score(plain) == evidence_score(demo) == pytest.approx(1.3)
+    without = gate_decision(plain, min_score=DEFAULT_MIN_EVIDENCE_SCORE)
+    with_demo = gate_decision(demo, min_score=DEFAULT_MIN_EVIDENCE_SCORE, demo=True)
+    assert (
+        (without.passes, without.describe()) == (with_demo.passes, with_demo.describe()) == (True, GATE_SCORE_REACHED)
+    )
+
+
+# Chains the observed_procedure detector selects per fixture (demo=True), and
+# the drop notes it records; computed at implementation time, then pinned.
+EXPECTED_DEMO_CHAINS = {
+    "exgraph_accuracy.jsonl": 1,
+    "exgraph_reuse.jsonl": 1,
+    "malformed_lines.jsonl": 3,
+    "missing_turn_end.jsonl": 3,
+    "normal_subagent.jsonl": 2,
+    "orphan_tool_start.jsonl": 3,
+    "recorder_limit.jsonl": 2,
+    "result_without_start.jsonl": 0,
+    "skill_evolver_demo_success.jsonl": 1,
+    "skill_evolver_signals.jsonl": 2,
+}
+EXPECTED_DEMO_NOTES = {
+    "orphan_tool_start.jsonl": {DROP_CHAIN_LIMIT: 1},
+    "result_without_start.jsonl": {DROP_MISSING_START: 4},
+}
+
+
+@pytest.mark.parametrize("path", FIXTURE_FILES, ids=FIXTURE_IDS)
+def test_demo_evidence_refs_resolve_on_every_fixture(path: Path) -> None:
+    assert sorted(EXPECTED_DEMO_CHAINS) == FIXTURE_IDS
+    traj = load_trajectory(path)
+    notes: list[DetectorNote] = []
+
+    episodes = extract_episodes(traj, skill_index=_index(), demo=True, notes=notes)
+
+    ordinary = [e for e in episodes if e.kind != "observed_procedure"]
+    observed = [e for e in episodes if e.kind == "observed_procedure"]
+    assert Counter(_kinds(ordinary)) == Counter(EXPECTED_KINDS[path.name])
+    assert len(observed) == EXPECTED_DEMO_CHAINS[path.name]
+    assert Counter(note.reason for note in notes) == Counter(EXPECTED_DEMO_NOTES.get(path.name, {}))
+    assert all(note.detector == "observed_procedure" for note in notes)
+    assert [e.facts["chain_index"] for e in observed] == list(range(1, len(observed) + 1))
+    for episode in observed:
+        assert episode.source == path.name and episode.thread_id == traj.thread_id
+        assert episode.weight == 0.0
+        assert 1 <= len(episode.tool_sequence) <= OBSERVED_MAX_CALLS
+        assert len(episode.anchors) == len(episode.tool_sequence) == episode.facts["calls"]
+        assert has_required_evidence(episode)
+        assert all(item.required for item in episode.evidence)
+        assert _anchor_seqs(episode) <= set(episode.evidence_seq)
+        assert episode.facts["outcome"].strip()
+        for item in episode.evidence:
+            assert item.ref.source == path.name
+            assert _seq_at(path, item.ref.line) == item.ref.seq
+
+
+# ----------------------------------------------------------------- demo gate
+
+
+def test_gate_decision_demo_override_only_when_ordinary_rules_fail() -> None:
+    empty = gate_decision([], min_score=DEFAULT_MIN_EVIDENCE_SCORE, demo=True)
+    assert (empty.passes, empty.reason, empty.detail, empty.describe()) == (
+        False,
+        GATE_NO_EPISODES,
+        "",
+        GATE_NO_EPISODES,
+    )
+
+    (chain,) = extract_episodes(load_trajectory(FIXTURES / "skill_evolver_demo_success.jsonl"), demo=True)
+    plain = gate_decision([chain], min_score=DEFAULT_MIN_EVIDENCE_SCORE)
+    assert (plain.score, plain.passes, plain.reason, plain.detail) == (0.0, False, GATE_SCORE_BELOW, "")
+    assert plain.describe() == GATE_SCORE_BELOW
+    demo = gate_decision([chain], min_score=DEFAULT_MIN_EVIDENCE_SCORE, demo=True)
+    assert (demo.score, demo.passes, demo.reason) == (0.0, True, GATE_DEMO_OVERRIDE)
+    assert demo.detail == "observed_procedure has required evidence"
+    assert demo.describe() == "demo_override; observed_procedure has required evidence"
+    assert demo.incidents == [[chain]]
+
+    # The ordinary rules come first and carry no detail.
+    denial = _ep("approval_denied", [9], anchors=["run-1#9"])
+    reached = gate_decision([denial, chain], min_score=DEFAULT_MIN_EVIDENCE_SCORE, demo=True)
+    assert (reached.passes, reached.reason, reached.detail) == (True, GATE_SCORE_REACHED, "")
+    correcting = _traj(
+        _turn("run-1", 2, "do it", [_call("bash", {"cmd": "a"}, seq=4)]),
+        _turn("run-2", 10, "Нет, не так — надо было grep", [_call("grep", {"pattern": "b"}, seq=12)]),
+    )
+    (correction,) = extract_episodes(correcting)
+    strong = gate_decision([correction], min_score=DEFAULT_MIN_EVIDENCE_SCORE, demo=True)
+    assert (strong.passes, strong.reason, strong.detail) == (True, GATE_STRONG_CORRECTION, "")
+
+    # Without a complete package demo mode changes nothing but the detail.
+    stump = replace(chain, evidence=[item for item in chain.evidence if item.role != "result"])
+    refused = gate_decision([stump, _ep("skill_gap", [2, 6])], min_score=DEFAULT_MIN_EVIDENCE_SCORE, demo=True)
+    assert (refused.score, refused.passes, refused.reason) == (0.4, False, GATE_SCORE_BELOW)
+    assert refused.detail == GATE_DEMO_NOT_APPLICABLE
+    assert refused.describe() == f"{GATE_SCORE_BELOW}; {GATE_DEMO_NOT_APPLICABLE}"
+    # demo=False is untouched by the new rule.
+    assert (
+        gate_decision([stump, _ep("skill_gap", [2, 6])], min_score=DEFAULT_MIN_EVIDENCE_SCORE).describe()
+        == GATE_SCORE_BELOW
+    )
+
+
+# ------------------------------------------------------------ expand context
+
+
+def test_expand_episode_context_adds_neighbours_results_and_task_only() -> None:
+    calls = [
+        _ok("ls", {}, seq=4, output="s.csv"),
+        _call("bash", {"cmd": "python3 sum.py"}, seq=6, status="error", error="Traceback\nKeyError: 'x'"),
+        _ok("bash", {"cmd": "python3 sum.py amount"}, seq=8, output="60.0"),
+        _ok("bash", {"cmd": "python3 check.py"}, seq=10, output="TOTAL_OK"),
+        _ok("grep", {"pattern": "x"}, seq=12, output="-"),
+        _ok("ls", {"path": "."}, seq=14, output="a", subagent="tools:b1"),
+    ]
+    traj = _traj(_turn("run-1", 2, "sum it", calls))
+    source = traj.source
+
+    def cited(seq: int) -> Episode:
+        return Episode(
+            kind="retry_loop",
+            thread_id=traj.thread_id,
+            source=source,
+            evidence=[EvidenceItem(EvidenceRef(source=source, line=seq, seq=seq), "attempt", True)],
+            tool_sequence=["bash"],
+            facts={"k": 1},
+            weight=0.7,
+            anchors=[f"run-1#{seq}"],
+        )
+
+    episode = cited(8)
+    (expanded,) = expand_episode_context([episode], traj, surrounding_events=1)
+
+    assert expanded is not episode
+    assert _roles(expanded) == [
+        ("attempt", 8, True),
+        ("context_call", 6, False),
+        ("context_error", 7, False),
+        ("context_result", 9, False),
+        ("context_call", 10, False),
+        ("context_result", 11, False),
+        ("task", 2, False),
+    ]
+    assert expanded.evidence[2].snippet == "Traceback\nKeyError: 'x'"
+    assert (expanded.anchors, expanded.facts, expanded.weight, expanded.kind) == (
+        ["run-1#8"],
+        {"k": 1},
+        0.7,
+        "retry_loop",
+    )
+    # Zero neighbours: only the missing result and the task.
+    (tight,) = expand_episode_context([episode], traj, surrounding_events=0)
+    assert _roles(tight) == [("attempt", 8, True), ("context_result", 9, False), ("task", 2, False)]
+    # The window never leaves the stream (the subagent call at 14 is not a neighbour of 12).
+    (edge,) = expand_episode_context([cited(12)], traj, surrounding_events=3)
+    assert [item.ref.seq for item in edge.evidence] == [12, 6, 7, 8, 9, 10, 11, 13, 2]
+    # ``only`` restricts the expansion; an untouched episode is the same object.
+    first, second = expand_episode_context([cited(8), cited(10)], traj, surrounding_events=1, only={1})
+    assert first is not None and _roles(first) == [("attempt", 8, True)]
+    assert first.evidence == cited(8).evidence and len(second.evidence) == 7
+    # Nothing new to add: the same object comes back (a wider window would keep
+    # growing through the neighbours' neighbours; the caller expands once).
+    (same,) = expand_episode_context([tight], traj, surrounding_events=0)
+    assert same is tight
+    # Another trajectory's episode and a cross-thread item are never touched.
+    other = replace(cited(8), thread_id="o", source="o.jsonl", evidence=[_item(8, source="o.jsonl")])
+    assert expand_episode_context([other], traj, surrounding_events=2) == [other]
+    shared = replace(cited(8), evidence=[*cited(8).evidence, _item(3, source="o.jsonl")])
+    (grown,) = expand_episode_context([shared], traj, surrounding_events=0)
+    assert [item.ref.source for item in grown.evidence] == [source, "o.jsonl", source, source]
+    # A head without a message adds no task; a negative window is an error.
+    quiet = _traj(_turn("run-1", 2, None, calls))
+    (no_task,) = expand_episode_context([cited(8)], quiet, surrounding_events=0)
+    assert _roles(no_task) == [("attempt", 8, True), ("context_result", 9, False)]
+    with pytest.raises(ValueError, match="surrounding_events must be >= 0"):
+        expand_episode_context([episode], traj, surrounding_events=-1)
 
 
 # ----------------------------------------------------------------- isolation

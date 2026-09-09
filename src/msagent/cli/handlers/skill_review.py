@@ -22,6 +22,13 @@ Proposals live in ``<root>/.proposals/<thread>/<name>/`` where no skill
 scanner can see them. Accepting one re-validates it (it may have been edited
 by hand) and moves the whole folder into ``<root>/<category>/<name>/``;
 rejecting one deletes it after a confirmation.
+
+A demo proposal (provenance ``demo: true``, written under ``demo_mode``) is
+marked DEMO in the listing; accepting it requires the ``demo-`` name prefix
+and an explicit confirmation, because it may teach a trivial procedure.
+Older provenance files (before ``demo`` existed) read as ordinary proposals.
+Only the proposal folder is ever moved; the private state directory (decision
+reports) is never touched.
 """
 
 from __future__ import annotations
@@ -43,6 +50,7 @@ from rich.table import Table
 from msagent.cli.theme import console
 from msagent.cli.ui.shared import create_bottom_toolbar, create_prompt_style
 from msagent.core.logging import get_logger
+from msagent.skill_evolver.policy import DEMO_NAME_PREFIX
 from msagent.skill_evolver.validator import skill_name, validate_skill_md
 from msagent.skill_evolver.writer import PROPOSALS_DIR, PROVENANCE_FILE, SKILL_FILE
 from msagent.skills.factory import SkillFactory
@@ -67,6 +75,9 @@ class Proposal:
     generated_at: str = ""
     action: str = ""
     existing_path: str = ""
+    # Provenance v4: written in demo mode, and the selection policy applied.
+    demo: bool = False
+    policy: str = ""
     error: str = ""
 
     @property
@@ -143,6 +154,10 @@ def _read_proposal(skill_dir: Path, batch: str) -> Proposal:
     if isinstance(target, dict):
         proposal.action = str(target.get("action") or "")
         proposal.existing_path = str(target.get("existing_path") or "")
+    proposal.demo = provenance.get("demo") is True
+    policy = provenance.get("policy")
+    if isinstance(policy, dict):
+        proposal.policy = str(policy.get("selection") or "")
     return proposal
 
 
@@ -161,6 +176,7 @@ def build_proposals_table(proposals: list[Proposal]) -> Table:
     table.add_column("name", style="command", no_wrap=True)
     table.add_column("category", style="secondary", no_wrap=True)
     table.add_column("action", style="secondary", no_wrap=True)
+    table.add_column("demo", style="warning", no_wrap=True)
     table.add_column("threads", style="muted", no_wrap=True)
     table.add_column("generated", style="timestamp", no_wrap=True)
     table.add_column("description", style="default", overflow="ellipsis")
@@ -168,6 +184,7 @@ def build_proposals_table(proposals: list[Proposal]) -> Table:
         if proposal.error:
             table.add_row(
                 escape(proposal.name),
+                "?",
                 "?",
                 "?",
                 escape(proposal.batch and _short(proposal.batch) or "?"),
@@ -180,6 +197,7 @@ def build_proposals_table(proposals: list[Proposal]) -> Table:
             escape(proposal.name),
             escape(proposal.category or "default"),
             escape(proposal.action or "create"),
+            "DEMO" if proposal.demo else "",
             escape(threads or _short(proposal.batch)),
             escape(format_relative_time(proposal.generated_at)),
             escape(proposal.description or "(no description)"),
@@ -195,6 +213,10 @@ class SkillReviewHandler:
 
     async def handle(self, args: list[str]) -> None:
         """Review skill proposals: [list | accept <name> | reject <name>]."""
+        # Imported here, not at module level: see _root().
+        from msagent.skill_evolver.config import SkillEvolverConfigError
+        from msagent.skill_evolver.pipeline import report_config_error
+
         try:
             action = args[0].lower() if args else "list"
             if action == "list":
@@ -207,6 +229,10 @@ class SkillReviewHandler:
                 console.print_error(f"Unknown subcommand: {escape(action)}")
                 console.print(f"[muted]{escape(USAGE)}[/muted]")
                 console.print("")
+        except SkillEvolverConfigError as exc:
+            report_config_error(console, exc)
+            console.print("")
+            return
         except Exception as exc:
             console.print_error(escape(f"Error reviewing proposals: {exc}"))
             console.print("")
@@ -217,13 +243,14 @@ class SkillReviewHandler:
         # Imported here, not at module level: handlers/__init__ loads this
         # module before the generator, which re-enters the package for
         # session_history (the pre-existing cycle).
+        from msagent.skill_evolver.config import output_root
         from msagent.skill_evolver.direct_skill_generation import (
             DirectSkillGenerationHandler,
         )
 
         ctx = self.session.context
         cfg = DirectSkillGenerationHandler._load_config()
-        return cfg.output_dir or (Path(ctx.working_dir) / "skills")
+        return output_root(cfg, Path(ctx.working_dir))
 
     async def _list(self) -> None:
         """Print every proposal on disk."""
@@ -294,7 +321,10 @@ class SkillReviewHandler:
 
         skill_file = proposal.path / SKILL_FILE
         content = await asyncio.to_thread(skill_file.read_text, encoding="utf-8")
-        validation = validate_skill_md(content)
+        validation = validate_skill_md(
+            content,
+            required_prefix=DEMO_NAME_PREFIX if proposal.demo else None,
+        )
         if not validation.ok:
             console.print_error(
                 escape(f"{proposal.qualified} is not a valid SKILL.md:"),
@@ -311,6 +341,15 @@ class SkillReviewHandler:
             console.print_error(escape(f"{destination} already exists; not moved"))
             console.print("")
             return
+
+        if proposal.demo:
+            console.print_warning(
+                escape(f"demo proposal ({proposal.policy or 'demo'}): a teaching, possibly trivial skill"),
+            )
+            if not await self._confirm(f"Accept demo proposal '{name}' into the library anyway?"):
+                console.print_info("Cancelled; nothing was moved")
+                console.print("")
+                return
 
         await asyncio.to_thread(self._move, proposal.path, destination)
         console.print_success(escape(f"Accepted '{name}' into {destination}"))

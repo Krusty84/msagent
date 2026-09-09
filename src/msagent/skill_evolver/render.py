@@ -27,9 +27,22 @@ its candidates (and, for an update, the text of the existing skill) and
 answers with the complete file. The reply is checked by
 :mod:`msagent.skill_evolver.validator`; on failure the model gets exactly one
 corrective turn listing every error, and a second failure is handed back to
-the caller, who writes nothing. The LLM is duck-typed exactly as in
-:mod:`msagent.skill_evolver.classify`. Stdlib + pydantic; this module never
-writes files.
+the caller, who writes nothing. :func:`revise_skill_md` is the single
+corrective turn after a failed semantic review.
+
+Evidence rules: there is no fixed cap on the fragments quoted per candidate.
+:func:`select_plan_evidence` quotes every cited fragment when no budget is
+given; under ``budget_chars`` the required fragments of all candidates are
+placed first and the optional ones after, so a shortage drops context before
+proof. A required fragment that does not fit makes the plan unusable
+(:class:`InsufficientContextBudget`, raised before any LLM call); the
+selection is recorded in provenance as ``render_evidence`` /
+``render_evidence_omitted``, so an incomplete set is never marked complete.
+The ``{render_policy}`` placeholder is mandatory: the policy text is inserted
+here with the same one-pass regex as the other placeholders.
+
+The LLM is duck-typed exactly as in :mod:`msagent.skill_evolver.classify`.
+Stdlib + pydantic; this module never writes files.
 """
 
 from __future__ import annotations
@@ -56,36 +69,89 @@ logger = logging.getLogger(__name__)
 
 CANDIDATES_PLACEHOLDER = "{candidates}"
 EXISTING_SKILL_PLACEHOLDER = "{existing_skill}"
+RENDER_POLICY_PLACEHOLDER = "{render_policy}"
 # Text of the "Existing skill" section when the proposal is a new skill.
 NO_EXISTING_SKILL = "None. Create a new skill."
-# Most evidence fragments quoted to the renderer per candidate.
-RENDER_EVIDENCE_LIMIT = 3
 # Rejection codes of plan_render: the candidate names no library skill, or a
 # bare name that exists in several categories.
 INVALID_TARGET = "invalid_target"
 AMBIGUOUS_TARGET = "ambiguous_target"
+# Code rejection of a plan whose required evidence does not fit the render budget.
+INSUFFICIENT_CONTEXT_BUDGET = "insufficient_context_budget"
+# Characters one quoted evidence line costs beyond its text ("   - " + newline).
+EVIDENCE_LINE_OVERHEAD = 6
 
 # One pass over the template, so a placeholder-looking string inside a rule
 # or inside the existing skill text is never substituted.
-_PLACEHOLDER_RE = re.compile(r"\{(candidates|existing_skill)\}")
+_PLACEHOLDER_RE = re.compile(r"\{(candidates|existing_skill|render_policy)\}")
+_PLACEHOLDERS = (CANDIDATES_PLACEHOLDER, EXISTING_SKILL_PLACEHOLDER, RENDER_POLICY_PLACEHOLDER)
 _CORRECTION = (
     "Your previous reply is not a valid SKILL.md:\n{errors}\n\n"
     "Reply again with the complete corrected SKILL.md: frontmatter and every "
     "section, no code fences, nothing before or after it."
 )
+_REVIEW_CORRECTION = (
+    "A reviewer compared your SKILL.md with the accepted candidates and their evidence and found:\n"
+    "{issues}\n\n"
+    "Reply again with the complete corrected SKILL.md that fixes every point without adding anything the "
+    "evidence does not support: frontmatter and every section, no code fences, nothing before or after it."
+)
 
 
 @dataclass(frozen=True, slots=True)
 class RenderResult:
-    """The last reply, its validation and the number of LLM calls (1 or 2)."""
+    """The last reply, its validation, the calls spent and what the renderer was quoted."""
 
     content: str
     validation: ValidationResult
+    # 1 or 2 for render_skill_md, 1 for revise_skill_md.
     calls: int
+    # The whole conversation of the last attempt, the final ("ai", content) turn included.
+    transcript: list[tuple[str, str]]
+    # candidate_id -> fragment ids quoted / dropped for the budget.
+    render_evidence: dict[str, list[str]]
+    render_evidence_omitted: dict[str, list[str]]
 
     @property
     def ok(self) -> bool:
         return self.validation.ok
+
+
+@dataclass(frozen=True, slots=True)
+class EvidenceSelection:
+    """The fragments quoted to the renderer for one candidate, and what was left out."""
+
+    # Required first, then optional, each in citation order.
+    fragments: list[ShownFragment]
+    # Optional fragment ids dropped for the budget.
+    omitted: list[str]
+    # Required fragment ids that did not fit: the plan is unusable.
+    missing_required: list[str]
+
+    @property
+    def ids(self) -> list[str]:
+        return [fragment.id for fragment in self.fragments]
+
+    @property
+    def complete(self) -> bool:
+        return not self.omitted and not self.missing_required
+
+    @property
+    def usable(self) -> bool:
+        return not self.missing_required
+
+
+class InsufficientContextBudget(ValueError):
+    """Required render evidence of a candidate does not fit ``budget_chars``."""
+
+    def __init__(self, candidate_id: str, missing: list[str], budget_chars: int) -> None:
+        self.candidate_id = candidate_id
+        self.missing = list(missing)
+        self.budget_chars = budget_chars
+        super().__init__(
+            f"render: required evidence {self.missing} of candidate {candidate_id!r} does not fit the render "
+            f"budget ({budget_chars} chars)"
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -219,35 +285,99 @@ def plan_render(
     )
 
 
+def resolve_library_skill(name: str | None, skills: Sequence[Skill]) -> Skill | None:
+    """The library skill ``name`` denotes (display name, or unique bare name), else None."""
+    wanted = (name or "").strip()
+    if not wanted:
+        return None
+    by_display = {skill.display_name: skill for skill in skills}
+    by_name: dict[str, Skill | None] = {}
+    for skill in skills:
+        by_name[skill.name] = None if skill.name in by_name else skill
+    resolved = _resolve_target(wanted, by_display, by_name)
+    return None if isinstance(resolved, str) else resolved
+
+
+def select_plan_evidence(
+    candidates: Sequence[Candidate],
+    evidence: Mapping[str, ShownFragment],
+    *,
+    budget_chars: int | None = None,
+) -> list[EvidenceSelection]:
+    """What each candidate of one plan gets quoted, under one shared budget.
+
+    Unknown ids are ignored. Pass 1 places the required fragments of every
+    candidate (citation order), pass 2 the optional ones; a fragment costs
+    ``len(text) + EVIDENCE_LINE_OVERHEAD``. A required fragment that does not
+    fit is reported in ``missing_required`` (every miss, not just the first),
+    an optional one in ``omitted``. ``budget_chars`` None means no limit. A
+    fragment two candidates cite is costed and quoted for each.
+    """
+    required: list[list[ShownFragment]] = []
+    optional: list[list[ShownFragment]] = []
+    for candidate in candidates:
+        cited = [evidence[ref] for ref in candidate.evidence_refs if ref in evidence]
+        required.append([fragment for fragment in cited if fragment.required])
+        optional.append([fragment for fragment in cited if not fragment.required])
+    taken: list[list[ShownFragment]] = [[] for _ in candidates]
+    missing: list[list[str]] = [[] for _ in candidates]
+    omitted: list[list[str]] = [[] for _ in candidates]
+    remaining = budget_chars
+
+    def place(fragment: ShownFragment) -> bool:
+        nonlocal remaining
+        cost = len(fragment.text) + EVIDENCE_LINE_OVERHEAD
+        if remaining is not None and cost > remaining:
+            return False
+        if remaining is not None:
+            remaining -= cost
+        return True
+
+    for index, fragments in enumerate(required):
+        for fragment in fragments:
+            (taken[index] if place(fragment) else missing[index]).append(fragment)
+    for index, fragments in enumerate(optional):
+        for fragment in fragments:
+            if place(fragment):
+                taken[index].append(fragment)
+            else:
+                omitted[index].append(fragment.id)
+    return [
+        EvidenceSelection(fragments, omitted[index], [fragment.id for fragment in missing[index]])
+        for index, fragments in enumerate(taken)
+    ]
+
+
 def select_render_evidence(
     candidate: Candidate,
     evidence: Mapping[str, ShownFragment],
-) -> list[ShownFragment]:
-    """The fragments quoted to the renderer for one candidate.
-
-    Its cited fragments, required ones first (stable otherwise), at most
-    RENDER_EVIDENCE_LIMIT. Provenance records the same selection, so what
-    the renderer saw is reproducible from the candidate and the bundle.
-    """
-    fragments = [evidence[ref] for ref in candidate.evidence_refs if ref in evidence]
-    fragments.sort(key=lambda fragment: not fragment.required)
-    return fragments[:RENDER_EVIDENCE_LIMIT]
+    *,
+    budget_chars: int | None = None,
+) -> EvidenceSelection:
+    """:func:`select_plan_evidence` for one candidate alone (provenance's unbudgeted fallback)."""
+    return select_plan_evidence([candidate], evidence, budget_chars=budget_chars)[0]
 
 
 def format_candidates(
     candidates: Sequence[Candidate],
     evidence: Mapping[str, ShownFragment] | None = None,
+    *,
+    selections: Sequence[EvidenceSelection] | None = None,
 ) -> str:
     """Numbered candidate blocks for the ``{candidates}`` placeholder.
 
     Each block carries the rule and its conditions (``When``,
     ``Constraints``, ``Expected outcome`` — only when the classifier filled
-    them), the target, and the text of its evidence fragments. Fragment ids
-    never appear: they belong in provenance, not in a prompt whose reply is
-    the user-facing SKILL.md.
+    them), the target, the library skill that already covers the procedure
+    (``covered_by``), and the text of every selected evidence fragment plus
+    a count of the fragments omitted for the budget. ``selections`` defaults
+    to the unbudgeted selection. Fragment ids never appear: they belong in
+    provenance, not in a prompt whose reply is the user-facing SKILL.md.
     """
+    if selections is None:
+        selections = select_plan_evidence(candidates, evidence or {})
     blocks: list[str] = []
-    for number, candidate in enumerate(candidates, start=1):
+    for number, (candidate, selection) in enumerate(zip(candidates, selections), start=1):
         target = candidate.target
         if target.action == "create":
             where = "create a new skill"
@@ -266,10 +396,16 @@ def format_candidates(
         if candidate.expected_outcome:
             lines.append(f"   Expected outcome: {candidate.expected_outcome}")
         lines.append(f"   Target: {where}")
-        fragments = select_render_evidence(candidate, evidence or {})
-        if fragments:
+        if candidate.covered_by:
+            lines.append(
+                f"   Covered by library skill: {candidate.covered_by} "
+                "(write a separate teaching skill; do not copy the library text)"
+            )
+        if selection.fragments or selection.omitted:
             lines.append("   Evidence:")
-            lines.extend(f"   - {fragment.text}" for fragment in fragments)
+            lines.extend(f"   - {fragment.text}" for fragment in selection.fragments)
+            if selection.omitted:
+                lines.append(f"   - ({len(selection.omitted)} context excerpts omitted for the prompt budget)")
         blocks.append("\n".join(lines))
     return "\n".join(blocks)
 
@@ -286,51 +422,78 @@ def _clean(raw: str) -> str:
     return text.replace("\r\n", "\n").replace("\r", "\n")
 
 
+async def _ask(llm: Any, payload: list[tuple[str, str]]) -> tuple[str, str]:
+    """One LLM turn: the raw reply and its cleaned SKILL.md text."""
+    raw = reply_text(await llm.ainvoke(payload))
+    return raw, _clean(raw)
+
+
 async def render_skill_md(
     candidates: Sequence[Candidate],
     *,
     llm: Any,
     template: str,
+    policy_text: str,
     existing_skill: str | None = None,
     expected_name: str | None = None,
     taken_names: Collection[str] = (),
     evidence: Mapping[str, ShownFragment] | None = None,
+    required_prefix: str | None = None,
+    evidence_budget_chars: int | None = None,
 ) -> RenderResult:
     """Ask the LLM for a SKILL.md, validate it, correct once, return the last try.
 
-    ``existing_skill`` is the formatted text of the skill being updated and
-    ``expected_name`` its name (both or neither). ``taken_names`` are library
-    names a new skill must not reuse. ``evidence`` is the bundle's registry
-    of shown fragments; each candidate is rendered with the text of its own
-    (:func:`select_render_evidence`). Raises ``ValueError`` before any LLM
-    call when there is nothing to render, the template lacks a placeholder,
-    or the update arguments disagree. Whether the content may be written is
+    ``policy_text`` fills ``{render_policy}``. ``existing_skill`` is the
+    formatted text of the skill being updated and ``expected_name`` its name
+    (both or neither). ``taken_names`` are library names a new skill must not
+    reuse; ``required_prefix`` (new skills only) must start its name.
+    ``evidence`` is the bundle's registry of shown fragments; each candidate
+    is rendered with its own selection (:func:`select_plan_evidence` under
+    ``evidence_budget_chars``). Raises ``ValueError`` before any LLM call when
+    there is nothing to render, the template lacks a placeholder or the
+    update arguments disagree, and :class:`InsufficientContextBudget` when a
+    required fragment does not fit. Whether the content may be written is
     ``result.validation.ok``.
     """
     if not candidates:
         raise ValueError("render: no candidates to render")
-    placeholders = (CANDIDATES_PLACEHOLDER, EXISTING_SKILL_PLACEHOLDER)
-    missing = [p for p in placeholders if p not in template]
+    missing = [p for p in _PLACEHOLDERS if p not in template]
     if missing:
         raise ValueError(f"render: template has no {missing} placeholder")
     if (existing_skill is None) != (expected_name is None):
         raise ValueError("render: existing_skill and expected_name go together")
+    if required_prefix is not None and expected_name is not None:
+        raise ValueError("render: required_prefix applies to new skills only")
+    selections = select_plan_evidence(candidates, evidence or {}, budget_chars=evidence_budget_chars)
+    for candidate, selection in zip(candidates, selections):
+        if not selection.usable:
+            raise InsufficientContextBudget(candidate.candidate_id, selection.missing_required, evidence_budget_chars)
+    render_evidence = {c.candidate_id: s.ids for c, s in zip(candidates, selections)}
+    render_evidence_omitted = {c.candidate_id: list(s.omitted) for c, s in zip(candidates, selections)}
 
     values = {
-        "candidates": format_candidates(candidates, evidence),
+        "candidates": format_candidates(candidates, evidence, selections=selections),
         "existing_skill": existing_skill or NO_EXISTING_SKILL,
+        "render_policy": policy_text,
     }
     instruction = _PLACEHOLDER_RE.sub(lambda match: values[match.group(1)], template)
     payload: list[tuple[str, str]] = [("human", instruction)]
-    raw = reply_text(await llm.ainvoke(payload))
-    content = _clean(raw)
+    raw, content = await _ask(llm, payload)
     result = validate_skill_md(
         content,
         expected_name=expected_name,
         taken_names=taken_names,
+        required_prefix=required_prefix,
     )
     if result.ok:
-        return RenderResult(content=content, validation=result, calls=1)
+        return RenderResult(
+            content,
+            result,
+            1,
+            [*payload, ("ai", content)],
+            render_evidence,
+            render_evidence_omitted,
+        )
 
     logger.warning("render: invalid SKILL.md, retrying once: %s", result.errors)
     bullets = "\n".join(f"- {error[:ERROR_TEXT_LIMIT]}" for error in result.errors)
@@ -339,11 +502,51 @@ async def render_skill_md(
         ("ai", strip_think_blocks(raw).strip() or EMPTY_REPLY),
         ("human", _CORRECTION.format(errors=bullets)),
     ]
-    raw = reply_text(await llm.ainvoke(payload))
-    content = _clean(raw)
+    raw, content = await _ask(llm, payload)
     result = validate_skill_md(
         content,
         expected_name=expected_name,
         taken_names=taken_names,
+        required_prefix=required_prefix,
     )
-    return RenderResult(content=content, validation=result, calls=2)
+    return RenderResult(
+        content,
+        result,
+        2,
+        [*payload, ("ai", content or EMPTY_REPLY)],
+        render_evidence,
+        render_evidence_omitted,
+    )
+
+
+async def revise_skill_md(
+    previous: RenderResult,
+    issues: Sequence[str],
+    *,
+    llm: Any,
+    expected_name: str | None = None,
+    taken_names: Collection[str] = (),
+    required_prefix: str | None = None,
+) -> RenderResult:
+    """The single corrective turn after a failed semantic review: one call, validated once.
+
+    The reviewer's ``issues`` are appended to ``previous.transcript``; the
+    evidence selection is the one ``previous`` was rendered with.
+    """
+    bullets = "\n".join(f"- {issue[:ERROR_TEXT_LIMIT]}" for issue in issues)
+    payload = [*previous.transcript, ("human", _REVIEW_CORRECTION.format(issues=bullets))]
+    _, content = await _ask(llm, payload)
+    result = validate_skill_md(
+        content,
+        expected_name=expected_name,
+        taken_names=taken_names,
+        required_prefix=required_prefix,
+    )
+    return RenderResult(
+        content,
+        result,
+        1,
+        [*payload, ("ai", content or EMPTY_REPLY)],
+        dict(previous.render_evidence),
+        dict(previous.render_evidence_omitted),
+    )

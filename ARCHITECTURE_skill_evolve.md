@@ -876,8 +876,12 @@ bigrams instead of cutting the run, so `性能` survives inside `文件的性能
 
 Wiring (`_gather_evidence`, section 7): the thread's JSONL is located via
 `export.resolve_trajectories_dir(state_dir=initializer.get_project_paths(ctx.working_dir).root)`
-and `export.find_trajectory_file(dir, thread_id)`; **no file → `print_error` and return without
-calling the LLM** (a thread without a recorded trajectory is refused, not passed through).
+and `export.find_trajectory_file(dir, thread_id, workspace=export.workspace_filter(work))`; **no file →
+`print_error` and return without calling the LLM** (a thread without a recorded trajectory is refused,
+not passed through). Under the recorder's `output.scope: shared` that directory is the one store of
+every workspace, and `workspace_filter` narrows the lookup and the cross-session pool to this
+workspace's threads, as `/skill-mine` does (`select_trajectories(..., workspace=)`); under the default
+workspace scope it returns `None` and nothing changes.
 `pipeline.collect_episodes(current, others, *, skill_index, demo, notes)` runs
 `extract_episodes` on the current trajectory and `mine_cross_session([current, *others])` over
 the agent's newest `cross_session_limit` trajectories; with the current trajectory first in

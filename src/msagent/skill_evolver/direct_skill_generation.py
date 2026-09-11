@@ -89,6 +89,7 @@ from msagent.skills.factory import Skill
 from msagent.trajectory_recorder.export import (
     find_trajectory_file,
     resolve_trajectories_dir,
+    workspace_filter,
 )
 from msagent.trajectory_recorder.reader import (
     Trajectory,
@@ -242,7 +243,12 @@ class DirectSkillGenerationHandler:
         work = Path(ctx.working_dir)
         state_dir = initializer.get_project_paths(work).root
         trajectories_dir = resolve_trajectories_dir(state_dir=state_dir)
-        trajectory_path = find_trajectory_file(trajectories_dir, thread_id)
+        workspace = workspace_filter(work)
+        trajectory_path = find_trajectory_file(
+            trajectories_dir,
+            thread_id,
+            workspace=workspace,
+        )
         if trajectory_path is None:
             where = f"thread {thread_id} in {trajectories_dir}"
             msg = f"No recorded trajectory for {where}; the LLM was not called"
@@ -260,6 +266,7 @@ class DirectSkillGenerationHandler:
                 skills,
                 cross_session_limit=rules.cross_session_limit,
                 demo=rules.demo,
+                workspace=workspace,
             )
         thread = ThreadInput(current, others, episodes, notes)
         print_policy_block(console, cfg, rules)
@@ -317,17 +324,20 @@ class DirectSkillGenerationHandler:
         *,
         cross_session_limit: int = CROSS_SESSION_LIMIT,
         demo: bool = False,
+        workspace: Path | None = None,
     ) -> tuple[Trajectory, list[Trajectory], list[Episode], list[DetectorNote]]:
         """Load the thread's trajectory plus the agent's newest; detect episodes.
 
         Returns the trajectory, the other trajectories its episodes cite (the
         evidence bundle must index them), the episodes and the detector notes
-        (why observed_procedure candidates were dropped, demo only).
+        (why observed_procedure candidates were dropped, demo only). In the
+        shared store ``workspace`` keeps the newest to this workspace's threads.
         """
         current = load_trajectory(trajectory_path)
         newest = load_trajectories(
             trajectories_dir,
             agent=agent,
+            workspace=workspace,
             limit=cross_session_limit,
         )
         others = [traj for traj in newest if traj.thread_id != current.thread_id]

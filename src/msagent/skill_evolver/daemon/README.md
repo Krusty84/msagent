@@ -130,6 +130,12 @@ python -c "from pathlib import Path; from msagent.core.paths import AppPaths; pr
 
 All `~/.msagent` paths move with `MSAGENT_HOME` if you set it.
 
+With `output.scope: shared` in `config.trajectory.recorder.yml` every workspace records into one
+`~/.msagent/state/trajectories/`. The daemon still mines each thread once, for the workspace it was
+recorded in (the `working_dir` of the file's first event): the table above stays true project by
+project, and the evidence pool is that workspace's own threads, as for `/skill-mine`. A file whose
+workspace is out of scope or has no state directory any more is skipped with a log line.
+
 ### Reviewing proposals
 
 Start `msagent` in the project. When the daemon has left something, the welcome screen
@@ -234,7 +240,7 @@ failed run — its ledger row and decision report hold the details.
 | `too soon after the previous tick (…)` | Within `min_interval_seconds` of the last tick; `--force` overrides it once |
 | `0 threads` although you have sessions | Rerun with `-v`: each file is logged as `still active`, `last turn has no turn.end` (interrupted with Ctrl+C), `out of scope`, or `not due (already mined)` |
 | `skipping agent X ...; its threads stay unmined` | The trajectory's agent no longer exists in your agents config; restore it and its threads are picked up again |
-| `unreadable trajectory in the pool of agent X` | A corrupt `.jsonl` in that project's `trajectories/`; move it away. Logged on every tick until then |
+| `unreadable trajectory in the pool of agent X` | A corrupt `.jsonl` in that project's `trajectories/` (with `output.scope: shared`, anywhere in `~/.msagent/state/trajectories/`); move it away. Logged on every tick until then |
 | `deferring project ... holds no events yet` | A session had just created its file; it resolves itself on the next tick |
 | `error: config.skill.daemon.yml: <key>: ...`, exit code 2 | Fix the key named |
 | LLM authentication errors under systemd only | The unit cannot see the API key; see the credentials step above |

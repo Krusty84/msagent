@@ -622,6 +622,74 @@ async def test_bad_flag_reports_usage_and_stops(mine) -> None:
     assert mine.spy.renderables == []
 
 
+# ------------------------------------------------------------ shared store
+
+
+@pytest.fixture
+def shared_mine(mine, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """The mining handler over the shared store (output.scope: shared)."""
+    config = tmp_path / "config.trajectory.recorder.yml"
+    config.write_text("output:\n  scope: shared\n", encoding="utf-8")
+    monkeypatch.setenv("MSAGENT_TRAJECTORY_CONFIG", str(config))
+    reset_config_cache()
+    mine.trajectories = module.initializer.app_paths.state_dir / "trajectories"
+    mine.trajectories.mkdir(parents=True)
+    return mine
+
+
+def _copy_in(trajectories: Path, thread_id: str, working_dir: Path) -> Path:
+    """The signals fixture recorded in ``working_dir`` under another thread id."""
+    target = _copy_as(trajectories, thread_id)
+    lines: list[str] = []
+    for raw in target.read_text(encoding="utf-8").splitlines():
+        event = json.loads(raw)
+        if event.get("event") == "recorder.attach":
+            event["working_dir"] = str(working_dir)
+        lines.append(json.dumps(event, ensure_ascii=False))
+    target.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return target
+
+
+def test_select_trajectories_keeps_targets_and_pool_in_the_workspace(shared_mine) -> None:
+    _copy_in(shared_mine.trajectories, "t-mine", shared_mine.root)
+    _copy_in(shared_mine.trajectories, "t-theirs", shared_mine.root / "elsewhere")
+    options = module.parse_mine_args(["--threads", "5"])
+
+    targets, pool = module.select_trajectories(
+        shared_mine.trajectories,
+        agent=AGENT,
+        options=options,
+        now=0.0,
+        workspace=shared_mine.root.resolve(),
+    )
+
+    assert [trajectory.thread_id for trajectory in targets] == ["t-mine"]
+    assert [trajectory.thread_id for trajectory in pool] == ["t-mine"]
+
+
+@pytest.mark.asyncio
+async def test_shared_store_mines_this_workspace_only(shared_mine) -> None:
+    _copy_in(shared_mine.trajectories, "t-mine", shared_mine.root)
+    _copy_in(shared_mine.trajectories, "t-theirs", shared_mine.root / "elsewhere")
+
+    await shared_mine.handler.handle(["--dry-run", "--threads", "5"])
+
+    assert shared_mine.spy.error == []
+    assert any("Selected the newest 1" in line for line in shared_mine.spy.info)
+    text = shared_mine.spy.rendered_text()
+    assert "t-mine" in text
+    assert "t-theirs" not in text
+
+
+@pytest.mark.asyncio
+async def test_shared_store_refuses_another_workspaces_thread(shared_mine) -> None:
+    _copy_in(shared_mine.trajectories, "t-theirs", shared_mine.root / "elsewhere")
+
+    await shared_mine.handler.handle(["--dry-run", "--thread", "t-theirs"])
+
+    assert any("No recorded trajectory" in line and "for workspace" in line for line in shared_mine.spy.warning)
+
+
 @pytest.mark.asyncio
 async def test_real_run_below_threshold_creates_no_llm(mine) -> None:
     # The LLM factory raises; a run whose threads all fail the gate must still

@@ -1320,6 +1320,12 @@ unknown update target, update with existing text and `base_sha256`).
 
 ## 17. CLI surface: `/trajectories`, `/skill-mine`, `/skill-review`
 
+A third caller exists outside the CLI: the background miner `msagent-skill-daemon` runs the
+same `pipeline.run_thread` on a schedule, without a user, and writes ordinary inactive
+proposals (its decision reports carry `"command": "skill-daemon"`). It adds an idempotency
+ledger and a completeness rule for trajectories, changes nothing in this pipeline, and is
+documented separately in `ARCHITECTURE_skill_daemon.md`.
+
 The pipeline of sections 14-16 was reachable only through `/direct-skill-generation`, which
 analyses one thread. Three commands open it up; the generator stays registered and working,
 marked `[deprecated]` in `/help` and printing `Use /skill-mine for trajectory-based generation.`

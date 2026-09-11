@@ -1,0 +1,19 @@
+# Schedule for msagent-skill-daemon.service. See that file for the install steps.
+#
+# The daemon enforces schedule.min_interval_seconds itself, so a timer that fires
+# too often is harmless: the extra ticks exit immediately as "too soon".
+
+[Unit]
+Description=Run the msAgent SKILL.md miner periodically
+
+[Timer]
+OnCalendar=hourly
+# Catch up after a suspend or a reboot instead of silently skipping the window.
+Persistent=true
+# Spread the load so several machines do not all call the model at :00.
+RandomizedDelaySec=600
+AccuracySec=1min
+Unit=msagent-skill-daemon.service
+
+[Install]
+WantedBy=timers.target

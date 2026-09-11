@@ -1,0 +1,34 @@
+# Background SKILL.md mining, one batch per activation.
+#
+# Install as a user unit (no root needed, and it sees your ~/.msagent):
+#
+#   mkdir -p ~/.config/systemd/user
+#   cp resources/systemd/msagent-skill-daemon.{service,timer} ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now msagent-skill-daemon.timer
+#
+# Then turn the daemon on in ~/.msagent/config/config.skill.daemon.yml (enabled: true).
+# Watch it with:  journalctl --user -u msagent-skill-daemon -f
+#
+# ExecStart must be an absolute path: a systemd unit does not read your shell profile.
+# Point it at the msagent-skill-daemon script of the environment msagent is installed in.
+
+[Unit]
+Description=msAgent background SKILL.md miner (one tick)
+Documentation=file:%h/.msagent/config/config.skill.daemon.yml
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/msagent-skill-daemon --once
+# The tick is I/O- and API-bound; keep it out of the way of interactive work.
+Nice=10
+IOSchedulingClass=idle
+# A tick that hangs on an unresponsive model endpoint must not block the next one.
+TimeoutStartSec=3600
+
+# The daemon only ever reads trajectories and writes proposals, its ledger and reports.
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-write

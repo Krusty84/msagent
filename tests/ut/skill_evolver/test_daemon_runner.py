@@ -490,6 +490,31 @@ async def test_a_failing_thread_is_recorded_and_does_not_kill_the_tick(
 
 
 @pytest.mark.asyncio
+async def test_a_failing_thread_is_retried_until_poisoned(env: _Env, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A transient failure is retried each tick; a persistent one stops costing budget.
+
+    Goes through verdict() and record() together, which is what the ledger tests alone
+    cannot show: a retry must actually reach the pipeline for attempts to count up.
+    """
+    calls: list[str] = []
+
+    async def failing_mine_thread(_self, item, *, run, position, total):
+        calls.append(item.thread_id)
+        return None
+
+    monkeypatch.setattr(SkillMiningHandler, "_mine_thread", failing_mine_thread)
+    for tick in range(3):
+        await run_once(now=NOW + tick)
+    entry = env.ledger_entry()
+    assert entry is not None
+    assert (entry.status, entry.attempts) == ("poisoned", 3)
+
+    result = await run_once(now=NOW + 3)
+    assert result.threads == 0
+    assert len(calls) == 3
+
+
+@pytest.mark.asyncio
 async def test_the_inbox_records_the_proposal_for_the_cli_banner(env: _Env) -> None:
     env.script(*env.demo_replies())
     await run_once(now=NOW)

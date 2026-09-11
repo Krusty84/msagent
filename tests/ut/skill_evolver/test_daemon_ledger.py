@@ -129,6 +129,16 @@ def test_repeated_failure_poisons_the_thread(tmp_path: Path, source: Path) -> No
         assert verdict.reason == "poisoned"
 
 
+def test_a_failed_thread_is_due_again(tmp_path: Path, source: Path) -> None:
+    """Failures are often transient, so the next tick retries; poisoning is what stops it."""
+    with Ledger.open(tmp_path / "state") as ledger:
+        _record(ledger, source, sha="sha", fingerprint="fp", status=STATUS_FAILED)
+        entry = ledger.entry(PROJECT, THREAD)
+        verdict = ledger.verdict(entry, content_sha="sha", fingerprint="fp", remine_on=[])
+        assert verdict.mine is True
+        assert verdict.reason == "retry_after_failure"
+
+
 def test_a_changed_file_resets_the_failure_count(tmp_path: Path, source: Path) -> None:
     """Failures count per file content: a rewritten thread deserves a fresh chance."""
     with Ledger.open(tmp_path / "state") as ledger:

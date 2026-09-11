@@ -48,7 +48,7 @@ EXIT_OK = 0
 EXIT_ERROR = 1
 EXIT_CONFIG = 2
 
-DEFAULT_WATCH_INTERVAL = 900
+DEFAULT_WATCH_INTERVAL = 3600
 
 
 def build_parser() -> argparse.ArgumentParser:

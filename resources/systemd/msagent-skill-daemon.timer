@@ -2,6 +2,8 @@
 #
 # The daemon enforces schedule.min_interval_seconds itself, so a timer that fires
 # too often is harmless: the extra ticks exit immediately as "too soon".
+# Keep min_interval_seconds below the period minus RandomizedDelaySec (60 - 10 minutes
+# here): the default 1800 leaves room for the random delays of two consecutive runs.
 
 [Unit]
 Description=Run the msAgent SKILL.md miner periodically

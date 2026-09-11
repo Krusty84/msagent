@@ -77,7 +77,7 @@ def test_user_file_wins_over_the_packaged_default(tmp_path: Path, monkeypatch: p
     assert config.schedule.quiet_period_seconds == 60
     assert config.schedule.max_threads_per_tick == 2
     # Untouched sections keep their defaults.
-    assert config.schedule.min_interval_seconds == 3600
+    assert config.schedule.min_interval_seconds == 1800
     assert config.mining.policy == "reusable_workflow"
     assert config.mining.model == "cheap"
     assert daemon_config.config_source() == path

@@ -224,6 +224,11 @@ class Ledger:
             if "methodology_change" in remine_on:
                 return Verdict(True, "methodology_change")
             return Verdict(False, "methodology changed but methodology_change is not in remine_on")
+        if entry.status == STATUS_FAILED:
+            # A failure is often transient (a model endpoint down), so try again next tick.
+            # record() counts consecutive failures of the same content and poisons the
+            # row at max_attempts, which is what keeps this from looping forever.
+            return Verdict(True, "retry_after_failure")
         return Verdict(False, f"already {entry.status}")
 
     def record(

@@ -77,7 +77,7 @@ class ScheduleSection(BaseModel):
         description="A trajectory must be idle this long before it counts as finished",
     )
     min_interval_seconds: int = Field(
-        default=3600,
+        default=1800,
         ge=0,
         description="Refuse to start a tick sooner than this after the previous one",
     )

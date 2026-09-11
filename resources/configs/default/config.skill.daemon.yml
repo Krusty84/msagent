@@ -5,7 +5,7 @@ schema_version: 1
 enabled: false                      # off by default: an unattended run spends LLM calls
 schedule:
   quiet_period_seconds: 900         # a trajectory must be idle this long to count as finished (no session.end event exists)
-  min_interval_seconds: 3600        # refuse a tick sooner than this after the previous one, whatever the timer says
+  min_interval_seconds: 1800        # refuse a tick sooner than this after the previous one; keep it below the timer period
   max_threads_per_tick: 5           # threads mined per tick, across all projects
   max_llm_calls_per_tick: 60        # hard ceiling; the tick stops before it would exceed this
 scope:

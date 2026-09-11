@@ -54,9 +54,10 @@ Off by default. `enabled: true` in `~/.msagent/config/config.skill.daemon.yml`, 
 | `src/msagent/skill_evolver/daemon/inbox.py` | The per-project notification file and `print_daemon_notice`, the CLI startup banner |
 | `src/msagent/skill_evolver/daemon/cli.py` | `main()`: argument parsing, stderr logging, exit codes |
 | `src/msagent/skill_evolver/daemon/__main__.py` | `python -m` convenience wrapper |
+| `src/msagent/skill_evolver/daemon/README.md` | Operator guide: install, schedule, where the results land, troubleshooting |
 | `resources/configs/default/config.skill.daemon.yml` | Packaged default, the commented schema_version 1 document |
 | `resources/systemd/msagent-skill-daemon.{service,timer}` | User units plus their install instructions |
-| `tests/ut/skill_evolver/test_daemon_{config,ledger,discovery,inbox,runner}.py` | 64 tests; the runner suite drives the real pipeline on a scripted LLM |
+| `tests/ut/skill_evolver/test_daemon_{config,ledger,discovery,inbox,runner}.py` | 67 tests; the runner suite drives the real pipeline on a scripted LLM |
 
 Modified files (integration points — four lines in total):
 
@@ -102,7 +103,7 @@ the application version that `tests/ut/configs/test_config_versions.py` enforces
 |---|---|
 | `enabled` | Off by default; an unattended run spends LLM calls |
 | `schedule.quiet_period_seconds` | How long a trajectory must be idle before it counts as finished (900) |
-| `schedule.min_interval_seconds` | Refuse a tick sooner than this, whatever the timer says (3600) |
+| `schedule.min_interval_seconds` | Refuse a tick sooner than this, whatever the timer says (1800; section 11 explains why it sits below the timer period) |
 | `schedule.max_threads_per_tick` | Threads mined per tick, across all projects (5) |
 | `schedule.max_llm_calls_per_tick` | Hard ceiling; the tick stops **before** it would exceed this (60) |
 | `scope.projects` / `project_dirs` / `agents` | `all` or `listed`; empty `agents` means every agent |
@@ -144,6 +145,10 @@ A candidate is mined when:
 
 Both reasons are configurable through `mining.remine_on`, so a user who wants strictly
 one-shot mining can switch either off.
+
+A `failed` row is due again on the next tick even when nothing changed: a failure is often
+transient (a model endpoint that was down), and `record()` counts the consecutive failures
+of the same content, so the retry cannot loop forever.
 
 `status = poisoned` is terminal: after `max_attempts` consecutive failures on the *same
 content* the row is excluded from every future tick, with one ERROR naming the file.
@@ -269,10 +274,28 @@ passing silently. Writing is not fail-open: a tick that cannot record its own re
 
 `resources/systemd/msagent-skill-daemon.service` is a `Type=oneshot` user unit, `.timer` is
 `OnCalendar=hourly` with `Persistent=true` (catch up after a suspend or reboot) and
-`RandomizedDelaySec=600` (do not have every machine call the model at :00). The unit runs
-`Nice=10`, `IOSchedulingClass=idle` so a tick stays out of the way of interactive work, and
-under `ProtectSystem=strict` / `NoNewPrivileges` — it only ever reads trajectories and
-writes proposals, its ledger and its reports.
+`RandomizedDelaySec=600` (do not have every machine call the model at :00). The unit runs `Nice=10`,
+`IOSchedulingClass=idle` so a tick stays out of the way of interactive work, under
+`NoNewPrivileges`, `PrivateTmp` and `ProtectSystem=full` (`/usr`, `/boot`, `/efi`, `/etc`
+read-only). Not `strict`: that makes everything outside `/home` read-only as well, and the
+daemon writes proposals into each project's working directory, which can live anywhere —
+`/mnt/d` under WSL, `/srv`, `/data`. Both choices were checked against systemd 252 in WSL:
+`systemd-analyze --user verify` is clean, and a transient `systemd-run --user` of the real
+daemon under the same properties mined a project outside `/home`.
+
+A unit reads neither the shell profile nor, reliably, a `.env`: `core/settings.py` loads
+`.env` relative to the working directory. The API key that `config.llms.yml` names in
+`api_key_env` would be missing under the timer, so the unit loads
+`EnvironmentFile=-%h/.msagent/skill-daemon.env` (the leading `-` makes a missing file not
+an error). Install the units with `install -m 644`, not `cp`: files on a Windows mount look
+executable, and systemd warns about executable unit files.
+
+`min_interval_seconds` must stay below the timer period minus `RandomizedDelaySec`. The
+random delay is drawn anew for every run, so two consecutive hourly runs can start 49
+minutes apart (10 minutes of delay plus 1 minute of `AccuracySec` on the first, none on the
+second), and a minimum of 3600 would refuse about half of them as "too soon". The default
+1800 leaves room for that and still caps a misconfigured every-minute timer at two ticks an
+hour. `--watch` defaults to 3600 seconds for the same reason.
 
 A timer that fires too often is harmless: `min_interval_seconds` makes the extra ticks exit
 immediately as "too soon".

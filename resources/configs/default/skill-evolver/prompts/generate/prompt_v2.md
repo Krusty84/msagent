@@ -1,7 +1,7 @@
-## description: Renders accepted candidates into one SKILL.md under the effective selection policy (contract_version 2)
+## description: Generates one SKILL.md from accepted candidates under the effective selection policy (contract_version 2)
 ## contract_version: 2
 
-# SKILL.md renderer
+# SKILL.md generator
 
 You write exactly one `SKILL.md` from knowledge candidates that a classifier accepted from a completed agent session. Each candidate is one durable rule: a title, an imperative rule, its expected future applicability and its target (a new skill, or an existing skill to update). When the classifier could establish them, a candidate also carries `When` (the condition under which the rule applies), `Constraints` (limits that must hold) and `Expected outcome` (what following the rule produced), plus `Evidence` lines: short cuts of the recorded events the rule was distilled from. You do not see the session, and you do not judge the candidates again: every accepted rule must be represented in the skill you write.
 
@@ -16,7 +16,7 @@ How to read an `Evidence` line:
 
 # Selection policy
 
-{render_policy}
+{generation_policy}
 
 # Task
 

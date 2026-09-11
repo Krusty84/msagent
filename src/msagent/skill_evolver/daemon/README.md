@@ -38,13 +38,13 @@ A dry run logs each thread it would mine, then prints a summary:
 
 ```text
 ... INFO msagent.skill_evolver.daemon.runner: skill-daemon: would mine thread-signals (score 3.00)
-Tick over 1 projects: 1 threads, 0 proposals, 0 skipped by the gate, 0 nothing to save, 0 rejected at render, 0 failed
+Tick over 1 projects: 1 threads, 0 proposals, 0 skipped by the gate, 0 nothing to save, 0 rejected at generation, 0 failed
 ```
 
 A real tick ends with the same summary and the path of every proposal it wrote:
 
 ```text
-Tick over 1 projects: 1 threads, 1 proposals, 0 skipped by the gate, 0 nothing to save, 0 rejected at render, 0 failed
+Tick over 1 projects: 1 threads, 1 proposals, 0 skipped by the gate, 0 nothing to save, 0 rejected at generation, 0 failed
   proposal: /home/me/work/skills/.proposals/thread-signals/<skill-name>/SKILL.md
 ```
 

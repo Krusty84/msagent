@@ -20,11 +20,12 @@
 
 The command never touches the analysed thread and never writes into the
 skill library. Evidence is extracted from the thread's trajectory file by
-code, classified, rendered and reviewed by the LLM, validated by code again,
-and written as a proposal under ``<skills root>/.proposals/`` for a human to
-review and move. The per-thread stages live in
-:mod:`msagent.skill_evolver.pipeline`, shared with /skill-mine; this module
-parses the command line, loads config and prompts and gathers the evidence.
+code and classified by the LLM; a SKILL.md is generated from it and reviewed
+by the LLM, validated by code again, and written as a proposal under
+``<skills root>/.proposals/`` for a human to review and move. The per-thread
+stages live in :mod:`msagent.skill_evolver.pipeline`, shared with
+/skill-mine; this module parses the command line, loads config and prompts
+and gathers the evidence.
 """
 
 from __future__ import annotations
@@ -69,9 +70,9 @@ from msagent.skill_evolver.pipeline import (
     collect_episodes,
     draft_lines,
     gate_lines,
+    generate_for_plan,
     load_prompts,
     print_policy_block,
-    render_plan,
     report_bundle,
     report_config_error,
     report_plans,
@@ -287,7 +288,7 @@ class DirectSkillGenerationHandler:
         # A refused plan is a warning: the thread ran to its end and its report says why nothing was written.
         if result.stop_message is None and (tally.flagged or tally.plans > 1):
             line = f"Plans: {tally.proposals} proposals, {tally.describe()}"
-            report = console.print_warning if tally.render_errors else console.print_info
+            report = console.print_warning if tally.generation_errors else console.print_info
             report(line)
         sources = ", ".join(f"{stage}={source}" for stage, source in prompts.variants().items())
         console.print(f"[muted]Prompts: {escape(sources)}[/muted]")
@@ -339,7 +340,7 @@ class DirectSkillGenerationHandler:
     _report_bundle = staticmethod(report_bundle)
     _cited_threads = staticmethod(cited_threads)
     _report_plans = staticmethod(report_plans)
-    _render_plan = staticmethod(render_plan)
+    _generate_for_plan = staticmethod(generate_for_plan)
     _target_record = staticmethod(target_record)
     _activation_hint = staticmethod(activation_hint)
     _skill_library_snapshot = staticmethod(skill_library_snapshot)

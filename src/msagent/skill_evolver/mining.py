@@ -775,15 +775,15 @@ class SkillMiningHandler:
                 unwritten += 1
 
         # Every thread lands in exactly one of: with a proposal, skipped by the
-        # gate, nothing to save, rejected at render, failed (proposals are counted, not threads).
+        # gate, nothing to save, rejected at generation, failed (proposals are counted, not threads).
         summary = (
             f"Mined {len(stats)} threads: {total.proposals} proposals,"
             f" {below} skipped by the gate, {nothing} nothing to save,"
-            f" {unwritten} rejected at render, {len(failed)} failed"
+            f" {unwritten} rejected at generation, {len(failed)} failed"
         )
         if failed:
             report = console.print_error
-        elif total.render_errors:
+        elif total.generation_errors:
             report = console.print_warning
         elif total.proposals:
             report = console.print_success
@@ -794,7 +794,7 @@ class SkillMiningHandler:
             console.print_error(escape(f"Failed threads: {', '.join(failed)}"))
         if total.flagged:
             line = f"Plans: {total.describe()}"
-            (console.print_warning if total.render_errors else console.print_info)(line)
+            (console.print_warning if total.generation_errors else console.print_info)(line)
         console.print("")
 
     async def _mine_thread(

@@ -67,7 +67,7 @@ POLICIES = ("strict_knowledge", "reusable_workflow")
 SELECTIONS = ("strict_knowledge", "reusable_workflow", "demo_workflow")
 ON_NOTHING_ACTIONS = ("stop", "expand_context_once")
 # Prompt stages of the evidence pipeline: folders under skill-evolver/prompts/.
-STAGES = ("classify", "render", "review")
+STAGES = ("classify", "generate", "review")
 DEFAULT_PROMPT_FILE = "prompt_v2.md"
 # The contract-1 prompt file still shipped for the legacy prompt_file rule.
 LEGACY_PACKAGED_PROMPT_FILE = "prompt_v1.md"
@@ -216,12 +216,12 @@ class GenerationSection(_Section):
 class PromptsSection(_Section):
     contract_version: StrictInt = CONTRACT_VERSION
     classify: StrictStr = DEFAULT_PROMPT_FILE
-    render: StrictStr = DEFAULT_PROMPT_FILE
+    generate: StrictStr = DEFAULT_PROMPT_FILE
     review: StrictStr = DEFAULT_PROMPT_FILE
 
     _whole = field_validator("contract_version", mode="before")(_whole_number)
     _contract = field_validator("contract_version")(_contract)
-    _names = field_validator("classify", "render", "review")(_file_name)
+    _names = field_validator("classify", "generate", "review")(_file_name)
 
 
 class DiagnosticsSection(_Section):
@@ -303,7 +303,7 @@ class DirectSkillGenerationConfig:
     output_dir: Path | None = None
     contract_version: int = CONTRACT_VERSION
     classify_prompt: str = DEFAULT_PROMPT_FILE
-    render_prompt: str = DEFAULT_PROMPT_FILE
+    generate_prompt: str = DEFAULT_PROMPT_FILE
     review_prompt: str = DEFAULT_PROMPT_FILE
     save_decision_report: bool = True
     save_evidence_text: bool = False
@@ -388,7 +388,7 @@ def _from_model(
         output_dir=None if generation.output_dir is None else Path(generation.output_dir),
         contract_version=model.prompts.contract_version,
         classify_prompt=model.prompts.classify,
-        render_prompt=model.prompts.render,
+        generate_prompt=model.prompts.generate,
         review_prompt=model.prompts.review,
         save_decision_report=model.diagnostics.save_decision_report,
         save_evidence_text=model.diagnostics.save_evidence_text,

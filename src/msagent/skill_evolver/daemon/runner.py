@@ -133,7 +133,7 @@ class TickResult:
         line = (
             f"Tick over {self.projects} projects: {self.threads} threads, {self.proposals} proposals,"
             f" {self.gate_skips} skipped by the gate, {self.nothing} nothing to save,"
-            f" {self.rejected} rejected at render, {self.failures} failed"
+            f" {self.rejected} rejected at generation, {self.failures} failed"
         )
         if self.stopped_by_budget:
             line = f"{line}; stopped by the LLM budget"
@@ -170,7 +170,7 @@ def _fingerprint(rules: EffectiveRules, prompts: Any) -> str:
         {
             "features_version": FEATURES_VERSION,
             "classify": prompts.classify.sha256,
-            "render": prompts.render.sha256,
+            "generate": prompts.generate.sha256,
             "review": prompts.review.sha256,
             "rules": sorted(rules.as_record().items()),
         }
@@ -191,7 +191,7 @@ def _status_of(tally: Any) -> str:
 def _latest_report(report_dir: Path | None, thread_id: str, *, since: float) -> dict[str, Any] | None:
     """The decision report this run just wrote for ``thread_id``, if it wrote one.
 
-    The report is the pipeline's own contract (REPORT_VERSION 1); reading it back is
+    The report is the pipeline's own contract (REPORT_VERSION 2); reading it back is
     how the daemon learns the real LLM cost and the proposal paths without changing a
     line of the pipeline.
     """

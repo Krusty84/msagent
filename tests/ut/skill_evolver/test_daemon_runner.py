@@ -62,7 +62,7 @@ DEMO_AGENT = "SyntheticDemo"
 DEMO_SKILL_NAME = "demo-csv-column-sum"
 
 CLASSIFY_TEMPLATE = "Library:\n{skill_library}\n\nPolicy:\n{selection_policy}\n\nBundle:\n{evidence_bundle}\n"
-RENDER_TEMPLATE = "Policy:\n{render_policy}\n\nCandidates:\n{candidates}\n\nExisting:\n{existing_skill}\n"
+GENERATION_TEMPLATE = "Policy:\n{generation_policy}\n\nCandidates:\n{candidates}\n\nExisting:\n{existing_skill}\n"
 REVIEW_TEMPLATE = (
     "Policy:\n{review_policy}\n\nSkill:\n{skill_md}\n\nCandidates:\n{candidates}\n\n"
     "Evidence:\n{evidence}\n\nExisting:\n{existing_skill}\n"
@@ -154,7 +154,7 @@ def _boom(*_args, **_kwargs):
 
 
 async def _fake_stage_prompt(_self, _root, _cfg, stage):
-    templates = {"classify": CLASSIFY_TEMPLATE, "render": RENDER_TEMPLATE, "review": REVIEW_TEMPLATE}
+    templates = {"classify": CLASSIFY_TEMPLATE, "generate": GENERATION_TEMPLATE, "review": REVIEW_TEMPLATE}
     return templates[stage], f"packaged/{stage}/prompt_v2.md"
 
 
@@ -218,7 +218,7 @@ class _Env:
         self.llm = self.fake_llm_cls(*replies)
 
     def demo_replies(self, skill: str = DEMO_SKILL) -> tuple[str, str, str]:
-        """classify (citing the fixture's real fragment ids), render, review."""
+        """classify (citing the fixture's real fragment ids), generate, review."""
         trajectory = load_trajectory(self.source)
         bundle = build_evidence_bundle(
             extract_episodes(trajectory, demo=True),

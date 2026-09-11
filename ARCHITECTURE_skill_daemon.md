@@ -250,7 +250,7 @@ Notes on the decisions that are easy to get wrong:
   makes a background verdict distinguishable from one a user asked for.
 - **The results come from the decision report.** `_mine_thread` returns a `PlanTally`; the
   proposal paths and the real LLM cost come from the report the pipeline already writes
-  (REPORT_VERSION 1). Reading an existing contract beat changing the pipeline to return more.
+  (REPORT_VERSION 2). Reading an existing contract beat changing the pipeline to return more.
 
 ## 10. Notification
 
